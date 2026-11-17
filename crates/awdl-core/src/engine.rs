@@ -103,6 +103,8 @@ struct TxState {
     data_seq: u16,
     sequence_number: u16,
     tuned: Option<u8>,
+    /// A hop was just handed out; poll again once it's done.
+    repoll: bool,
     last_mif_slot: Option<u16>,
     last_psf: Option<u64>,
     self_counter: u32,
@@ -417,7 +419,14 @@ impl Engine {
         if self.tx.tuned != Some(channel) {
             self.tx.tuned = Some(channel);
             out.push(Action::Hop(channel));
+            // Build nothing until the hop is done: a frame's sync claims
+            // count from when it is built, and a retune can take as long as
+            // an AW. Frames built before one claimed our slots an AW late
+            // (seen by a Mac). next_wakeup asks for the next poll at once.
+            self.tx.repoll = true;
+            return out;
         }
+        self.tx.repoll = false;
         if pos.offset_us < TX_FROM_US || pos.offset_us > TX_UNTIL_US {
             return out;
         }
@@ -478,7 +487,7 @@ impl Engine {
     /// When to call [`Engine::poll`] next, if something is due before the
     /// next frame: the next AW's transmit window, or now if answers are owed.
     pub fn next_wakeup(&self, now: u64) -> Option<u64> {
-        if !self.outbox.is_empty() {
+        if !self.outbox.is_empty() || self.tx.repoll {
             return Some(now);
         }
         self.config.transmit.as_ref()?;

@@ -37,6 +37,11 @@ pub struct TxConfig {
     pub self_metric: u32,
     /// Legacy rate for action frames, in 500 kb/s.
     pub rate_500kbps: u8,
+    /// How long after we build a frame it reaches the air, µs, reported in
+    /// its PHY TX time so receivers can place our AWs. About 1 ms on the
+    /// T3U through devourer: a Mac saw our claims that late when we
+    /// reported none.
+    pub tx_latency_us: u32,
     /// PSF period, TU.
     pub psf_interval_tu: u16,
     /// The data path state's infrastructure channel. `None` advertises the
@@ -57,6 +62,14 @@ pub struct TxConfig {
     /// to the sync source's AW grid and channels, the way an iPhone visiting
     /// an Apple TV stays its own master. An experiment; off by default.
     pub as_master: bool,
+    /// Raw TLVs that replace ours of the same kind, in place, or are
+    /// appended; `None` drops that kind. For interop experiments, such as
+    /// sending another device's TLVs verbatim. Empty by default.
+    pub tlv_overrides: Vec<(u8, Option<Vec<u8>>)>,
+    /// Added to the AW sequence number we advertise. A multiple of 64 (one
+    /// pass of the 16-slot sequence) leaves our channel schedule unchanged
+    /// and changes only its label. An experiment; 0 by default.
+    pub aw_seq_offset: u16,
 }
 
 impl TxConfig {
@@ -68,12 +81,15 @@ impl TxConfig {
             device_class: device_class::MACOS,
             self_metric: 60,
             rate_500kbps: 12,
+            tx_latency_us: 1000,
             psf_interval_tu: 110,
             infra_channel: None,
             datapath_ext: false,
             ht_40mhz: false,
             hostname: None,
             as_master: false,
+            tlv_overrides: Vec::new(),
+            aw_seq_offset: 0,
         }
     }
 }
@@ -137,21 +153,27 @@ pub(crate) fn build(
     } else {
         v
     };
-    let header = Header::action(cfg.addr, MacAddr::BROADCAST, sequence_number);
-    let action = ActionHeader {
-        version: AwdlVersion { major: 1, minor: 0 },
-        subtype: kind,
-        reserved: 0,
-        phy_tx_time: v.now as u32,
-        target_tx_time: v.now as u32,
-    };
     // tx_counter counts to the start of the next *slot* (a 4-AW extended
     // AW), not the next AW: in every capture, the AW starting at a claimed
     // boundary has aw_seq ≡ 0 (mod 4) (5,639 of 5,641 frames). Claiming the
     // next AW instead put our slot grid 0–3 AWs off where we really are.
     let aws_after_next = (4 - v.aw_seq.wrapping_add(1) % 4) % 4;
     let next_slot = v.next_boundary + aws_after_next as u64 * crate::AW_US;
-    let tx_counter = (next_slot.saturating_sub(v.now) as f64 / TU_US as f64).round() as u16;
+    // A receiver puts our boundary at rx − (phy − target) + tx_counter TU.
+    // tx_counter is whole TU, so the target time is the instant from which
+    // it is exact (rounding up keeps it at or before now), and the PHY time
+    // is when the frame should reach the air. Reporting both as "now" put
+    // our claims about 1.2 ms late, the radio's TX latency, as a Mac saw.
+    let tx_counter = next_slot.saturating_sub(v.now).div_ceil(TU_US) as u16;
+    let target = next_slot.saturating_sub(tx_counter as u64 * TU_US);
+    let header = Header::action(cfg.addr, MacAddr::BROADCAST, sequence_number);
+    let action = ActionHeader {
+        version: AwdlVersion { major: 1, minor: 0 },
+        subtype: kind,
+        reserved: 0,
+        phy_tx_time: (v.now + cfg.tx_latency_us as u64) as u32,
+        target_tx_time: target as u32,
+    };
     let sync = SyncParams {
         tx_channel: v.channel,
         tx_counter,
@@ -170,7 +192,7 @@ pub(crate) fn build(
         master: v.master,
         presence_mode: 4,
         unknown: 0,
-        aw_seq_counter: v.aw_seq,
+        aw_seq_counter: v.aw_seq.wrapping_add(cfg.aw_seq_offset),
         ap_beacon_alignment: 0,
         channel_sequence: v.sequence_legacy.clone(),
         trailing: Bytes::Borrowed(&[0, 0]),
@@ -249,8 +271,20 @@ pub(crate) fn build(
         TlvBody::SyncTree(SyncTree::from_addresses(&[cfg.addr, MacAddr::default()])),
     ];
     let mut b = ActionFrameBuilder::new(&header, &action);
+    let overridden = |kind: u8| cfg.tlv_overrides.iter().find(|(k, _)| *k == kind);
     for t in bodies.iter().chain(arpa.iter()) {
-        b.tlv(t).expect("our own TLVs fit their length fields");
+        match overridden(t.kind()) {
+            None => b.tlv(t).expect("our own TLVs fit their length fields"),
+            Some((k, Some(v))) => b.raw_tlv(*k, v).expect("an override fits a TLV"),
+            Some((_, None)) => continue,
+        };
+    }
+    for (k, v) in &cfg.tlv_overrides {
+        if let Some(v) = v
+            && !bodies.iter().chain(arpa.iter()).any(|t| t.kind() == *k)
+        {
+            b.raw_tlv(*k, v).expect("an override fits a TLV");
+        }
     }
     b.finish()
 }

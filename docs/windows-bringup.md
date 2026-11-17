@@ -153,6 +153,20 @@ Warlock should run `fastretune_fw = 2`. Dead air on the radio is shorter than
 the call; measuring it needs a known transmitter. Time to first received frame
 after a hop mostly reflects each channel's traffic.
 
+Live, following an Apple TV's sequence at 40 MHz (`awdljoin` reports this,
+2026-11-17), the medians match and the tails are long:
+
+| Hop | n | p50 | p95 | max |
+|---|---|---|---|---|
+| 149 → 44 | 110 | 3.3 ms | 4.4 ms | 16.9 ms |
+| 44 → 149 | 30 | 3.3 ms | 15.4 ms | 16.6 ms |
+| 44 → 6 | 81 | 9.3 ms | 14.7 ms | 27.9 ms |
+| 6 → 149 | 81 | 9.3 ms | 13.8 ms | 22.6 ms |
+
+A cross-band hop takes more than half a 16 ms AW, and an in-band one can take
+a whole AW. `awdl-core` builds nothing until a hop has finished (see
+`Engine::poll`). Frames built before one had claimed our slots an AW late.
+
 ### Timer jitter (`timerjitter`)
 High-resolution waitable timer aimed at absolute deadlines every 16.384 ms
 (one AWDL availability window), 600 waits:

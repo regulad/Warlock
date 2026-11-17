@@ -151,6 +151,10 @@ fn main() {
     tx.ht_40mhz = env("WARLOCK_HT40").is_some();
     tx.hostname = env("WARLOCK_HOSTNAME");
     tx.as_master = env("WARLOCK_AS_MASTER").is_some();
+    if let Some(m) = env("WARLOCK_SELF_METRIC") {
+        tx.self_metric = m.parse().expect("WARLOCK_SELF_METRIC");
+    }
+    tx.aw_seq_offset = env("WARLOCK_AW_SEQ_OFFSET").map_or(0, |v| v.parse().expect("WARLOCK_AW_SEQ_OFFSET"));
     if let Some(v) = env("WARLOCK_VERSION") {
         // "major.minor/class", e.g. "10.2/2" for iOS 27.
         let (ver, class) = v.split_once('/').expect("WARLOCK_VERSION=major.minor/class");
@@ -158,9 +162,31 @@ fn main() {
         tx.version = awdl_proto::action::AwdlVersion { major: ma.parse().unwrap(), minor: mi.parse().unwrap() };
         tx.device_class = class.parse().unwrap();
     }
+    // Raw TLV overrides: "kind=hex;kind=hex", an empty hex drops the kind,
+    // and "@" in the hex stands for our address.
+    if let Some(v) = env("WARLOCK_TLV") {
+        let own_hex: String = own.0.iter().map(|b| format!("{b:02x}")).collect();
+        for item in v.split(';').filter(|s| !s.is_empty()) {
+            let (kind, hex) = item.split_once('=').expect("WARLOCK_TLV=kind=hex;…");
+            let hex = hex.replace('@', &own_hex);
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("TLV hex"))
+                .collect();
+            tx.tlv_overrides.push((kind.parse().expect("TLV kind"), (!bytes.is_empty()).then_some(bytes)));
+        }
+    }
     println!(
-        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, as master {}, version {}/{}",
-        tx.infra_channel, tx.datapath_ext, tx.ht_40mhz, tx.hostname, tx.as_master, tx.version, tx.device_class
+        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, as master {}, version {}/{}, \
+         TLV overrides {:?}",
+        tx.infra_channel,
+        tx.datapath_ext,
+        tx.ht_40mhz,
+        tx.hostname,
+        tx.as_master,
+        tx.version,
+        tx.device_class,
+        tx.tlv_overrides.iter().map(|(k, v)| (k, v.as_ref().map_or(0, Vec::len))).collect::<Vec<_>>()
     );
     let mut engine = Engine::new(Config::active(tx));
 
@@ -169,6 +195,8 @@ fn main() {
     let mut sent: BTreeMap<String, u64> = BTreeMap::new();
     let mut to_us: BTreeMap<(MacAddr, String), u64> = BTreeMap::new();
     let (mut hops, mut tx_errors, mut frames) = (0u64, 0u64, 0u64);
+    // How long each hop blocks, µs, by (from, to) channel.
+    let mut hop_us: BTreeMap<(u8, u8), Vec<u32>> = BTreeMap::new();
     let mut rx_lag: Vec<i64> = Vec::new();
     let mut packets: BTreeMap<MacAddr, u64> = BTreeMap::new();
     let mut echoes = 0u64;
@@ -270,10 +298,16 @@ fn main() {
         }
         for a in engine.poll(now) {
             match a {
-                Action::Hop(c) => match radio.hop(c) {
-                    Ok(()) => hops += 1,
-                    Err(e) => eprintln!("hop to {c}: {e}"),
-                },
+                Action::Hop(c) => {
+                    let (from, began) = (radio.channel(), Instant::now());
+                    match radio.hop(c) {
+                        Ok(()) => {
+                            hops += 1;
+                            hop_us.entry((from, c)).or_default().push(began.elapsed().as_micros() as u32);
+                        }
+                        Err(e) => eprintln!("hop to {c}: {e}"),
+                    }
+                }
                 Action::Transmit { mpdu, rate_500kbps, kind } => match radio.send(&mpdu, rate_500kbps) {
                     Ok(()) => {
                         *sent.entry(format!("{kind:?}")).or_default() += 1;
@@ -343,6 +377,17 @@ fn main() {
         }
     }
     println!("done: sent {sent:?}, hops {hops}, tx errors {tx_errors}, rx {frames} (dropped {})", radio.dropped());
+    for ((from, to), v) in &mut hop_us {
+        v.sort_unstable();
+        let q = |p: f64| v[((v.len() - 1) as f64 * p) as usize];
+        println!(
+            "  hop {from:>3} → {to:<3} n={:<4} p50 {} µs, p95 {} µs, max {} µs",
+            v.len(),
+            q(0.5),
+            q(0.95),
+            v[v.len() - 1]
+        );
+    }
     if let Some(t) = ping_target {
         println!("  pinged {t}: {} sent, {ping_replies} replies", pings_sent.len());
         for ((ra, kind), n) in &from_target {

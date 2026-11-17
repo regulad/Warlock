@@ -224,15 +224,42 @@ Mac's (see `crates/awdl-core/src/active.rs`).
       (`44 ×5, – ×3`), which looks like scanning other channels.
   - **What wakes it is a Bluetooth LE "AirPlay source" advert**, not
     anything on AWDL. See [Waking AWDL over Bluetooth LE](#waking-awdl-over-bluetooth-le).
-  - **Awake, it still holds our unicast.** With the TV woken by our own
-    advert and Warlock following its active sequence, its `tcpdump` showed
-    our echo requests arriving and its kernel answering every one, but none
-    of the replies went on air. Nor did an ADDBA, while the iPhone got both.
-    The iPhone-like TLV choices listed above, all together, didn't change
-    this either.
-    - Open. What's left needs a second sniffer, to tell "never sent" from
-      "sent while we weren't there", or the iOS 8 Broadcom driver's peer
-      logic.
+  - **Awake, it still holds our unicast while we're in its cluster.** With
+    the TV woken by our own advert and Warlock following its active
+    sequence:
+    - Its `tcpdump` showed our echo requests and our SYNs to the AirPlay
+      port arriving, and its kernel answering every one.
+    - A Mac sniffing channel 44 saw our pings and the TV's hardware ACKs,
+      but nothing from the TV to us: no ADDBA, no data. That's the channel
+      where it served the iPhone, so its driver isn't trying at all.
+  - **It served us once, when we both followed a third device.** A device
+    with metric 532 (an iOS one, by its sequence) appeared and became master.
+    The TV joined its cluster, and we followed. Within 0.4 s of our sync
+    moving there:
+    - the TV flushed the echo replies it had queued, up to 17.6 s old;
+    - then set up Block Ack with us and sent QoS data;
+    - live replies came back in 3–50 ms.
+
+    It happened again when that device returned. Each time our sync went
+    back to the TV, the replies stopped.
+  - Ruled out, each tested with the TV awake:
+    - every TLV of the iPhone's MIF, sent verbatim (the same changes as an
+      iPhone, all at once);
+    - TCP to AirPlay's own socket rather than ICMP;
+    - our AW sequence label (shifted by a full sequence);
+    - claiming mastership on the TV's grid, at metric 60 or 600 (at 600 the
+      TV sometimes named us master);
+    - our sync claims' accuracy. That one did need fixing: we reported zero
+      TX latency, and frames built before a hop claimed a slot an AW late.
+      After the fix, the Mac measured our claimed grid within 0.36 ms p50
+      (max 4.2 ms) of the TV's, tighter than the TV's own claims.
+  - Open: which rule for the TV's own cluster members we miss. Next:
+    reproduce the served case with a known third master (an iPhone with
+    AirDrop open), and the iOS 8 driver's logic.
+  - **In active mode, its data frames carry TLVs.** They use the "long
+    format" header: its HT capabilities and data path state, the latter
+    with AirPlay Solo Mode set (flags `0x0763`, against `0x0363` in its
+    PSFs). No iPhone or Mac data frame we have does this.
   - This doesn't constrain Koala, which plays the TV's role and is always
     active.
 - **Masters change under us.** When an iPhone appeared during a join, it
