@@ -24,6 +24,33 @@ use crate::{Error, Radio, RxClock, RxFrame};
 /// frames are dropped and counted.
 const QUEUE: usize = 4096;
 
+/// Opts this process out of Windows 11's timer-resolution throttling, so
+/// `timeBeginPeriod(1)` holds whether or not we have a visible window
+/// (`PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION` in the control mask,
+/// cleared in the state mask). Best effort: older Windows lack the class.
+fn high_resolution_timers() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling,
+        SetProcessInformation,
+    };
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        StateMask: 0,
+    };
+    // SAFETY: a valid state struct of the size passed; the pseudo-handle
+    // needs no closing.
+    unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            (&state as *const PROCESS_POWER_THROTTLING_STATE).cast(),
+            size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 /// How to open the adapter.
 #[derive(Clone, Debug)]
 pub struct DevourerConfig {
@@ -45,6 +72,20 @@ pub struct DevourerConfig {
     pub fastretune_fw: i32,
     /// devourer's log level (`DVR_LOG_*`).
     pub log_level: u8,
+    /// devourer's thermal tracking (a periodic TX-power fold from the
+    /// thermal meter). It takes the register lock a hop also needs.
+    pub thermal_track: bool,
+    /// devourer's per-stage hop timing, as `{"ev":"hop.prof",…}` lines on
+    /// stderr.
+    pub hop_prof: bool,
+    /// See [`Radio::band_change_settle`]. A cross-band firmware hop returns
+    /// in ~4 ms, but the firmware is still switching (it runs IQK too), and
+    /// a peer changing band with us may be slower still. Pinging an Apple TV
+    /// as master over ~48 s per run (T3U, 2026-11-17), replies by hold after
+    /// the hop: none, 3 and 4; 6 ms, 19 and 23; 15 ms, 22–32 over four runs;
+    /// 30 ms, 31 in the one run where the TV joined. 15 ms skips the first
+    /// AW after a band change.
+    pub band_change_settle: Duration,
 }
 
 impl Default for DevourerConfig {
@@ -58,6 +99,9 @@ impl Default for DevourerConfig {
             retry_limit: 3,
             fastretune_fw: 2,
             log_level: DVR_LOG_WARN,
+            thermal_track: true,
+            hop_prof: false,
+            band_change_settle: Duration::from_millis(15),
         }
     }
 }
@@ -138,6 +182,7 @@ pub struct DevourerRadio {
     ctx: *const RxContext,
     channel: Arc<AtomicU8>,
     rx_clock: RxClock,
+    band_change_settle: Duration,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -147,16 +192,22 @@ impl DevourerRadio {
     /// `docs/windows-bringup.md`).
     pub fn open(config: &DevourerConfig) -> Result<Self, Error> {
         // devourer's waits are sleeps; 1 ms timer resolution shortens them.
+        // Windows 11 ignores a process's resolution request while it has no
+        // visible window unless the process opts out of that throttling.
+        // Without the opt-out, the 1 ms sleep inside every firmware hop took
+        // a whole 15.6 ms tick (devourer's hop profile, 2026-11-17).
+        high_resolution_timers();
         // SAFETY: plain Win32 call; matched by timeEndPeriod in Drop.
         unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
         let cfg = dvr_config {
             retry_limit: config.retry_limit,
             fastretune_fw: config.fastretune_fw,
-            thermal_track: 1,
+            thermal_track: config.thermal_track as u8,
             // The default RX mode, as validated in W0.
             rx_spsc: 0,
             usb_reset: 1,
             log_level: config.log_level,
+            hop_prof: config.hop_prof as u8,
         };
         let mut radio: *mut dvr_radio = std::ptr::null_mut();
         // SAFETY: valid config and out-pointer.
@@ -199,6 +250,7 @@ impl DevourerRadio {
             ctx,
             channel,
             rx_clock: RxClock::new(Instant::now()),
+            band_change_settle: config.band_change_settle,
             _not_send: PhantomData,
         })
     }
@@ -255,6 +307,10 @@ impl Radio for DevourerRadio {
     fn set_ack_responder(&mut self, addr: [u8; 6]) -> Result<(), Error> {
         // SAFETY: the radio is open; `addr` is 6 bytes. dvr_close clears it.
         check("dvr_set_ack_responder", unsafe { dvr_set_ack_responder(self.radio, addr.as_ptr()) })
+    }
+
+    fn band_change_settle(&self) -> Duration {
+        self.band_change_settle
     }
 
     fn tsf_now(&mut self) -> Option<u64> {

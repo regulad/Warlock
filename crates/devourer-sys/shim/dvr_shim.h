@@ -73,6 +73,9 @@ typedef struct dvr_config {
   uint8_t usb_reset;
   /* DVR_LOG_*; devourer's diagnostics go to stderr, its JSON events are off. */
   uint8_t log_level;
+  /* Nonzero: DeviceConfig::Debug::hop_prof, per-stage FastRetune timing as
+   * {"ev":"hop.prof",...} lines; devourer's JSON events then go to stderr. */
+  uint8_t hop_prof;
 } dvr_config;
 
 typedef struct dvr_rx_frame {

@@ -47,6 +47,10 @@ pub struct Config {
     /// itself master, so it joins a cluster that's already there rather
     /// than start a rival one.
     pub listen_before_master_us: u64,
+    /// After a hop between bands (2.4 ↔ 5 GHz), send nothing for this long,
+    /// µs, from when the hop is done: the radio's own settling time (see
+    /// `warlock_radio::Radio::band_change_settle`).
+    pub band_change_settle_us: u64,
 }
 
 impl Default for Config {
@@ -57,6 +61,7 @@ impl Default for Config {
             source_stale_us: 2_000_000,
             transmit: None,
             listen_before_master_us: 2_000_000,
+            band_change_settle_us: 0,
         }
     }
 }
@@ -118,6 +123,10 @@ struct TxState {
     tuned: Option<u8>,
     /// A hop was just handed out; poll again once it's done.
     repoll: bool,
+    /// That hop changes band.
+    band_change: bool,
+    /// Send nothing before this TSF: a band change is settling.
+    quiet_until: u64,
     last_mif_slot: Option<u16>,
     last_psf: Option<u64>,
     self_counter: u32,
@@ -519,6 +528,7 @@ impl Engine {
         }
         let Some((pos, channel, explicit)) = self.schedule_at(now) else { return out };
         if self.tx.tuned != Some(channel) {
+            self.tx.band_change = self.tx.tuned.is_some_and(|t| (t <= 14) != (channel <= 14));
             self.tx.tuned = Some(channel);
             out.push(Action::Hop(channel));
             // Build nothing until the hop is done: a frame's sync claims
@@ -528,8 +538,11 @@ impl Engine {
             self.tx.repoll = true;
             return out;
         }
-        self.tx.repoll = false;
-        if pos.offset_us < TX_FROM_US || pos.offset_us > TX_UNTIL_US {
+        if std::mem::take(&mut self.tx.repoll) && self.tx.band_change {
+            // This poll is the hop's completion: let the band change settle.
+            self.tx.quiet_until = now + self.config.band_change_settle_us;
+        }
+        if now < self.tx.quiet_until || pos.offset_us < TX_FROM_US || pos.offset_us > TX_UNTIL_US {
             return out;
         }
         self.send_queued(now, pos.aw_seq, channel, &tx, &mut out);
@@ -598,7 +611,9 @@ impl Engine {
             // make us master, or a clock may lock.
             return Some(now + AW_US);
         };
-        if pos.offset_us < TX_FROM_US {
+        if self.tx.quiet_until > now {
+            Some(self.tx.quiet_until)
+        } else if pos.offset_us < TX_FROM_US {
             Some(pos.start_tsf + TX_FROM_US as u64)
         } else {
             Some(self.next_boundary(now)? + TX_FROM_US as u64)

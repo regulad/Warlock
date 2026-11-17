@@ -9,7 +9,7 @@ authors.workspace = true
 [dependencies]
 devourer-sys = { path = "../devourer-sys" }
 warlock-capture = { path = "../warlock-capture" }
-windows-sys = { version = "0.61", features = ["Win32_Media"] }
+windows-sys = { version = "0.61", features = ["Win32_Media", "Win32_System_Threading"] }
 
 [dev-dependencies]
 awdl-core = { path = "../awdl-core" }

@@ -47,6 +47,12 @@ pub trait Radio {
         self.set_channel(channel)
     }
 
+    /// How long after a [`Radio::hop`] that changes band (2.4 ↔ 5 GHz)
+    /// returns the radio still shouldn't transmit. Zero by default.
+    fn band_change_settle(&self) -> Duration {
+        Duration::ZERO
+    }
+
     /// Transmits an MPDU (no FCS) at a legacy rate, in units of 500 kb/s
     /// (12 = 6 Mb/s).
     fn send(&mut self, mpdu: &[u8], rate_500kbps: u8) -> Result<(), Error>;

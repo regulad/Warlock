@@ -167,6 +167,24 @@ A cross-band hop takes more than half a 16 ms AW, and an in-band one can take
 a whole AW. `awdl-core` builds nothing until a hop has finished (see
 `Engine::poll`). Frames built before one had claimed our slots an AW late.
 
+**Why, and the fixes (2026-11-17).** devourer's per-stage hop timing
+(`hop_prof`; `WARLOCK_HOP_PROF=1` in `awdljoin`) showed most of a hop asleep:
+- **A 1 ms sleep after the firmware switch took 14 ms.** Windows 11 ignores a
+  process's `timeBeginPeriod(1)` while it has no visible window, so `Sleep(1)`
+  waited a whole 15.6 ms tick. `DevourerRadio::open` now opts out of that
+  throttling (`ProcessPowerThrottling`, `IGNORE_TIMER_RESOLUTION`). devourer's
+  own part of a hop fell from 15.8 to 3.3 ms p50.
+- **A cross-band hop re-wrote the whole WL-only antenna grant**, ~16 USB
+  control transfers (~6 ms). The vendor re-writes only the band's antenna
+  switch; our devourer fork now does the same (`coex_switch_antenna`).
+
+With both fixes, the hop call takes 4.1 ms p50 across bands (from 22 ms) and
+3.3 ms within one. But the firmware is still switching when a cross-band call
+returns. Transmitting straight away, an Apple TV answered 3–4 of ~48 pings;
+with a 15 ms hold, 22–32. The hold is the radio's `band_change_settle`, and
+the engine sends nothing until it passes (`Config::band_change_settle_us`).
+Part of the hold may be for the peer, which changes band too.
+
 ### Timer jitter (`timerjitter`)
 High-resolution waitable timer aimed at absolute deadlines every 16.384 ms
 (one AWDL availability window), 600 waits:

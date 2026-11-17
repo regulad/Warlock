@@ -45,6 +45,8 @@ pub struct dvr_config {
     pub rx_spsc: u8,
     pub usb_reset: u8,
     pub log_level: u8,
+    /// Nonzero: devourer's per-stage hop timing (`hop.prof` events) on stderr.
+    pub hop_prof: u8,
 }
 
 #[repr(C)]

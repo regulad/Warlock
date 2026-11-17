@@ -117,7 +117,10 @@ int dvr_open(uint16_t vid, uint16_t pid, const dvr_config *cfg,
     r->logger = std::make_shared<Logger>();
     r->logger->set_level(to_level(cfg->log_level));
     r->logger->set_diag_stream(stderr);
-    r->logger->events().disable();
+    if (cfg->hop_prof != 0)
+      r->logger->events().configure(stderr);
+    else
+      r->logger->events().disable();
 
     int urc = libusb_init(&r->ctx);
     if (urc < 0) {
@@ -151,6 +154,7 @@ int dvr_open(uint16_t vid, uint16_t pid, const dvr_config *cfg,
     dcfg.tx.retry_limit = cfg->retry_limit;
     dcfg.tuning.fastretune_fw = cfg->fastretune_fw;
     dcfg.tuning.thermal_track = cfg->thermal_track != 0;
+    dcfg.debug.hop_prof = cfg->hop_prof != 0;
     dcfg.rx.rx_mode = cfg->rx_spsc != 0 ? devourer::RxMode::SpscFat
                                         : devourer::RxMode::Async;
 

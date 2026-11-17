@@ -140,7 +140,16 @@ fn main() {
     });
     let own = random_addr();
     println!("our AWDL address: {own}; opening the T3U on channel {channel} at {width} MHz (~20 s)");
-    let config = DevourerConfig { channel, ..Default::default() };
+    let config = DevourerConfig {
+        channel,
+        hop_prof: std::env::var_os("WARLOCK_HOP_PROF").is_some(),
+        thermal_track: std::env::var_os("WARLOCK_NO_THERMAL").is_none(),
+        ..Default::default()
+    };
+    let config = match std::env::var("WARLOCK_BAND_SETTLE_MS").ok().and_then(|v| v.parse().ok()) {
+        Some(ms) => DevourerConfig { band_change_settle: Duration::from_millis(ms), ..config },
+        None => config,
+    };
     let config = if width == 40 { config.forty(channel) } else { config };
     let mut radio = DevourerRadio::open(&config).expect("opening the radio");
     radio.set_ack_responder(own.0).expect("arming the ACK responder");
@@ -198,7 +207,10 @@ fn main() {
         tx.device_class,
         tx.tlv_overrides.iter().map(|(k, v)| (k, v.as_ref().map_or(0, Vec::len))).collect::<Vec<_>>()
     );
-    let mut engine = Engine::new(Config::active(tx));
+    let mut engine = Engine::new(Config {
+        band_change_settle_us: radio.band_change_settle().as_micros() as u64,
+        ..Config::active(tx)
+    });
 
     let started = Instant::now();
     let mut last_report = Instant::now();
@@ -215,6 +227,9 @@ fn main() {
     println!("our link-local address: {}", std::net::Ipv6Addr::from(own_ll));
     let mut pings_sent: BTreeMap<u16, u64> = BTreeMap::new();
     let mut from_target: BTreeMap<(MacAddr, String), u64> = BTreeMap::new();
+    // The target's signal per channel: a wrong antenna path on one band
+    // shows as a drop there.
+    let mut target_rssi: BTreeMap<u8, Vec<i8>> = BTreeMap::new();
     let (mut ping_seq, mut ping_replies) = (0u16, 0u64);
     let mut last_ping = Instant::now();
     if let Some(t) = ping_target {
@@ -238,6 +253,9 @@ fn main() {
             // Everything the ping target sends that isn't a broadcast PSF/MIF.
             if let Some(target) = ping_target {
                 let ta = (f.mpdu.len() >= 16).then(|| MacAddr(f.mpdu[10..16].try_into().unwrap()));
+                if ta == Some(target) {
+                    target_rssi.entry(f.channel).or_default().push(f.rssi_dbm);
+                }
                 if ta == Some(target) && f.mpdu.get(4..10) != Some(&[0xff; 6][..]) {
                     let ra = MacAddr(f.mpdu[4..10].try_into().unwrap());
                     let n = from_target.entry((ra, frame_kind(&f.mpdu))).or_default();
@@ -397,6 +415,16 @@ fn main() {
             q(0.5),
             q(0.95),
             v[v.len() - 1]
+        );
+    }
+    for (ch, v) in &mut target_rssi {
+        v.sort_unstable();
+        println!(
+            "  target RSSI on {ch:>3}: n={:<5} p10 {} p50 {} p90 {} dBm",
+            v.len(),
+            v[v.len() / 10],
+            v[v.len() / 2],
+            v[v.len() * 9 / 10]
         );
     }
     if let Some(t) = ping_target {

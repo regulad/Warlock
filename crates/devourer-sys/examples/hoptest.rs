@@ -68,6 +68,7 @@ fn main() {
         rx_spsc: 0,
         usb_reset: 1,
         log_level: DVR_LOG_WARN,
+        hop_prof: 0,
     };
     let mut radio: *mut dvr_radio = std::ptr::null_mut();
     if unsafe { dvr_open(T3U_VID, T3U_PID, &cfg, &mut radio) } != DVR_OK {
