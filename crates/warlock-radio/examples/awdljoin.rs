@@ -326,13 +326,14 @@ fn main() {
             }
             for p in engine.peers() {
                 println!(
-                    "      peer {} ch {:<3} psf {:<5} mif {:<5} data {:<5} metric {:?}",
+                    "      peer {} ch {:<3} psf {:<5} mif {:<5} data {:<5} metric {:?} sequence {:?}",
                     p.addr,
                     p.channel,
                     p.psfs,
                     p.mifs,
                     p.data_frames,
-                    p.election.map(|e| e.self_metric)
+                    p.election.map(|e| e.self_metric),
+                    p.schedule.map(|s| s.slots)
                 );
             }
             for ((from, kind), n) in &to_us {

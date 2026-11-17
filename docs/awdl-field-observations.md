@@ -209,8 +209,26 @@ Mac's (see `crates/awdl-core/src/active.rs`).
   - When an iPhone visited it for AirPlay, the iPhone stayed master of its
     own cluster and alternated 149 and 44, 4 slots each. The Apple TV stayed
     its own master (metric 80).
-  - Open: an over-the-air capture of a working iPhone → Apple TV unicast
-    exchange, to compare against.
+  - **Why: the Apple TV has an idle and an active AWDL mode.**
+    - Idle, it parks on its home channel (44 in all 16 slots) and sends PSFs
+      only. It receives everything and sends multicast, but holds unicast
+      for everyone.
+    - In a session that got as far as AirPlay's PIN prompt, it switched at
+      one moment to `6 149 149 – – – 44 44` (×2), adding AWDL's social
+      channels. Later it sat on 149 for 6 slots while the iPhone was there.
+    - The switch came about 15 s before the iPhone's first mDNS query reached
+      its IP stack, so the trigger is at the AWDL layer. Only then did the
+      iPhone's TCP SYNs get SYN-ACKs. The unicast went over on 149 or 6, not
+      on 44, where our capture sat.
+    - Our presence on 44, mDNS queries, pings and SYNs never switched it out
+      of idle.
+    - Before that, its idle sequence briefly had 3 empty slots in each half
+      (`44 ×5, – ×3`), which looks like scanning other channels.
+  - What wakes it is open. Candidates: hearing an AWDL cluster on the social
+    channels (where the iPhone was), or an AWDL Service Request (TLV 1),
+    which no capture has shown yet.
+  - This doesn't constrain Koala, which plays the TV's role and is always
+    active.
 - **Masters change under us.** When an iPhone appeared during a join, it
   outranked the Mac and became master. We re-synced to it on our own.
 
