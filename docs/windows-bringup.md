@@ -137,8 +137,10 @@ On the safe radio (`warlock-radio`):
   - The first run downloads Wintun into `%ProgramData%\Warlock`
     (`warlock_tun::dll`; why it isn't bundled: PLAN.md, "`wintun.dll`").
   - The adapter goes when the program exits.
-  - Windows binds IPv4 to it as well; the bridge drops it, along with
-    Windows' MLD, router solicitations, LLMNR and SSDP.
+  - Every IPv6 packet Windows sends to a link-local or multicast address goes
+    out, its own multicast (MLD, LLMNR, SSDP, WS-Discovery, …) included:
+    nothing known about AWDL restricts it. Windows binds IPv4 to the adapter
+    too; IPv4 has no AWDL address to go to (no ARP) and stays put.
 
 On the raw FFI (`devourer-sys`), for W0-style measurements:
 - `cargo run --release --example hoptest -- [full|fast] [fastretune_fw] [ch,ch,…] [dwell_ms]`:

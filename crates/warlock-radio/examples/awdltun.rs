@@ -63,7 +63,7 @@ fn main() {
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
     let mut to_air: BTreeMap<String, u64> = BTreeMap::new();
     let mut to_host: BTreeMap<MacAddr, u64> = BTreeMap::new();
-    let (mut chatter, mut unroutable) = (0u64, 0u64);
+    let mut unroutable = 0u64;
     let mut buf = vec![0u8; 65536];
     while started.elapsed() < Duration::from_secs(seconds) {
         let now = radio.tsf_now();
@@ -88,14 +88,11 @@ fn main() {
             }
         }
         let Some(now) = radio.tsf_now() else { continue };
-        // Windows → AWDL.
+        // Windows → AWDL: every IPv6 packet with an AWDL address to go to.
+        // (IPv4 has none: the adapter has no ARP.)
         while let Some(n) = tun.try_recv(&mut buf) {
             let packet = &buf[..n];
             let Some(dst) = addr::ipv6_dst(packet) else { continue };
-            if addr::is_chatter(packet) {
-                chatter += 1;
-                continue;
-            }
             let Some(mac) = addr::mac_for(&dst) else {
                 unroutable += 1;
                 continue;
@@ -129,8 +126,7 @@ fn main() {
         if last_report.elapsed() >= Duration::from_secs(10) {
             last_report = Instant::now();
             println!(
-                "--- {:>4} s: master {:?}; to the air {to_air:?}; to Windows {to_host:?}; dropped chatter {chatter}, \
-                 unroutable {unroutable}",
+                "--- {:>4} s: master {:?}; to the air {to_air:?}; to Windows {to_host:?}; unroutable {unroutable}",
                 started.elapsed().as_secs(),
                 engine.master()
             );

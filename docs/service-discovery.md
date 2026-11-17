@@ -49,7 +49,8 @@ of Windows.
   AWDL multicast slots in both directions:
   - accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb` on receive;
   - transmit the standard address, as iOS 27 does;
-  - keep Windows' other multicast chatter (LLMNR, SSDP) off the link.
+  - Windows' other multicast (LLMNR, SSDP, WS-Discovery) goes out too:
+    nothing known about AWDL forbids it (Parker, 2026-11-17).
 - **No mDNS engine of our own.** Probing, caching and conflict handling stay
   in Windows. Warlock needs only a DNS wire-format codec for the TLV records.
 
