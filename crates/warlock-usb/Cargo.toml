@@ -1,0 +1,17 @@
+[package]
+name = "warlock-usb"
+version = "0.1.0"
+description = "Claims Warlock's USB Wi-Fi adapter for WinUSB (and gives it back) using Windows' own signed winusb.inf"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }

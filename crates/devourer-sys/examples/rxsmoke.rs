@@ -4,7 +4,7 @@
 //! frames (vendor action frames with Apple's OUI 00:17:f2 and data frames on
 //! the AWDL BSSID 00:25:00:ff:94:73).
 //!
-//! Usage: rxsmoke [channel=149] [seconds=10]
+//! Usage: rxsmoke [channel=149] [seconds=10] [log level 0-5 = 3 (warn)]
 
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_void};
@@ -108,6 +108,11 @@ unsafe extern "C" fn on_frame(user: *mut c_void, f: *const dvr_rx_frame) {
     }
 }
 
+#[link(name = "winmm")]
+unsafe extern "system" {
+    fn timeBeginPeriod(period_ms: u32) -> u32;
+}
+
 struct SendPtr(*mut dvr_radio);
 unsafe impl Send for SendPtr {}
 
@@ -115,6 +120,12 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let channel: u8 = args.next().map(|a| a.parse().expect("channel")).unwrap_or(149);
     let seconds: u64 = args.next().map(|a| a.parse().expect("seconds")).unwrap_or(10);
+    let log_level: u8 = args.next().map(|a| a.parse().expect("log level 0-5")).unwrap_or(DVR_LOG_WARN);
+    // devourer's bring-up sleeps in many short std::this_thread::sleep_for
+    // steps; at Windows' default 15.6 ms tick each one overshoots badly.
+    if std::env::var_os("RXSMOKE_NO_TIMER_RES").is_none() {
+        unsafe { timeBeginPeriod(1) };
+    }
 
     let cfg = dvr_config {
         retry_limit: 0,
@@ -122,7 +133,7 @@ fn main() {
         thermal_track: 1,
         rx_spsc: 0,
         usb_reset: 1,
-        log_level: DVR_LOG_WARN,
+        log_level,
     };
     let mut radio: *mut dvr_radio = std::ptr::null_mut();
     let t0 = Instant::now();
