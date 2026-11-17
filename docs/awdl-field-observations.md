@@ -253,9 +253,20 @@ Mac's (see `crates/awdl-core/src/active.rs`).
       TX latency, and frames built before a hop claimed a slot an AW late.
       After the fix, the Mac measured our claimed grid within 0.36 ms p50
       (max 4.2 ms) of the TV's, tighter than the TV's own claims.
-  - Open: which rule for the TV's own cluster members we miss. Next:
-    reproduce the served case with a known third master (an iPhone with
-    AirDrop open), and the iOS 8 driver's logic.
+  - **Reproduced on purpose** with an iPhone (AirDrop open) and a Mac nearby,
+    both at metric 528. The TV's PSFs named the Mac as master: it had joined
+    the Mac's cluster. It set up Block Ack with us and answered our pings
+    4.4 s into the run, and kept answering: 22 replies in 46 s, 120–660 ms
+    while we followed the Mac (its Low Power pattern), 8–25 ms while we
+    followed another iOS master.
+  - **So the rule, as observed:** while it is master, the TV holds unicast
+    for its own followers. It serves peers when it follows a higher-metric
+    master, and it served an iPhone that kept its own cluster.
+  - **For Warlock:** we need a real master mode, on our own clock, with an
+    honest metric. Our `as_master` experiment kept the TV's grid, so when the
+    TV started following us we were following it back. A lone Warlock has
+    to form its own cluster anyway, as every Apple device does. The TV's
+    own driver logic remains a check on the rule.
   - **In active mode, its data frames carry TLVs.** They use the "long
     format" header: its HT capabilities and data path state, the latter
     with AirPlay Solo Mode set (flags `0x0763`, against `0x0363` in its
