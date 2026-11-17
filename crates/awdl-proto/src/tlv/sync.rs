@@ -56,11 +56,34 @@ pub enum Channel {
 }
 
 impl Channel {
-    /// The channel number.
+    /// The channel number as encoded. For [`Channel::Legacy`] this is the
+    /// centre of a 40 MHz pair (46 for 44+48); see [`Channel::primary`].
     pub const fn number(&self) -> u8 {
         match *self {
             Channel::Number(n) | Channel::Legacy { number: n, .. } | Channel::OpClass { number: n, .. } => n,
         }
+    }
+
+    /// The primary (control) channel, the one a radio tunes to. Legacy
+    /// entries carry the 40 MHz centre channel, with the control-channel bits
+    /// saying which side the primary is: lower is 2 below, upper is 2 above.
+    /// Captured: an Apple TV on 44 advertises 46 "lower", and an iPhone on 120
+    /// advertises 118 "upper". The other encodings carry the primary. Empty
+    /// slots (all zero) give 0.
+    pub const fn primary(&self) -> u8 {
+        match *self {
+            Channel::Legacy { flags, number } if number != 0 => match flags & 3 {
+                1 => number.wrapping_sub(2),
+                2 => number.wrapping_add(2),
+                _ => number,
+            },
+            _ => self.number(),
+        }
+    }
+
+    /// True for an empty slot: the sender is off AWDL then.
+    pub const fn is_empty(&self) -> bool {
+        self.number() == 0
     }
 
     const fn encoding(&self) -> u8 {

@@ -156,28 +156,11 @@ impl Scrubber {
 }
 
 fn write_pcapng(path: &str, mpdus: &[Vec<u8>]) {
-    fn block(out: &mut Vec<u8>, btype: u32, body: &[u8]) {
-        let padded = body.len().next_multiple_of(4);
-        let total = (12 + padded) as u32;
-        out.extend_from_slice(&btype.to_le_bytes());
-        out.extend_from_slice(&total.to_le_bytes());
-        out.extend_from_slice(body);
-        out.resize(out.len() + padded - body.len(), 0);
-        out.extend_from_slice(&total.to_le_bytes());
-    }
-    let mut out = Vec::new();
-    let mut shb = vec![0x4d, 0x3c, 0x2b, 0x1a, 1, 0, 0, 0];
-    shb.extend_from_slice(&u64::MAX.to_le_bytes());
-    block(&mut out, 0x0a0d0d0a, &shb);
-    block(&mut out, 1, &[105, 0, 0, 0, 0, 0, 0, 0]);
+    let mut w = warlock_capture::Writer::bare(Vec::new()).unwrap();
     for m in mpdus {
-        let mut epb = vec![0u8; 12];
-        epb.extend_from_slice(&(m.len() as u32).to_le_bytes());
-        epb.extend_from_slice(&(m.len() as u32).to_le_bytes());
-        epb.extend_from_slice(m);
-        block(&mut out, 6, &epb);
+        w.write(std::time::Duration::ZERO, 0, 0, 0, m).unwrap();
     }
-    std::fs::write(path, out).unwrap();
+    std::fs::write(path, w.into_inner()).unwrap();
 }
 
 fn main() {

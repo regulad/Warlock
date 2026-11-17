@@ -135,6 +135,19 @@ fn built_action_frame_parses_back() {
 }
 
 #[test]
+fn legacy_entries_give_their_primary_channel() {
+    let lower = Channel::Legacy { flags: 29, number: 46 }; // 40 MHz, 5 GHz, control lower
+    let upper = Channel::Legacy { flags: 30, number: 118 }; // control upper
+    let twenty = Channel::Legacy { flags: 43, number: 6 }; // 2.4 GHz, control primary
+    assert_eq!((lower.number(), lower.primary()), (46, 44));
+    assert_eq!(upper.primary(), 120);
+    assert_eq!(twenty.primary(), 6);
+    assert_eq!(Channel::OpClass { number: 149, opclass: 128 }.primary(), 149);
+    assert!(Channel::Legacy { flags: 0, number: 0 }.is_empty());
+    assert_eq!(Channel::Legacy { flags: 0, number: 0 }.primary(), 0);
+}
+
+#[test]
 fn tx_times_are_stamped_in_place() {
     let header = Header::action(ME, MacAddr::BROADCAST, 1);
     let mut b = ActionFrameBuilder::new(&header, &action_header());
