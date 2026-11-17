@@ -19,6 +19,20 @@
 - HT/VHT capabilities must match what you actually receive;
 - iOS requests BlockAck on TID 0.
 
+## Bluetooth LE Continuity (waking AWDL)
+
+| Source | Use |
+|---|---|
+| Stute et al., MobiCom 2018 and USENIX Security 2019 (above) | AirDrop turns AWDL on after a BLE advert carrying truncated contact hashes |
+| [seemoo-lab/opendrop](https://github.com/seemoo-lab/opendrop) issue #30, "Triggering AWDL" | the AirDrop wake as a known, unimplemented limitation of OpenDrop |
+| [furiousMAC/continuity](https://github.com/furiousMAC/continuity) | per-type message layouts (`messages/*.md`) and a Wireshark dissector for Continuity adverts |
+| Martin et al., "Handoff All Your Privacy", PETS 2019; Celosia & Cunche, "Discontinued Privacy", PETS 2020 | Continuity message types and fields |
+
+Nothing found ties the "AirPlay source" message (`0x0a`) to waking AirPlay
+receivers, or decodes its iOS 27 form. Both came from our captures and the
+iOS 27 binaries; see
+[awdl-field-observations.md](awdl-field-observations.md#waking-awdl-over-bluetooth-le).
+
 ## Rust AWDL crates, and why Warlock implements its own (checked 2026-11-17)
 
 | Crate | Label | Overlap | Decision |

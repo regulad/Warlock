@@ -216,21 +216,83 @@ Mac's (see `crates/awdl-core/src/active.rs`).
     - In a session that got as far as AirPlay's PIN prompt, it switched at
       one moment to `6 149 149 – – – 44 44` (×2), adding AWDL's social
       channels. Later it sat on 149 for 6 slots while the iPhone was there.
-    - The switch came about 15 s before the iPhone's first mDNS query reached
-      its IP stack, so the trigger is at the AWDL layer. Only then did the
-      iPhone's TCP SYNs get SYN-ACKs. The unicast went over on 149 or 6, not
-      on 44, where our capture sat.
+    - Only in active mode did the iPhone's TCP SYNs get SYN-ACKs: the TV
+      set up Block Ack with the iPhone (ADDBA, TID 0), then sent them.
     - Our presence on 44, mDNS queries, pings and SYNs never switched it out
       of idle.
     - Before that, its idle sequence briefly had 3 empty slots in each half
       (`44 ×5, – ×3`), which looks like scanning other channels.
-  - What wakes it is open. Candidates: hearing an AWDL cluster on the social
-    channels (where the iPhone was), or an AWDL Service Request (TLV 1),
-    which no capture has shown yet.
+  - **What wakes it is a Bluetooth LE "AirPlay source" advert**, not
+    anything on AWDL. See [Waking AWDL over Bluetooth LE](#waking-awdl-over-bluetooth-le).
+  - **Awake, it still holds our unicast.** With the TV woken by our own
+    advert and Warlock following its active sequence, its `tcpdump` showed
+    our echo requests arriving and its kernel answering every one, but none
+    of the replies went on air. Nor did an ADDBA, while the iPhone got both.
+    The iPhone-like TLV choices listed above, all together, didn't change
+    this either.
+    - Open. What's left needs a second sniffer, to tell "never sent" from
+      "sent while we weren't there", or the iOS 8 Broadcom driver's peer
+      logic.
   - This doesn't constrain Koala, which plays the TV's role and is always
     active.
 - **Masters change under us.** When an iPhone appeared during a join, it
   outranked the Mac and became master. We re-synced to it on our own.
+
+## Waking AWDL over Bluetooth LE (2026-11-17)
+
+Apple devices bring AWDL up when a nearby device asks over Bluetooth LE, in
+Apple's "Continuity" manufacturer data (company `0x004C`). That AirDrop
+works this way is published: the MobiCom '18 paper, USENIX Security '19, and
+OpenDrop's open issue #30 (see [prior-art.md](prior-art.md)). Here the same
+held for AirPlay.
+
+- **The trigger.** An iPhone opening the AirPlay picker sends an "AirPlay
+  source" message (type `0x0a`). The Apple TV's power-save frames to its
+  access point, which mark it leaving its home channel, began about 1.6 s
+  before we first heard that advert. Our BLE watcher hears a given
+  advertiser only every 1–3 s, so the timing alone can't decide it.
+- **The test.** `blepublish` sent `0x0a` adverts from Windows' own Bluetooth
+  radio while the iPhone was idle:
+  - the iPhone's exact payload: the TV left its channel 63 ms after the
+    advert started, and its next PSF carried the active sequence;
+  - the minimal `0a 01 02` (flags only, no auth tag): active 0.55 s after
+    the start.
+
+  The TV went back to idle 30–40 s after the advert stopped.
+- **Format** (iOS 27, 24B156: CoreBluetooth `-[CBDevice
+  _parseAirPlaySourcePtr:end:]`, with bit names from the flags-description
+  string in AirPlayReceiver's `-[APAdvertiserBTLEManager
+  handleFoundDevice:]`):
+  - a flags byte;
+  - one byte of UWB config if bit 3 is set;
+  - a 3-byte auth tag if bit 4 is set.
+
+  | bit | name |
+  |---|---|
+  | 0 | ActivateNAN |
+  | 1 | ActivateAWDLNormal |
+  | 2 | ActivateAWDLAlternate |
+  | 3 | ActivateUWB (adds the UWB byte) |
+  | 4 | HasAuthTag (adds the auth tag) |
+  | 7 | Goodbye |
+
+  The iPhone sent `0x13` plus a tag for about 95 s from opening the picker,
+  then a bare `0x80` (Goodbye) for about a minute. furiousMAC's Continuity
+  notes have only ever seen a single `00` byte here.
+- **Who listens** (iOS 27 AirPlayReceiver, AirPlaySupport):
+  - `-[APAdvertiserBTLEManager handleFoundDevice:]` keeps a found source as
+    a "Solo" device only if `APSShouldStartAdvertistingForAirPlaySourceBeacon`
+    allows it.
+  - That rejects a source without ActivateAWDLAlternate when the receiver
+    requires it ("Alternate capable sender required").
+  - Under restricted access control, it also rejects a source whose auth tag
+    doesn't resolve to the same account ("SameAccount device required").
+  - A source with no auth tag isn't checked for the account. "Solo" is
+    AirPlay's peer-to-peer mode, which matches the Data Path State flag of
+    that name.
+- **For Warlock:** it can wake a receiver's AWDL from the host's own
+  Bluetooth, through WinRT's `BluetoothLEAdvertisementPublisher`, with no
+  extra hardware.
 
 ## Wire format
 

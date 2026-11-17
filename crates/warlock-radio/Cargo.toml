@@ -16,3 +16,10 @@ awdl-core = { path = "../awdl-core" }
 awdl-proto = { path = "../awdl-proto" }
 # IPv6/ICMPv6 parsing and building for awdljoin's echo responder (MIT OR Apache-2.0).
 etherparse = "0.21"
+# WinRT Bluetooth LE advertisement watching for blewatch (MIT OR Apache-2.0).
+windows = { version = "0.62", features = [
+    "Devices_Bluetooth_Advertisement",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+] }
