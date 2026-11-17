@@ -81,6 +81,33 @@ pub struct AwPosition {
     pub offset_us: u32,
 }
 
+/// Our own AW grid, while we're master: AWs of exactly 16 TU on our TSF.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnClock {
+    /// When AW `seq_at_origin` starts, on our TSF.
+    pub origin: u64,
+    /// The AW sequence number at `origin`.
+    pub seq_at_origin: u16,
+}
+
+impl OwnClock {
+    /// Which of our AWs `tsf` falls in (the first one, before `origin`).
+    pub fn position(&self, tsf: u64) -> AwPosition {
+        let k = tsf.saturating_sub(self.origin) / AW_US;
+        let start = self.origin + k * AW_US;
+        AwPosition {
+            aw_seq: self.seq_at_origin.wrapping_add(k as u16),
+            start_tsf: start,
+            offset_us: tsf.saturating_sub(start) as u32,
+        }
+    }
+
+    /// When the AW after `tsf` starts.
+    pub fn next_boundary(&self, tsf: u64) -> u64 {
+        self.position(tsf).start_tsf + AW_US
+    }
+}
+
 /// What [`AwClock::observe`] made of a claim.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Observed {

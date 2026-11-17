@@ -40,19 +40,21 @@ fn run(file: &Path) -> (Vec<Sent>, Vec<(u64, u8)>, Engine) {
             }
         }
     };
-    let mut now = 0u64;
+    let mut now = None;
     for c in warlock_capture::read(file).unwrap() {
         let (Some(tsf), Some(ch)) = (c.tsf, c.channel()) else { continue };
+        // Time starts with the first frame, as it does live.
+        let now = now.get_or_insert(tsf);
         // Wake-ups that fall before this frame.
-        while let Some(w) = engine.next_wakeup(now).filter(|&w| w < tsf && w >= now) {
-            now = w.max(now + 1);
-            let a = engine.poll(now);
-            act(now, (engine.master(), engine.sync_source().map(|p| p.addr)), a, &mut channel, &mut sent, &mut hops);
+        while let Some(w) = engine.next_wakeup(*now).filter(|&w| w < tsf && w >= *now) {
+            *now = w.max(*now + 1);
+            let a = engine.poll(*now);
+            act(*now, (engine.master(), engine.sync_source().map(|p| p.addr)), a, &mut channel, &mut sent, &mut hops);
         }
-        now = tsf;
+        *now = tsf;
         engine.on_frame(RxMeta { tsf, channel: ch, rssi_dbm: c.rssi_dbm.unwrap_or(0) }, &c.mpdu);
-        let a = engine.poll(now);
-        act(now, (engine.master(), engine.sync_source().map(|p| p.addr)), a, &mut channel, &mut sent, &mut hops);
+        let a = engine.poll(*now);
+        act(*now, (engine.master(), engine.sync_source().map(|p| p.addr)), a, &mut channel, &mut sent, &mut hops);
     }
     (sent, hops, engine)
 }
@@ -71,6 +73,11 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
     let (sent, hops, engine) = run(&file);
     let src = engine.sync_source().expect("synced");
     assert_eq!((engine.master(), src.addr), (Some(IPHONE), IPHONE));
+    // The capture opens with 3 s of nobody: after listening 2 s we stand as
+    // master, and yield to the first better master we hear.
+    let as_master: Vec<&Sent> = sent.iter().filter(|s| s.master == Some(US)).collect();
+    eprintln!("sent {} of {} frames as master", as_master.len(), sent.len());
+    assert!(as_master.iter().all(|s| s.tsf < sent[0].tsf + 2_000_000), "we led after a better master was heard");
 
     let mifs: Vec<&Sent> = sent.iter().filter(|s| s.kind == TxKind::Mif).collect();
     let psfs: Vec<&Sent> = sent.iter().filter(|s| s.kind == TxKind::Psf).collect();
@@ -112,8 +119,13 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
         let boundary_seq = sp.aw_seq_counter.wrapping_add(((sp.tx_counter as u64 * TU_US) / (16 * TU_US)) as u16 + 1);
         assert!(boundary_seq % 4 == 0 || sp.tx_counter % 16 == 0, "claimed boundary isn't a slot start: seq {} counter {}", sp.aw_seq_counter, sp.tx_counter);
         let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else { panic!() };
-        assert_eq!((Some(e.master), Some(e.other)), (s.master, s.source));
-        assert!(e.self_metric < e.master_metric);
+        if s.master == Some(US) {
+            // Before anyone else was heard, we stood alone.
+            assert_eq!((e.master, e.other, e.distance_to_master), (US, US, 0));
+        } else {
+            assert_eq!((Some(e.master), Some(e.other)), (s.master, s.source));
+            assert!(e.self_metric < e.master_metric);
+        }
         for t in action.tlvs() {
             t.decode().unwrap_or_else(|err| panic!("TLV {} of our own frame: {err}", t.kind));
         }
@@ -133,7 +145,10 @@ fn wireshark_accepts(sent: &[Sent]) {
     for s in sent {
         w.write(Duration::from_micros(s.tsf), s.tsf, warlock_capture::freq_of(s.channel), -40, &s.mpdu).unwrap();
     }
-    let path = std::env::temp_dir().join(format!("warlock-active-{}.pcapng", std::process::id()));
+    // Tests run in parallel in one process: one file per call.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("warlock-active-{}-{n}.pcapng", std::process::id()));
     std::fs::write(&path, w.into_inner()).unwrap();
     let out = Command::new(ts)
         .arg("-r")
@@ -153,6 +168,60 @@ fn wireshark_accepts(sent: &[Sent]) {
         let worst = cols[1].split(',').filter_map(|s| s.parse::<u64>().ok()).max().unwrap_or(0);
         assert!(worst < 0x0080_0000 * 2 && cols.get(2).is_none_or(|m| m.is_empty()), "frame {}: {l}", i + 1);
     }
+}
+
+#[test]
+fn a_lone_engine_becomes_master_on_its_own_grid() {
+    let mut engine = Engine::new(Config::active(TxConfig::new(US)));
+    let (mut sent, mut hops) = (Vec::<Sent>::new(), Vec::<(u64, u8)>::new());
+    let (mut now, mut channel) = (1_000_000u64, 0u8);
+    while now < 1_000_000 + 12_000_000 {
+        for a in engine.poll(now) {
+            match a {
+                Action::Hop(c) => {
+                    channel = c;
+                    hops.push((now, c));
+                }
+                Action::Transmit { mpdu, kind, .. } => {
+                    sent.push(Sent { tsf: now, master: engine.master(), source: None, channel, kind, mpdu })
+                }
+            }
+        }
+        now = engine.next_wakeup(now).expect("a taking-part engine always has a next wake-up").max(now + 1);
+    }
+    assert!(engine.is_master() && engine.sync_source().is_none());
+    // Silent while listening.
+    assert!(sent[0].tsf >= 1_000_000 + 2_000_000, "sent at {} before listening 2 s", sent[0].tsf);
+    // Our default sequence: 6 and 149, nothing else.
+    assert!(hops.iter().all(|&(_, c)| c == 6 || c == 149), "{hops:?}");
+    let span = (sent.last().unwrap().tsf - sent[0].tsf) as f64;
+    let slot_us = 4.0 * 16.0 * TU_US as f64;
+    let (mifs, psfs) = (sent.iter().filter(|s| s.kind == TxKind::Mif).count(), sent.iter().filter(|s| s.kind == TxKind::Psf).count());
+    // 4 explicit slots of 16.
+    let explicit = span / slot_us * 4.0 / 16.0;
+    assert!((mifs as f64 - explicit).abs() <= 2.0, "{mifs} MIFs for {explicit:.1} explicit slots");
+    let psf_rate = psfs as f64 / (span / (110.0 * TU_US as f64));
+    assert!(psf_rate > 0.8 && psf_rate <= 1.05, "PSF rate {psf_rate:.2} of nominal");
+
+    let mut slot_phase = None;
+    for s in &sent {
+        let Ok(Some(Frame::Action { action, .. })) = parse(&s.mpdu) else { panic!("our frame doesn't parse") };
+        let Some(Ok(TlvBody::SyncParams(sp))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode()) else { panic!() };
+        assert_eq!((sp.master, sp.tx_channel), (US, s.channel));
+        let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else { panic!() };
+        assert_eq!((e.master, e.other, e.distance_to_master), (US, US, 0));
+        // Where a receiver puts our next slot: target + tx_counter TU (it
+        // receives at the PHY time). One grid, slot-aligned, in every frame.
+        let boundary = action.header.target_tx_time as u64 + sp.tx_counter as u64 * TU_US;
+        let phase = boundary % (4 * 16 * TU_US);
+        assert_eq!(*slot_phase.get_or_insert(phase), phase, "claims disagree on our slot grid");
+        let to_boundary_aws = (boundary - s.tsf as u32 as u64).div_ceil(16 * TU_US) as u16;
+        assert_eq!(sp.aw_seq_counter.wrapping_add(to_boundary_aws) % 4, 0, "claimed boundary isn't a slot start");
+        // It reaches the air after we build it, and the counter is exact
+        // from the target time.
+        assert!(action.header.phy_tx_time.wrapping_sub(action.header.target_tx_time) < 2 * TU_US as u32);
+    }
+    wireshark_accepts(&sent);
 }
 
 #[test]

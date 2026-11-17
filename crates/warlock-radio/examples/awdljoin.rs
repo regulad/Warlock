@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! Joins the AWDL cluster around us as a follower: transmits PSFs and MIFs,
-//! follows the sync source's channel sequence, answers Block Ack setup, ACKs
-//! unicast in hardware, and reports everything peers address to us, which is
-//! the evidence that they accept us.
+//! Takes part in AWDL: follows the cluster around us, or leads one when we
+//! outrank every master we hear (alone, or with `WARLOCK_SELF_METRIC` above
+//! theirs). Transmits PSFs and MIFs, hops the cluster's sequence (ours as
+//! master), answers Block Ack setup, ACKs unicast in hardware, and reports
+//! everything peers address to us, which is the evidence that they accept us.
 //!
 //!     cargo run --release -p warlock-radio --example awdljoin -- [start channel=149] [seconds=120] [width=20|40]
 //!
@@ -150,7 +151,14 @@ fn main() {
     tx.datapath_ext = env("WARLOCK_DATAPATH_EXT").is_some();
     tx.ht_40mhz = env("WARLOCK_HT40").is_some();
     tx.hostname = env("WARLOCK_HOSTNAME");
-    tx.as_master = env("WARLOCK_AS_MASTER").is_some();
+    // At 40 MHz we receive 40 MHz: say so in our HT capabilities and our
+    // sequence as master.
+    tx.ht_40mhz = env("WARLOCK_HT40").is_some() || width == 40;
+    if let Some(v) = env("WARLOCK_MASTER_SEQ") {
+        let slots: Vec<u8> = v.split(',').map(|c| c.trim().parse().expect("WARLOCK_MASTER_SEQ")).collect();
+        tx.master_sequence = slots.try_into().expect("WARLOCK_MASTER_SEQ: 16 channels");
+    }
+    tx.master_fresh_grid = env("WARLOCK_FRESH_GRID").is_some();
     if let Some(m) = env("WARLOCK_SELF_METRIC") {
         tx.self_metric = m.parse().expect("WARLOCK_SELF_METRIC");
     }
@@ -177,13 +185,15 @@ fn main() {
         }
     }
     println!(
-        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, as master {}, version {}/{}, \
-         TLV overrides {:?}",
+        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, metric {}, sequence as master \
+         {:?}{}, version {}/{}, TLV overrides {:?}",
         tx.infra_channel,
         tx.datapath_ext,
         tx.ht_40mhz,
         tx.hostname,
-        tx.as_master,
+        tx.self_metric,
+        tx.master_sequence,
+        if tx.master_fresh_grid { " (fresh grid)" } else { "" },
         tx.version,
         tx.device_class,
         tx.tlv_overrides.iter().map(|(k, v)| (k, v.as_ref().map_or(0, Vec::len))).collect::<Vec<_>>()
@@ -282,7 +292,7 @@ fn main() {
         }
         let Some(now) = radio.tsf_now() else { continue };
         if let Some(target) = ping_target {
-            if last_ping.elapsed() >= Duration::from_secs(1) && engine.sync_source().is_some() {
+            if last_ping.elapsed() >= Duration::from_secs(1) && engine.master().is_some() {
                 last_ping = Instant::now();
                 if std::env::var_os("WARLOCK_MDNS_QUERY").is_some() {
                     engine.send_packet(now, MDNS_MAC, ETHERTYPE_IPV6, mdns_airplay_query(&own_ll));
@@ -360,13 +370,14 @@ fn main() {
             }
             for p in engine.peers() {
                 println!(
-                    "      peer {} ch {:<3} psf {:<5} mif {:<5} data {:<5} metric {:?} sequence {:?}",
+                    "      peer {} ch {:<3} psf {:<5} mif {:<5} data {:<5} metric {:?} follows {:?} sequence {:?}",
                     p.addr,
                     p.channel,
                     p.psfs,
                     p.mifs,
                     p.data_frames,
                     p.election.map(|e| e.self_metric),
+                    p.election.map(|e| e.master),
                     p.schedule.map(|s| s.slots)
                 );
             }

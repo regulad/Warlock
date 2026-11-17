@@ -30,7 +30,7 @@ mod engine;
 mod schedule;
 
 pub use active::TxConfig;
-pub use clock::{AwClock, AwPosition, Observed, SyncClaim};
+pub use clock::{AwClock, AwPosition, Observed, OwnClock, SyncClaim};
 pub use election::{ElectionInfo, MasterRank};
 pub use engine::{Action, Config, Engine, Event, Peer, RxMeta, TxKind};
 pub use schedule::ChannelSchedule;

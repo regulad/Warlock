@@ -262,11 +262,21 @@ Mac's (see `crates/awdl-core/src/active.rs`).
   - **So the rule, as observed:** while it is master, the TV holds unicast
     for its own followers. It serves peers when it follows a higher-metric
     master, and it served an iPhone that kept its own cluster.
-  - **For Warlock:** we need a real master mode, on our own clock, with an
-    honest metric. Our `as_master` experiment kept the TV's grid, so when the
-    TV started following us we were following it back. A lone Warlock has
-    to form its own cluster anyway, as every Apple device does. The TV's
-    own driver logic remains a check on the rule.
+  - **Warlock as master works.** On its own clock at metric 600 (the TV's is
+    80), with an idle iPhone's sequence (6 in slots 0 and 8, 149 in 2 and
+    10):
+    - Warlock stood as master 2.1 s in, and the TV joined: its PSFs named us
+      as master.
+    - 5 s later it set up Block Ack and answered our pings: 41 of 68, p50
+      84 ms, p90 304 ms.
+    - As a follower, the TV took our timing but kept advertising its own
+      sequence (`6 149 149 – – – 44 44`). Apple followers sync to the
+      master's grid; they don't adopt its channels.
+
+    (An earlier experiment that only *claimed* mastership kept the TV's
+    grid, so once the TV followed us we were following it back; that
+    failed.) The cross-band hops of our sequence, 6 ↔ 149, took 14–21 ms
+    p50 in this run, longer than an AW: likely much of the loss.
   - **In active mode, its data frames carry TLVs.** They use the "long
     format" header: its HT capabilities and data path state, the latter
     with AirPlay Solo Mode set (flags `0x0763`, against `0x0363` in its

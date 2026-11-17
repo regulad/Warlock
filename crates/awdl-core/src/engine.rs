@@ -10,7 +10,10 @@ use awdl_proto::tlv::{ChannelSequence, TlvBody};
 use awdl_proto::{Frame, MacAddr, parse};
 
 use crate::active::{self, FollowerView, TxConfig};
-use crate::{AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, Observed, SyncClaim, TU_US};
+use crate::{
+    AW_US, AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, MasterRank, Observed, OwnClock,
+    SyncClaim, TU_US,
+};
 
 /// Transmit no earlier than this into an AW, µs: time for a hop to settle.
 const TX_FROM_US: u32 = TU_US as u32 / 2;
@@ -40,11 +43,21 @@ pub struct Config {
     /// Set to take part: [`Engine::poll`] then returns frames to send and
     /// channels to be on. `None` only listens.
     pub transmit: Option<TxConfig>,
+    /// How long, µs, a taking-part engine listens before it may elect
+    /// itself master, so it joins a cluster that's already there rather
+    /// than start a rival one.
+    pub listen_before_master_us: u64,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { own_addr: None, peer_timeout_us: 5_000_000, source_stale_us: 2_000_000, transmit: None }
+        Self {
+            own_addr: None,
+            peer_timeout_us: 5_000_000,
+            source_stale_us: 2_000_000,
+            transmit: None,
+            listen_before_master_us: 2_000_000,
+        }
     }
 }
 
@@ -219,6 +232,14 @@ impl Peer {
     }
 }
 
+/// Our channel sequence as master, as sent and as a schedule.
+#[derive(Clone, Debug)]
+struct OwnSequence {
+    legacy: ChannelSequence<'static>,
+    tlv18: ChannelSequence<'static>,
+    schedule: ChannelSchedule,
+}
+
 /// The AWDL engine. See the crate docs.
 #[derive(Clone, Debug, Default)]
 pub struct Engine {
@@ -228,17 +249,38 @@ pub struct Engine {
     source: Option<MacAddr>,
     outbox: Vec<Action>,
     tx: TxState,
+    /// Our sequence, for when we're master.
+    own_sequence: Option<OwnSequence>,
+    /// Our AW grid while we're master.
+    own_clock: Option<OwnClock>,
+    /// The first moment we saw, for the listening period.
+    first_tsf: Option<u64>,
+    /// Events from elections run by `poll`, handed out with the next
+    /// `on_frame` or `on_tick`.
+    pending: Vec<Event>,
 }
 
 impl Engine {
     /// An engine with no peers.
     pub fn new(config: Config) -> Self {
-        Self { config, ..Self::default() }
+        let own_sequence = config.transmit.as_ref().map(|tx| {
+            let (legacy, tlv18) = active::master_sequences(tx);
+            let schedule = ChannelSchedule::from_sequence(&legacy).expect("16 slots");
+            OwnSequence { legacy, tlv18, schedule }
+        });
+        Self { config, own_sequence, ..Self::default() }
+    }
+
+    /// Whether we're the cluster's master.
+    pub fn is_master(&self) -> bool {
+        self.master.is_some() && self.master == self.config.own_addr
     }
 
     /// Feeds one received MPDU (no radiotap, no FCS).
     pub fn on_frame(&mut self, meta: RxMeta, mpdu: &[u8]) -> Vec<Event> {
-        let mut events = self.expire(meta.tsf);
+        self.first_tsf.get_or_insert(meta.tsf);
+        let mut events = std::mem::take(&mut self.pending);
+        events.extend(self.expire(meta.tsf));
         if let (Some(tx), Ok(Some(req))) = (&self.config.transmit, AddbaRequest::parse(mpdu)) {
             if req.to == tx.addr {
                 let n = self.tx.next_sequence_number();
@@ -315,7 +357,9 @@ impl Engine {
 
     /// Advances time without a frame: drops silent peers.
     pub fn on_tick(&mut self, tsf: u64) -> Vec<Event> {
-        let mut events = self.expire(tsf);
+        self.first_tsf.get_or_insert(tsf);
+        let mut events = std::mem::take(&mut self.pending);
+        events.extend(self.expire(tsf));
         events.extend(self.elect(tsf));
         events
     }
@@ -348,16 +392,58 @@ impl Engine {
         let followable = |p: &Peer| {
             p.clock.is_locked() && p.last_claim.is_some_and(|(c, _)| now.saturating_sub(c.rx_tsf) <= stale)
         };
-        let master = self
+        let own = self.config.own_addr;
+        let theirs = self
             .peers
             .values()
             .filter(|p| followable(p))
             .filter_map(|p| p.election.map(|e| e.master_rank()))
-            .max()
-            .map(|r| r.addr);
+            .filter(|r| Some(r.addr) != own)
+            .max();
+        // A taking-part engine stands too, once it has listened long enough
+        // to have heard a cluster that's already there.
+        let listened = self.first_tsf.is_some_and(|t| now.saturating_sub(t) >= self.config.listen_before_master_us);
+        let ours = self.config.transmit.as_ref().filter(|_| listened).map(|tx| MasterRank {
+            metric: tx.self_metric,
+            counter: self.tx.self_counter,
+            addr: tx.addr,
+        });
+        // We stand only if we outrank every master that anyone we hear names,
+        // followable yet or not: while we lock on to a better one, we wait
+        // rather than start a rival cluster. (Peers drop out after
+        // `peer_timeout_us` of silence, so a vanished master stops counting.)
+        let heard = self
+            .peers
+            .values()
+            .filter_map(|p| p.election.map(|e| e.master_rank()))
+            .filter(|r| Some(r.addr) != own)
+            .max();
+        let master = match (ours, heard) {
+            (Some(o), h) if h.is_none_or(|h| o > h) => Some(o.addr),
+            _ => theirs.map(|r| r.addr),
+        };
         if master != self.master {
+            self.own_clock = if master.is_some() && master == own {
+                // Carry on the grid we were following, so its members keep
+                // their places; or, with none (or by choice), start one.
+                let fresh = self.config.transmit.as_ref().is_some_and(|tx| tx.master_fresh_grid);
+                Some(match self.position(now).filter(|_| !fresh) {
+                    Some(p) => OwnClock { origin: p.start_tsf, seq_at_origin: p.aw_seq },
+                    None => OwnClock { origin: now, seq_at_origin: (now / AW_US) as u16 },
+                })
+            } else {
+                None
+            };
             self.master = master;
             events.push(Event::MasterChanged(master));
+        }
+        // A master syncs to no one.
+        if self.is_master() {
+            if self.source.is_some() {
+                self.source = None;
+                events.push(Event::SyncSourceChanged(None));
+            }
+            return events;
         }
         let rank = |p: &Peer| -> Option<(bool, u32)> {
             let m = master?;
@@ -401,8 +487,19 @@ impl Engine {
     /// Where `tsf` falls in the cluster's AW schedule, once the clock of the
     /// peer we sync to is locked.
     pub fn position(&self, tsf: u64) -> Option<AwPosition> {
+        if self.is_master() {
+            return self.own_clock.map(|c| c.position(tsf));
+        }
         let clock = &self.sync_source()?.clock;
         clock.is_locked().then(|| clock.position(tsf)).flatten()
+    }
+
+    /// When the cluster's next AW after `tsf` starts.
+    fn next_boundary(&self, tsf: u64) -> Option<u64> {
+        if self.is_master() {
+            return self.own_clock.map(|c| c.next_boundary(tsf));
+        }
+        self.sync_source()?.clock.next_boundary(tsf)
     }
 
     /// What to do now, at TSF `now`: answers owed to peers (ADDBA), the
@@ -410,6 +507,11 @@ impl Engine {
     /// transmit, and synced to a locked peer, sends anything of its own; until
     /// then we stay silent rather than advertise a guess.
     pub fn poll(&mut self, now: u64) -> Vec<Action> {
+        // Elections run here too, so a lone engine becomes master without
+        // hearing anything.
+        self.first_tsf.get_or_insert(now);
+        let events = self.elect(now);
+        self.pending.extend(events);
         let mut out = std::mem::take(&mut self.outbox);
         let Some(tx) = self.config.transmit.clone() else { return out };
         if self.follower_view(now).is_none() {
@@ -491,30 +593,53 @@ impl Engine {
             return Some(now);
         }
         self.config.transmit.as_ref()?;
-        let src = self.sync_source()?;
-        if !src.clock.is_locked() {
-            return None;
-        }
-        let pos = src.clock.position(now)?;
+        let Some(pos) = self.position(now) else {
+            // No grid to time to yet. Look again in an AW: the election may
+            // make us master, or a clock may lock.
+            return Some(now + AW_US);
+        };
         if pos.offset_us < TX_FROM_US {
             Some(pos.start_tsf + TX_FROM_US as u64)
         } else {
-            Some(src.clock.next_boundary(now)? + TX_FROM_US as u64)
+            Some(self.next_boundary(now)? + TX_FROM_US as u64)
         }
     }
 
-    /// Our AW position, the channel the sync source's sequence puts us on at
-    /// `now`, and whether that slot names it explicitly.
+    /// Our AW position, the channel our sequence (as master) or the sync
+    /// source's puts us on at `now`, and whether that slot names it
+    /// explicitly.
     fn schedule_at(&self, now: u64) -> Option<(AwPosition, u8, bool)> {
-        let src = self.sync_source()?;
         let pos = self.position(now)?;
-        let sched = src.schedule?;
+        let sched = if self.is_master() { self.own_sequence.as_ref()?.schedule } else { self.sync_source()?.schedule? };
         Some((pos, sched.channel_at(pos.aw_seq)?, sched.is_explicit(pos.aw_seq)))
     }
 
-    /// The cluster as our frames describe it: we follow the sync source, one
-    /// hop further from the master than it is.
+    /// The cluster as our frames describe it: as master, ourselves and our
+    /// own grid and sequence; otherwise we follow the sync source, one hop
+    /// further from the master than it is.
     fn follower_view(&self, now: u64) -> Option<FollowerView<'_>> {
+        if self.is_master() {
+            let tx = self.config.transmit.as_ref()?;
+            let seq = self.own_sequence.as_ref()?;
+            let clock = self.own_clock?;
+            let pos = clock.position(now);
+            let channel = seq.schedule.channel_at(pos.aw_seq)?;
+            return Some(FollowerView {
+                now,
+                channel,
+                master: tx.addr,
+                master_channel: channel,
+                master_metric: tx.self_metric,
+                master_counter: self.tx.self_counter,
+                distance: 0,
+                sync_parent: tx.addr,
+                aw_seq: pos.aw_seq,
+                next_boundary: clock.next_boundary(now),
+                sequence_legacy: &seq.legacy,
+                sequence_tlv18: Some(&seq.tlv18),
+                country: self.peers.values().find_map(|p| p.country).unwrap_or(*b"US\0"),
+            });
+        }
         let master = self.master?;
         let src = self.sync_source()?;
         let e = src.election?;

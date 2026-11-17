@@ -16,7 +16,7 @@ use awdl_proto::action::{ActionFrameBuilder, ActionHeader, AwdlVersion};
 use awdl_proto::ieee80211::Header;
 use awdl_proto::dns::DnsName;
 use awdl_proto::tlv::{
-    Arpa, ChannelSequence, ChannelSequenceTlv, DataPathExt, DataPathState, ElectionParams, ElectionParamsV2,
+    Arpa, Channel, ChannelSequence, ChannelSequenceTlv, DataPathExt, DataPathState, ElectionParams, ElectionParamsV2,
     HtCapabilities, InfraInfo, ServiceParams, SyncParams, SyncTree, TlvBody, VersionTlv, device_class,
 };
 use awdl_proto::{Bytes, MacAddr};
@@ -58,10 +58,14 @@ pub struct TxConfig {
     /// A host name for an ARPA TLV in MIFs (`<name>.local`), as an iPhone
     /// sends one.
     pub hostname: Option<String>,
-    /// Advertise ourselves as a master (of a cluster of one) while keeping
-    /// to the sync source's AW grid and channels, the way an iPhone visiting
-    /// an Apple TV stays its own master. An experiment; off by default.
-    pub as_master: bool,
+    /// Our channel sequence while we're master: a primary channel per slot,
+    /// 0 for an empty slot, which repeats the one before. Encoded the way
+    /// Apple devices encode theirs (see [`master_sequences`]). The default
+    /// is an idle iPhone's: 6 in slots 0 and 8, 149 in slots 2 and 10.
+    pub master_sequence: [u8; 16],
+    /// On becoming master, start a new AW grid rather than carry on the one
+    /// we were following. An experiment; off by default.
+    pub master_fresh_grid: bool,
     /// Raw TLVs that replace ours of the same kind, in place, or are
     /// appended; `None` drops that kind. For interop experiments, such as
     /// sending another device's TLVs verbatim. Empty by default.
@@ -87,7 +91,8 @@ impl TxConfig {
             datapath_ext: false,
             ht_40mhz: false,
             hostname: None,
-            as_master: false,
+            master_sequence: [6, 0, 149, 0, 0, 0, 0, 0, 6, 0, 149, 0, 0, 0, 0, 0],
+            master_fresh_grid: false,
             tlv_overrides: Vec::new(),
             aw_seq_offset: 0,
         }
@@ -128,6 +133,64 @@ fn ht_capabilities(forty: bool) -> HtCapabilities<'static> {
     }
 }
 
+/// 5 GHz primaries whose 40 MHz partner is above them (36+40, …, 157+161).
+const FORTY_LOWER: [u8; 12] = [36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157];
+
+/// One slot in the legacy encoding, as Apple devices write it:
+/// - 40 MHz, primary lower: centre channel with flags `0x1d` (an Apple TV
+///   on 44 sends 46, an iPhone on 149 sends 151);
+/// - 2.4 GHz: flags `0x2b` (an Apple TV on 6);
+/// - 40 MHz, primary upper (`0x1e`), and 5 GHz at 20 MHz (`0x17`): not
+///   seen from Apple; the bits per Wireshark's `awdl_tag_channel_sequence`.
+fn legacy_channel(primary: u8, forty: bool) -> Channel {
+    let (flags, number) = match primary {
+        0 => (0, 0),
+        1..=14 => (0x2b, primary),
+        p if forty && FORTY_LOWER.contains(&p) => (0x1d, p + 2),
+        p if forty => (0x1e, p - 2),
+        p => (0x17, p),
+    };
+    Channel::Legacy { flags, number }
+}
+
+/// One slot in the opclass encoding (TLV 18), with 802.11's global operating
+/// classes for the width we use. An iOS 27 iPhone wrote 128 (80 MHz) for
+/// both 44 and 149; we don't receive 80 MHz.
+fn opclass_channel(primary: u8, forty: bool) -> Channel {
+    let opclass = match primary {
+        0 => 0,
+        1..=13 => 81,
+        36..=48 if forty => {
+            if FORTY_LOWER.contains(&primary) { 116 } else { 117 }
+        }
+        52..=64 if forty => {
+            if FORTY_LOWER.contains(&primary) { 119 } else { 120 }
+        }
+        100..=144 if forty => {
+            if FORTY_LOWER.contains(&primary) { 122 } else { 123 }
+        }
+        149..=161 if forty => {
+            if FORTY_LOWER.contains(&primary) { 126 } else { 127 }
+        }
+        36..=48 => 115,
+        52..=64 => 118,
+        100..=144 => 121,
+        _ => 124,
+    };
+    Channel::OpClass { number: primary, opclass }
+}
+
+/// Our sequence as master, as sent: legacy (embedded in the sync
+/// parameters) and opclass (TLV 18), four slots per step, empty slots
+/// repeating the channel before them.
+pub(crate) fn master_sequences(cfg: &TxConfig) -> (ChannelSequence<'static>, ChannelSequence<'static>) {
+    let encode = |f: fn(u8, bool) -> Channel| {
+        let slots: Vec<Channel> = cfg.master_sequence.iter().map(|&c| f(c, cfg.ht_40mhz)).collect();
+        ChannelSequence::new(0, 3, 0xffff, &slots).expect("16 slots, one encoding")
+    };
+    (encode(legacy_channel), encode(opclass_channel))
+}
+
 /// Builds a PSF or MIF.
 pub(crate) fn build(
     cfg: &TxConfig,
@@ -136,23 +199,6 @@ pub(crate) fn build(
     self_counter: u32,
     sequence_number: u16,
 ) -> Vec<u8> {
-    // As a master of our own, we name ourselves where a follower names the
-    // cluster's master and its sync parent.
-    let master_view;
-    let v = if cfg.as_master {
-        master_view = FollowerView {
-            master: cfg.addr,
-            master_channel: v.channel,
-            master_metric: cfg.self_metric,
-            master_counter: self_counter,
-            distance: 0,
-            sync_parent: cfg.addr,
-            ..*v
-        };
-        &master_view
-    } else {
-        v
-    };
     // tx_counter counts to the start of the next *slot* (a 4-AW extended
     // AW), not the next AW: in every capture, the AW starting at a claimed
     // boundary has aw_seq ≡ 0 (mod 4) (5,639 of 5,641 frames). Claiming the
