@@ -1,3 +1,4 @@
 /target
 *.pcapng
 /captures/
+!/crates/awdl-proto/tests/fixtures/*.pcapng

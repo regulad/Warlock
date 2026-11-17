@@ -109,6 +109,18 @@ pub fn air_captures() -> Vec<PathBuf> {
     v
 }
 
+pub const LINKTYPE_IEEE802_11: u16 = 105;
+
+/// The committed, anonymized fixture (see `examples/scrub.rs`): bare MPDUs.
+pub fn fixture_mpdus() -> Vec<Vec<u8>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/awdl-scrubbed.pcapng");
+    read_pcapng(&path)
+        .into_iter()
+        .filter(|p| p.linktype == LINKTYPE_IEEE802_11)
+        .map(|p| p.data)
+        .collect()
+}
+
 /// The MPDUs of a capture, with their frame numbers.
 pub fn mpdus(path: &Path) -> Vec<(usize, Vec<u8>)> {
     read_pcapng(path)

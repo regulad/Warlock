@@ -61,9 +61,10 @@ pub struct InfraInfo {
 /// The extended part of a data path state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct DataPathExt {
-    /// Extended flags. Bits in [`ext_flags`] are set on emit from which
-    /// fields are present; the others are written as given.
-    pub flags: u16,
+    /// Extended flags that introduce no field. The bits in [`ext_flags`]
+    /// aren't stored: they follow from which fields are present. See
+    /// [`DataPathExt::wire_flags`].
+    pub other_flags: u16,
     /// Log trigger.
     pub log_trigger: Option<u16>,
     /// RLFC (meaning unknown).
@@ -72,12 +73,31 @@ pub struct DataPathExt {
     pub counters: Option<(u32, u32, u32)>,
 }
 
+impl DataPathExt {
+    /// The extended flags field as emitted: `other_flags` plus a bit per
+    /// present field.
+    pub fn wire_flags(&self) -> u16 {
+        let mut f = self.other_flags & !ext_flags::WITH_FIELDS;
+        if self.log_trigger.is_some() {
+            f |= ext_flags::LOG_TRIGGER;
+        }
+        if self.rlfc.is_some() {
+            f |= ext_flags::RLFC;
+        }
+        if self.counters.is_some() {
+            f |= ext_flags::COUNTERS;
+        }
+        f
+    }
+}
+
 /// Data path state (type 12).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataPathState<'a> {
-    /// Flags. Bits in [`flags`] are set on emit from which fields are
-    /// present; the others are written as given.
-    pub flags: u16,
+    /// Flags that introduce no field (e.g. 0x0020 dual-band, 0x0400 AirPlay
+    /// solo mode). The bits in [`flags`] aren't stored: they follow from
+    /// which fields are present. See [`DataPathState::wire_flags`].
+    pub other_flags: u16,
     /// Country code, e.g. `b"US\0"`.
     pub country_code: Option<[u8; 3]>,
     /// Social channels: a channel number, or, when bit 0 is set, a map
@@ -127,7 +147,7 @@ impl<'a> DataPathState<'a> {
             let ef = r.u16le("extended flags")?;
             let ehas = |bit: u16| ef & bit != 0;
             Some(DataPathExt {
-                flags: ef,
+                other_flags: ef & !ext_flags::WITH_FIELDS,
                 log_trigger: if ehas(ext_flags::LOG_TRIGGER) { Some(r.u16le("log trigger")?) } else { None },
                 rlfc: if ehas(ext_flags::RLFC) { Some(r.u32le("RLFC")?) } else { None },
                 counters: if ehas(ext_flags::COUNTERS) {
@@ -140,7 +160,7 @@ impl<'a> DataPathState<'a> {
             None
         };
         Ok(Self {
-            flags: f,
+            other_flags: f & !flags::WITH_FIELDS,
             country_code,
             social_channels,
             infra,
@@ -153,9 +173,9 @@ impl<'a> DataPathState<'a> {
         })
     }
 
-    /// The flags as they'll be emitted.
+    /// The flags field as emitted: `other_flags` plus a bit per present field.
     pub fn wire_flags(&self) -> u16 {
-        let mut f = self.flags & !flags::WITH_FIELDS;
+        let mut f = self.other_flags & !flags::WITH_FIELDS;
         let mut set = |present: bool, bit: u16| {
             if present {
                 f |= bit;
@@ -199,17 +219,7 @@ impl<'a> DataPathState<'a> {
             out.put(o);
         }
         if let Some(e) = &self.ext {
-            let mut ef = e.flags & !ext_flags::WITH_FIELDS;
-            if e.log_trigger.is_some() {
-                ef |= ext_flags::LOG_TRIGGER;
-            }
-            if e.rlfc.is_some() {
-                ef |= ext_flags::RLFC;
-            }
-            if e.counters.is_some() {
-                ef |= ext_flags::COUNTERS;
-            }
-            out.put_u16le(ef);
+            out.put_u16le(e.wire_flags());
             if let Some(l) = e.log_trigger {
                 out.put_u16le(l);
             }

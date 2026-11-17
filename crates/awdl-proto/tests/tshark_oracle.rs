@@ -316,7 +316,7 @@ fn ours(frame: &Frame<'_>) -> FrameFields {
                         o.padding(&s.trailing);
                     }
                     TlvBody::DataPathState(d) => {
-                        o.n("awdl.datastate.flags", d.flags);
+                        o.n("awdl.datastate.flags", d.wire_flags());
                         if let Some(c) = &d.country_code {
                             // Wireshark shows an FT_STRING up to its first NUL.
                             o.s("awdl.datastate.countrycode", ascii(c).split('\0').next().unwrap().to_owned());
@@ -345,7 +345,7 @@ fn ours(frame: &Frame<'_>) -> FrameFields {
                             o.n("awdl.datastate.unicast_options_length", u.len() as i64);
                         }
                         if let Some(e) = &d.ext {
-                            o.n("awdl.datastate.extflags", e.flags);
+                            o.n("awdl.datastate.extflags", e.wire_flags());
                             if let Some(l) = e.log_trigger {
                                 o.n("awdl.datastate.logtrigger", l);
                             }
