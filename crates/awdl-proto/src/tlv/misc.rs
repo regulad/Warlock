@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! The small TLVs: version (21), ARPA (16), HT capabilities (7), 802.11
 //! container (17) and sync tree (20).
+//!
+//! Layouts: Wireshark `packet-awdl.c`, `awdl_tag_version`, `awdl_tag_arpa`,
+//! `awdl_tag_ht_capabilities` (including how long the MCS bitmask is),
+//! `awdl_tag_ieee80211_container` and `awdl_tag_sync_tree`. One departure:
+//! the dissector shows only the container's first element, while we read
+//! them all.
 
 use alloc::vec::Vec;
 

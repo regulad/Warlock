@@ -14,7 +14,8 @@ Pinned decisions:
 - Separate repos per license zone.
 - Apps reach the link through a virtual NIC (Wintun).
 - Koala UI is deferred until Warlock works.
-- OWL, winawdl, omdrop-owl and the Wireshark AWDL dissector are **references only**. None of their code is copied.
+- OWL, winawdl and omdrop-owl are **references only**. None of their code is copied.
+- Wireshark's AWDL dissector (`epan/dissectors/packet-awdl.c`, GPL-2.0-or-later, so compatible) is the **layout reference and test oracle** for `awdl-proto`. Each module names the dissector function it follows and where it departs from it. Its code isn't reused, because a dissector only reads, into a display tree.
 
 ## Repos and licensing
 | Repo | License | Contents |
@@ -74,7 +75,7 @@ Pinned decisions:
   - Typed TLVs: everything seen on the air: 2, 4, 5, 6, 7, 12, 16, 17, 18 (all three encodings), 20, 21, 24.
   - Service Request (1), Bloom Filter (22) and NAN Sync (23) never appeared in a capture. iOS 27's TLV 33 does appear, but its layout is unknown. All four stay raw until there's something to decode.
   - Unknown TLVs and bytes past known fields are kept, so every accepted frame re-emits byte-for-byte.
-  - References: Wireshark `epan/dissectors/packet-awdl.c`, the MobiCom'18 paper, our own captures.
+  - Layouts follow Wireshark's `epan/dissectors/packet-awdl.c` (see the provenance section in `src/lib.rs`), checked against it by `tests/tshark_oracle.rs`. Also the MobiCom'18 paper and our own captures.
   - Fuzzed with `cargo-fuzz`, with round-trip tests against captured frames.
 - **`awdl-core`** (sans-IO, deterministic, uses the radio TSF as its clock)
   - Inputs: RX frames, timer ticks, host IPv6 packets, commands. Outputs: TX frames with a target time and channel, retunes, host deliveries, peer and service events.

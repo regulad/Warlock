@@ -13,9 +13,10 @@
 //! payload
 //! ```
 //!
-//! Wireshark describes a long format, where the two bytes after the sequence
-//! number start with 3 and introduce short TLVs. Every captured frame used
-//! the short form; the long form is accepted and kept raw.
+//! Layout: Wireshark `packet-awdl.c`, `dissect_awdl_data`. It also describes
+//! a long format, where the two bytes after the sequence number start with 3
+//! and introduce short TLVs. Every captured frame used the short form; the
+//! long form is accepted and kept raw.
 
 use alloc::vec::Vec;
 

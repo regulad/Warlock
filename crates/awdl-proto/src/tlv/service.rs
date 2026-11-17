@@ -15,6 +15,10 @@
 //! ```
 //!
 //! Records carry no TTL: they live as long as the advertiser is present.
+//!
+//! Layout: Wireshark `packet-awdl.c`, `awdl_tag_service_response` and
+//! `awdl_tag_service_params`. The dissector shows TXT strings one by one;
+//! we keep TXT data raw, so malformed strings still round-trip.
 
 use alloc::vec::Vec;
 

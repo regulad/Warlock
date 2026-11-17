@@ -116,40 +116,11 @@ TV's Wi-Fi interface carried no AirPlay traffic. Sequence, as seen on the TV's
    retransmissions reached the TV together, about 1 s after the first was sent.
    AWDL holds frames until the peer's window and data path are ready.
 
-## Wire format notes
+## Wire format
 
-From Wireshark's dissector and the captures.
-
-**Service Response TLV (type 2):**
-
-```
-u16 LE   name length (includes the type byte)
-name     labels; 2-byte AWDL dictionary codes for common suffixes
-u8       DNS type (PTR 12, TXT 16, SRV 33)
-u16 LE   data length
-u16      unknown (0 in all captures)
-data     PTR: name · SRV: priority, weight, port (big-endian), target · TXT: strings
-```
-
-**Name dictionary:**
-
-| Code | Suffix |
-|---|---|
-| `C000` | (null) |
-| `C001` | `_airplay._tcp.local` |
-| `C002` | `_airplay._udp.local` |
-| `C003` | `_airplay` |
-| `C004` | `_raop._tcp.local` |
-| `C005` | `_raop._udp.local` |
-| `C006` | `_raop` |
-| `C007` | `_airdrop._tcp.local` |
-| `C008` | `_airdrop._udp.local` |
-| `C009` | `_airdrop` |
-| `C00A` | `_tcp.local` |
-| `C00B` | `_udp.local` |
-| `C00C` | `local` |
-| `C00D` | `ip6.arpa` |
-| `C00E` | `ip4.arpa` |
-
-**No TTLs:** records carry none. A record lives as long as its advertiser is
-present, and the Service Parameters TLV's SUI counter signals changes.
+The frame and TLV layouts are documented in one place: the module docs of
+`crates/awdl-proto`. For example, `dns.rs` holds the name dictionary and
+`tlv/service.rs` the Service Response layout. Those layouts follow
+Wireshark's AWDL dissector (`epan/dissectors/packet-awdl.c`), and the
+crate's `tests/tshark_oracle.rs` checks that our decoding agrees with it on
+every captured frame. This document keeps only what we observed on the air.

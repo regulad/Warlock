@@ -18,9 +18,20 @@
 //! `trailing` fields, [`tlv::TlvBody::Unknown`] and
 //! [`action::ActionFrame::trailer`].
 //!
-//! Layouts follow our own captures of iOS 27, macOS 11 and Apple TV traffic,
-//! with Wireshark's AWDL dissector and the MobiCom '18 paper "One Billion
-//! Apples' Secret Sauce" as references. No code was taken from either.
+//! # Provenance
+//!
+//! The field layouts follow Wireshark's AWDL dissector,
+//! [`epan/dissectors/packet-awdl.c`](https://gitlab.com/wireshark/wireshark/-/blob/master/epan/dissectors/packet-awdl.c)
+//! (GPL-2.0-or-later; David Kreitschmann and Milan Stute, TU Darmstadt).
+//! Each module names the dissector function it corresponds to and says
+//! where it departs from it. Its code isn't reused: a dissector only reads,
+//! into a display tree, while this crate must also build frames and keep
+//! every byte.
+//!
+//! `tests/tshark_oracle.rs` holds the crate to the dissector: on every frame
+//! of our captures, every field it decodes must equal ours. The captures
+//! (iOS 27, macOS 11, an Apple TV) and the MobiCom '18 paper "One Billion
+//! Apples' Secret Sauce" cover what the dissector doesn't.
 
 #![no_std]
 #![forbid(unsafe_code)]

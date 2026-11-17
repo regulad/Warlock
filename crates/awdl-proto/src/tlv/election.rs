@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Election parameters, v1 (type 5) and v2 (type 24).
+//!
+//! Layout: Wireshark `packet-awdl.c`, `awdl_tag_election_params` and
+//! `awdl_tag_election_params_v2`. Field names follow it, except that its v2
+//! "disstance" is `distance_to_master` here.
 
 use alloc::vec::Vec;
 

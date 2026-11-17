@@ -5,6 +5,10 @@
 //! typed TLV keeps any bytes after the fields it knows in a `trailing` field,
 //! so `decode` followed by [`TlvBody::emit_value`] reproduces the value
 //! exactly.
+//!
+//! Framing and type numbers: Wireshark `packet-awdl.c`,
+//! `awdl_add_tagged_field` and its tag enum. Wireshark calls bytes past a
+//! dissected field "padding"; here they're `trailing`.
 
 mod datapath;
 mod election;
@@ -250,7 +254,8 @@ pub(crate) fn validate(region: &[u8]) -> Result<usize, Error> {
     Ok(used)
 }
 
-/// Iterator over a run of TLVs that [`validate`] has accepted.
+/// Iterator over the TLVs of a parsed frame, whose framing was checked when
+/// the frame was parsed.
 #[derive(Clone, Debug)]
 pub struct TlvIter<'a> {
     rest: &'a [u8],

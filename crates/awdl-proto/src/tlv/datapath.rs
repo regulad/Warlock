@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Data path state (type 12): a u16 of flags, then one optional field per
-//! flag, in a fixed order. Bit meanings for flags without a field are
-//! Wireshark's.
+//! flag, in a fixed order.
+//!
+//! Layout and flag meanings: Wireshark `packet-awdl.c`,
+//! `awdl_tag_datapath_state`. Two departures:
+//! - the social channels field stays a raw u16. The dissector reads it as a
+//!   channel map when bit 0 is set and as a channel number otherwise, a
+//!   heuristic its own comment marks unverified;
+//! - bytes after the fields it knows, such as fields of extended flags it
+//!   has no layout for (iOS 27 sets several of those), are kept in
+//!   `trailing`.
 
 use alloc::vec::Vec;
 

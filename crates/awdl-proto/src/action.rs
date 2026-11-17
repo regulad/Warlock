@@ -11,6 +11,8 @@
 //! u32 LE PHY TX time (µs)  u32 LE target TX time (µs)
 //! TLVs …
 //! ```
+//!
+//! Layout: Wireshark `packet-awdl.c`, `dissect_awdl_action`.
 
 use alloc::vec::Vec;
 use core::fmt;

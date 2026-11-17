@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Synchronization parameters (type 4) and channel sequences (type 18, and
 //! embedded at the end of type 4).
+//!
+//! Layout: Wireshark `packet-awdl.c`, `awdl_tag_sync_params` and
+//! `awdl_tag_channel_sequence`. Unlike the dissector, which shows nothing
+//! for an unknown channel encoding, we reject one: its entry size is
+//! unknown.
 
 use alloc::vec::Vec;
 

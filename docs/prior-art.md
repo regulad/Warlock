@@ -5,7 +5,7 @@
 | Source | License | Use |
 |---|---|---|
 | Stute, Kreitschmann, Hollick, "One Billion Apples' Secret Sauce: Recipe for the Apple Wireless Direct Link Ad hoc Protocol", ACM MobiCom 2018 | paper | protocol reference (timing, election, TLVs) |
-| Wireshark AWDL dissector, `epan/dissectors/packet-awdl.c` | GPL-2.0-or-later | field reference; our capture analysis tool |
+| Wireshark AWDL dissector, `epan/dissectors/packet-awdl.c` | GPL-2.0-or-later | layout reference for `awdl-proto` (each module names its dissector function) and its test oracle (`tests/tshark_oracle.rs`); our capture analysis tool |
 | [seemoo-lab/owl](https://github.com/seemoo-lab/owl) (archived 2026-10) | GPL-3.0-or-later | reference only. Its code can't be copied into GPL-2.0-only Warlock, and it is Linux nl80211/libpcap glue around ~1.3k lines of protocol logic |
 | [jedbillyb/owl](https://github.com/jedbillyb/owl), [jedbillyb/airdrop-mt7921](https://github.com/jedbillyb/airdrop-mt7921) | — | iOS 26 findings (reported by the project, see below) |
 | Stute et al., "A Billion Open Interfaces for Eve and Mallory", USENIX Security 2019 | paper | AWDL security background |

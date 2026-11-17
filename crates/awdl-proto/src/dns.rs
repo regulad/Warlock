@@ -5,6 +5,11 @@
 //! gives. Each label is either text (a length byte below 0x40, then that many
 //! bytes) or a 2-byte big-endian dictionary code `0xC0xx` standing for a
 //! common suffix such as `_tcp.local`. There's no terminating zero label.
+//!
+//! Layout: Wireshark `packet-awdl.c`, `add_awdl_dns_name`; the dictionary is
+//! its `awdl_dns_compression`. The dissector treats any length byte with
+//! either top bit set as a code; we accept only `0xC0` and reject
+//! `0x40`–`0xBF`, which no capture contains.
 
 use alloc::string::String;
 use alloc::vec::Vec;
