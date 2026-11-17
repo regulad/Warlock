@@ -1,0 +1,9 @@
+[package]
+name = "awdl-proto"
+version = "0.1.0"
+description = "Parse and build Apple Wireless Direct Link (AWDL) frames: action frames, their TLVs, and data-frame encapsulation"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
