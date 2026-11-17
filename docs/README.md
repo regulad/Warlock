@@ -21,13 +21,16 @@ Continuity Sing. An AirDrop client is the second planned user.
 
 ## Status (2026-11-16)
 
-- **Radio bring-up (W0):** done for receive. The T3U runs from user space on
-  Windows through devourer, bound to WinUSB by Warlock itself, and receives AWDL
-  frames from nearby Apple devices with hardware timestamps.
+- **Radio bring-up (W0):** done. The T3U runs from user space on Windows
+  through devourer, bound to WinUSB by Warlock itself. It receives AWDL frames
+  from nearby Apple devices with hardware timestamps, transmits while
+  receiving, and hops channels in ~3 ms within a band and ~9–10 ms across
+  (firmware hops). Windows timers are within 1 ms of target at AWDL's window
+  period. A devourer cross-band retune bug is fixed by a carried patch.
 - **Service discovery:** settled by captures. AWDL carries service records both
   inside its action frames and as ordinary multicast mDNS.
-- **Open:** transmit with receive running, channel-hop latency, Windows timer
-  jitter, a 2.4 to 5 GHz retune bug, and ~20 s bring-up time.
+- **Open:** the true over-the-air transmit rate (needs an independent
+  sniffer), and ~20 s bring-up time.
 
 ## Conventions
 

@@ -76,9 +76,19 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
   - Most of what's left is ~22k PHY/AGC/RF table register writes, each a
     synchronous WinUSB control transfer of about 1 ms.
   - Batching or pipelining those writes is the obvious fix.
-- **Cross-band retune bug:** after a full `SetMonitorChannel` from 2.4 GHz back
-  to 5 GHz, receive stays dead. 5 → 2.4 GHz works. Next to try: firmware hops
-  (`fastretune_fw = 2`) and re-applying TX power after band changes.
+- **Cross-band retune bug (fixed by our patch):** after any 2.4 GHz tune, a full
+  retune to 5 GHz left receive dead.
+  - Cause: `HalJaguar2::set_channel_bw` never set RF18's 5 GHz band bits
+    (16 and 8). The 2.4 GHz branch clears them, and the 5 GHz branch only
+    kept what it read back. rtw88 sets them explicitly.
+  - Fix: `third_party/patches/devourer/0001-jaguar2-fix-cross-band-retune.patch`.
+    It sets the band bits, and it also re-applies the band-keyed WL-only
+    antenna grant (`0xcbc[9:8]`) on every band change, as the vendor driver
+    does.
+  - `build.rs` builds devourer from a patched copy in `OUT_DIR`; the submodule
+    stays pristine. Worth offering upstream to OpenIPC.
+  - Verified with `hoptest`: 6 → 44, 6 → 161 and 44 → 149 all receive, on both
+    the full and the firmware paths.
 - **One silent channel-6 run** went quiet after its first second. It didn't
   reproduce in a 10 s rerun.
 - Caveats from devourer's notes:
@@ -93,10 +103,46 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
   frame counts, AWDL peers, PSF/MIF tallies.
 - `cargo run --release --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
   radiotap pcapng for Wireshark. Creating `<out.pcapng>.stop` ends it cleanly.
+- `cargo run --release --example hoptest -- [full|fast] [fastretune_fw] [ch,ch,…] [dwell_ms]`:
+  per-hop call time, first frame and frame counts.
+- `cargo run --release --example timerjitter -- [periods] [period_us]`.
+- `cargo run --release --example txtest -- [channel] [burst] [rate_500kbps]`:
+  proof-of-air via probe responses, plus a burst rate.
 - `warlock-usb status|bind|release`.
 
-## Still to measure for W0
+## W0 measurements (2026-11-16, T3U on USB, Windows 11)
 
-- Sustained transmit rate with the RX loop running.
-- Hop latency, firmware vs software.
-- Windows high-resolution timer jitter at AWDL's 16 TU windows.
+### Channel hops (`hoptest`; host-side call duration)
+
+| Path | Within a band | Across bands |
+|---|---|---|
+| Firmware hop (`fastretune_fw = 1` / `2`) | ~3 ms (2.8–5.2) | ~9–10 ms (`=2`) |
+| Software fast retune (`fastretune_fw = 0`) | 4–13 ms | falls back to the full path |
+| Full retune (`SetMonitorChannel`) | — | ~90–100 ms into 5 GHz, ~255 ms into ch 6 (a spur channel, so the full set runs a notch calibration) |
+
+Warlock should run `fastretune_fw = 2`. Dead air on the radio is shorter than
+the call; measuring it needs a known transmitter. Time to first received frame
+after a hop mostly reflects each channel's traffic.
+
+### Timer jitter (`timerjitter`)
+High-resolution waitable timer aimed at absolute deadlines every 16.384 ms
+(one AWDL availability window), 600 waits:
+
+| mean | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| 285 µs | 276 µs | 486 µs | 582 µs | 947 µs |
+
+No wait was more than 1 ms late, which is under one TU and inside AWDL's 3 TU
+unicast guard. Waking ~0.6 ms early and spinning would tighten it further.
+
+### Transmit while receiving (`txtest`)
+- **On air, confirmed:** broadcast probe requests from a random MAC drew
+  probe responses addressed to it: 15 from 3 APs on ch 44, 18 from 6 APs on
+  ch 6, with the RX loop running.
+- **Accept rate:** 300 small frames at 6 Mb/s in ~15 ms (worst call 0.32 ms);
+  3,000 at 24 Mb/s in 237 ms (~12.6k frames/s, worst call 3.5 ms). That
+  exceeds what the air can carry, so the chip buffers or drops. The true air
+  rate needs an independent sniffer (to do).
+- Receive continued during the saturating burst at a reduced rate
+  (half-duplex).
+- devourer's reported Jaguar2 TX+RX stall (~24 ms per frame) did not appear.

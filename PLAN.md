@@ -44,7 +44,8 @@ Pinned decisions:
 - **`devourer-sys`**
   - Builds devourer from `third_party/devourer` (a git submodule pinned to a commit) via the `cmake` crate. Only the 8822B backend is enabled: `DEVOURER_JAGUAR1/8814/JAGUAR2_8821C/JAGUAR3_*/8733B/KESTREL_*=OFF`, `--target devourer`, `DEVOURER_LOG_MAX_LEVEL=WARN`. Force the `/MD` CRT so it matches Rust.
   - libusb comes from `libusb1-sys` with `features=["vendored"]` (LGPL-2.1, static). Its `DEP_USB_1.0_INCLUDE` is passed to CMake.
-  - devourer's CMake insists on `pkg_check_modules(libusb-1.0)`. Either generate a `.pc` file in `OUT_DIR` with a pkgconf binary present, or carry a tiny patch. Patches live in `third_party/patches/`.
+  - devourer's CMake insists on `pkg_check_modules(libusb-1.0)`. Handled by a `FindPkgConfig.cmake` stand-in, so devourer isn't patched for it.
+  - Our fixes to devourer are patch files in `third_party/patches/devourer/`. `build.rs` applies them to a copy in `OUT_DIR` and verifies each one landed.
   - The shim (`shim/dvr_shim.cpp`) is a narrow, hand-written `extern "C"` API. It catches every C++ exception and returns an error code, and it confines devourer's global macros (`ushort`, `rtw_read8`) to that one `.cpp`. Its surface:
     - `open(vid,pid)` → claim → `CreateRadio(handle, ctx, lock, cfg)`;
     - `init_write(ch)`;
@@ -130,7 +131,13 @@ Pinned decisions:
 - **W0 Bring-up:** `devourer-sys` builds under MSVC. A Rust smoke binary receives frames with TSF from the T3U. *Measure:* sustained TX rate with RX running (devourer reports ~37 fps on Jaguar2 in this mode, which is a risk), hop latency, Windows timer jitter.
   - *Done 2026-11-16:* build, self-binding to WinUSB, and RX with TSF on ch 6/36/44/120/161; Apple AWDL PSFs seen on ch 44.
   - Bring-up takes ~20 s with a 1 ms timer: the PHY-table writes are one synchronous WinUSB control transfer each. Optimize later.
-  - *Remaining:* TX with RX running, hop latency, timer jitter.
+  - *Done 2026-11-16:*
+    - TX with RX running, confirmed on air through probe responses;
+    - hops ~3 ms within a band, ~9–10 ms across bands (firmware, `fastretune_fw = 2`);
+    - timer lateness p99 582 µs, max 947 µs at 16.384 ms;
+    - devourer cross-band retune bug fixed by `third_party/patches/devourer/0001-*`.
+  - Details: `docs/windows-bringup.md`.
+  - *Remaining:* the true over-the-air TX rate, which needs an independent sniffer.
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
