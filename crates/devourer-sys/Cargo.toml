@@ -1,0 +1,17 @@
+[package]
+name = "devourer-sys"
+version = "0.1.0"
+description = "Raw FFI to the OpenIPC devourer userspace Realtek Wi-Fi driver, via a narrow C shim"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+links = "devourer"
+build = "build.rs"
+
+[dependencies]
+# Supplies libusb (LGPL-2.1, built from source and linked statically) to
+# devourer; its DEP_USB_1.0_INCLUDE is handed to the CMake build.
+libusb1-sys = { version = "0.7", features = ["vendored"] }
+
+[build-dependencies]
+cmake = "0.1"

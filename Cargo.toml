@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/devourer-sys"]
+
+[workspace.package]
+edition = "2024"
+license = "GPL-2.0-or-later"
+authors = ["Parker Wahle <regulad@regulad.xyz>"]
+
+[profile.release]
+debug = "line-tables-only"
