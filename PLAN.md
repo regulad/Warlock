@@ -99,7 +99,7 @@ Pinned decisions:
     - **Advertised capabilities** must match what the dongle actually receives.
     - **BlockAck responder:** TID 0, 64-frame window, ~100 ms reorder buffer.
 - **`warlock-usb`** (done in W0): claims the adapter for WinUSB with Windows' own Microsoft-signed `winusb.inf`, the way Device Manager's "Have Disk" does: a class driver list from that one INF, its generic `USB\MS_COMP_WINUSB` node, `DiInstallDevice`, after moving the device from the Net to the USBDevice setup class. No generated catalog and no certificate. `release` reinstalls the best store driver (`netrtwlanu.inf`).
-- **`warlock`** (service binary)
+- **`warlock`** (service binary; first version done 2026-11-17, see W3's progress notes)
   - Service host via `windows-service`; stop event for clean shutdown.
   - Claims the T3U at start and on device arrival (`CM_Register_Notification`) through `warlock-usb`; gives it back to Windows on uninstall or `warlock-ctl release`.
   - Engine thread with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` + QPC, deadline-based periodic timers, and MMCSS priority.
@@ -142,7 +142,7 @@ Pinned decisions:
 ## Milestones (exit criteria)
 - **W0 Bring-up:** `devourer-sys` builds under MSVC. A Rust smoke binary receives frames with TSF from the T3U. *Measure:* sustained TX rate with RX running (devourer reports ~37 fps on Jaguar2 in this mode, which is a risk), hop latency, Windows timer jitter.
   - *Done 2026-11-16:* build, self-binding to WinUSB, and RX with TSF on ch 6/36/44/120/161; Apple AWDL PSFs seen on ch 44.
-  - Bring-up takes ~20 s with a 1 ms timer: the PHY-table writes are one synchronous WinUSB control transfer each. Optimize later.
+  - Bring-up took ~20 s with a 1 ms timer, ~7.5 s once Windows 11 honours it (2026-11-17). The rest is mostly the PHY-table writes, one synchronous WinUSB control transfer each. Optimize later.
   - *Done 2026-11-16:*
     - TX with RX running, confirmed on air through probe responses;
     - hops ~3 ms within a band, ~9–10 ms across bands (firmware, `fastretune_fw = 2`);
@@ -176,7 +176,13 @@ Pinned decisions:
     - **Waking AWDL over BLE:** a Bluetooth LE "AirPlay source" advert switches a receiver's AWDL from idle to active. Windows' own Bluetooth can send it through WinRT (`blepublish`), and `0a 01 02` alone wakes the Apple TV. Even awake, the Apple TV still holds our unicast (open). Details in `docs/awdl-field-observations.md`. The service needs a BLE advertiser for this, and for AirDrop's wake later.
     - **iPhone (iOS 27), 2026-11-17:** it answers our pings, whether we follow it (15 of 59) or lead it. Leading works once our election counter advances, as an Apple master's does. iPhones and Macs then join our cluster and stay.
     - **Ping loss fixed (2026-11-17):** Apple devices take unicast only in a peer's *explicit* slots, and send to us only in ours. The engine now sends only in explicit slots, and as a follower advertises the master's sequence widened. iPhone: 47 of 49 answered, p50 4–5 ms, following or leading. Apple TV: 58 of 58.
-    - **Wintun (2026-11-17):** `crates/warlock-tun` fetches the pinned Wintun 0.14.1 at runtime (zip and DLL SHA-256 checked; admin-only `%ProgramData%\Warlock`). It creates the "Warlock AWDL" adapter with only our EUI-64 link-local, no router discovery and no DAD, and maps IPv6 destinations to AWDL addresses. The `awdltun` example bridges it. Windows' own `ping -6 fe80::…%<if>` to the Apple TV, with Warlock leading: 40 of 40, 6–474 ms. **To an iPhone (iOS 27, AirDrop open), with Warlock following it: 38 of 40, 5–387 ms. W3's exit criterion is met (2026-11-17).** The wait is the peer's explicit slots: this iPhone names 4 of 16, so a packet can wait ~380 ms. Next: move the bridge into the service.
+    - **Wintun (2026-11-17):** `crates/warlock-tun` fetches the pinned Wintun 0.14.1 at runtime (zip and DLL SHA-256 checked; admin-only `%ProgramData%\Warlock`). It creates the "Warlock AWDL" adapter with only our EUI-64 link-local, no router discovery and no DAD, and maps IPv6 destinations to AWDL addresses. The bridge first ran as an `awdltun` example; it now lives in the `warlock` service. Windows' own `ping -6 fe80::…%<if>` to the Apple TV, with Warlock leading: 40 of 40, 6–474 ms. **To an iPhone (iOS 27, AirDrop open), with Warlock following it: 38 of 40, 5–387 ms. W3's exit criterion is met (2026-11-17).** The wait is the peer's explicit slots: this iPhone names 4 of 16, so a packet can wait ~380 ms.
+    - **Service (2026-11-17):** `crates/warlock` holds the bridge.
+      - Commands: `run` (foreground, Ctrl+C), `install`/`uninstall` (LocalSystem, manual start, options kept on its command line) and `service` (the service-manager entry).
+      - At start it claims the T3U for WinUSB if needed, fetches Wintun, opens the radio and the adapter.
+      - It runs one thread (the radio is `!Send`), waiting on the radio in 2 ms slices and polling the adapter between them.
+      - It stops cleanly on Stop/Shutdown, logging to `%ProgramData%\Warlock\warlock.log`.
+      - Still ahead: the event-driven engine thread, device arrival, the control API, ETW (W5).
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
   - Resources to cover: daemon and radio status and control; peers; holding AWDL active and channel preference; service registration and browsing (the registrar design in `docs/service-discovery.md`); an event stream (Docker-style streamed JSON on `GET /events`); pcapng capture; one error model.

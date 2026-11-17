@@ -160,7 +160,7 @@ fn main() {
         MacAddr(b.try_into().expect("six bytes"))
     });
     let own = random_addr();
-    println!("our AWDL address: {own}; opening the T3U on channel {channel} at {width} MHz (~20 s)");
+    println!("our AWDL address: {own}; opening the T3U on channel {channel} at {width} MHz (~8 s)");
     let config = DevourerConfig {
         channel,
         hop_prof: std::env::var_os("WARLOCK_HOP_PROF").is_some(),

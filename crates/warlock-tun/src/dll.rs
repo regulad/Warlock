@@ -71,7 +71,7 @@ pub fn ensure(root: &Path) -> io::Result<PathBuf> {
     if std::fs::read(&dll).is_ok_and(|b| sha256_hex(&b) == dll_sha) {
         return Ok(dll);
     }
-    protected_dir(root)?;
+    prepare_root(root)?;
     std::fs::create_dir_all(&dir)?;
     let part = root.join(format!("wintun-{VERSION}.zip.part"));
     download(URL, &part)?;
@@ -116,11 +116,12 @@ fn download(url: &str, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Creates `path` writable only by SYSTEM and Administrators (Users may read
-/// and execute), inheriting nothing from `%ProgramData%`, whose default
-/// lets any user create files. An existing directory is left as it is; the
-/// hash check before loading still holds.
-fn protected_dir(path: &Path) -> io::Result<()> {
+/// Creates Warlock's directory (`root`) writable only by SYSTEM and
+/// Administrators (Users may read and execute), inheriting nothing from
+/// `%ProgramData%`, whose default lets any user create files. Whatever goes
+/// in it (Wintun, the service's log) should come after this. An existing
+/// directory is left as it is; the hash check before loading still holds.
+pub fn prepare_root(path: &Path) -> io::Result<()> {
     use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, LocalFree};
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,

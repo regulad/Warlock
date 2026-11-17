@@ -187,8 +187,8 @@ pub struct DevourerRadio {
 }
 
 impl DevourerRadio {
-    /// Opens the adapter, brings it up and starts receiving. Takes ~20 s:
-    /// bring-up is ~22k register writes over USB (see
+    /// Opens the adapter, brings it up and starts receiving. Takes ~7.5 s:
+    /// bring-up is ~22k register writes over USB and many short sleeps (see
     /// `docs/windows-bringup.md`).
     pub fn open(config: &DevourerConfig) -> Result<Self, Error> {
         // devourer's waits are sleeps; 1 ms timer resolution shortens them.

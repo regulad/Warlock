@@ -40,7 +40,7 @@ Continuity Sing. An AirDrop client is the second planned user.
 - **Service discovery:** settled by captures. AWDL carries service records both
   inside its action frames and as ordinary multicast mDNS.
 - **Open:** the true over-the-air transmit rate (needs an independent
-  sniffer), and ~20 s bring-up time.
+  sniffer), and ~7.5 s bring-up time.
 
 ## Conventions
 

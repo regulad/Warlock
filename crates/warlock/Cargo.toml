@@ -1,0 +1,20 @@
+[package]
+name = "warlock"
+version = "0.1.0"
+description = "Warlock: Apple Wireless Direct Link on Windows, as a service"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+awdl-core = { path = "../awdl-core" }
+awdl-proto = { path = "../awdl-proto" }
+warlock-radio = { path = "../warlock-radio" }
+warlock-tun = { path = "../warlock-tun" }
+warlock-usb = { path = "../warlock-usb" }
+# The Windows service host (MIT OR Apache-2.0).
+windows-service = "=0.8.1"
+# Logs (MIT).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }

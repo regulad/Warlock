@@ -74,12 +74,17 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
 
 ## Timing and known issues
 
-- **Bring-up takes about 20 s.**
-  - It was ~25–33 s at Windows' default 15.6 ms timer resolution and ~19–21 s
-    after `timeBeginPeriod(1)`, because devourer sleeps in many short steps.
-  - Most of what's left is ~22k PHY/AGC/RF table register writes, each a
-    synchronous WinUSB control transfer of about 1 ms.
-  - Batching or pipelining those writes is the obvious fix.
+- **Bring-up takes about 7.5 s** (7.4–7.9 s over three runs, 2026-11-17).
+  devourer sleeps in many short steps, so timer resolution decides most of it:
+  - ~25–33 s at Windows' default 15.6 ms resolution;
+  - ~19–21 s with `timeBeginPeriod(1)` alone, which Windows 11 ignores for a
+    process without a visible window;
+  - ~7.5 s once `DevourerRadio::open` also opts out of that throttling (see
+    "Why, and the fixes" below).
+
+  What's left is mostly ~22k PHY/AGC/RF table register writes, one synchronous
+  WinUSB control transfer each. Batching or pipelining them is the obvious
+  next fix.
 - **Cross-band retune bug (fixed in our fork):** after any 2.4 GHz tune, a full
   retune to 5 GHz left receive dead.
   - Cause: `HalJaguar2::set_channel_bw` never set RF18's 5 GHz band bits
@@ -130,10 +135,13 @@ On the safe radio (`warlock-radio`):
 - `cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
   radiotap pcapng for Wireshark and replay. Creating `<out.pcapng>.stop` ends
   it cleanly.
-- `sudo …\awdltun.exe [channel] [seconds] [width] [metric]` (Administrator):
-  as `awdljoin`, but bridged to a Wintun adapter, "Warlock AWDL", so Windows'
-  own tools reach AWDL peers. Ping a peer with
-  `ping -6 fe80::<its EUI-64>%<adapter index>`.
+- The service binary, `warlock` (`crates/warlock`, Administrator):
+  `warlock run [--channel N] [--width 20|40] [--metric N]` in the
+  foreground, or `warlock install …` / `sc start Warlock` / `sc stop Warlock`
+  / `warlock uninstall` as a service (logs: `%ProgramData%\Warlock\warlock.log`).
+  It takes part in AWDL and bridges it to a Wintun adapter, "Warlock AWDL",
+  so Windows' own tools reach AWDL peers:
+  `ping -6 fe80::<a peer's EUI-64>%<adapter index>`.
   - The first run downloads Wintun into `%ProgramData%\Warlock`
     (`warlock_tun::dll`; why it isn't bundled: PLAN.md, "`wintun.dll`").
   - The adapter goes when the program exits.

@@ -6,7 +6,7 @@
 //!     cargo run --release -p warlock-radio --example awdlsync -- --replay <capture.pcapng>
 //!
 //! Live needs the T3U bound to WinUSB (`warlock-usb bind`). Bring-up takes
-//! about 20 s.
+//! about 8 s.
 
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ fn main() {
     } else {
         let channel: u8 = args.first().map(|a| a.parse().expect("channel")).unwrap_or(44);
         let seconds: u64 = args.get(1).map(|a| a.parse().expect("seconds")).unwrap_or(60);
-        println!("opening the T3U on channel {channel}; bring-up takes ~20 s");
+        println!("opening the T3U on channel {channel}; bring-up takes ~8 s");
         let mut radio = DevourerRadio::open(&DevourerConfig { channel, ..Default::default() }).expect("opening the radio");
         println!("receiving for {seconds} s");
         let passed = run(&mut radio, Some(Duration::from_secs(seconds)));
