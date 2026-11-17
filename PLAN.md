@@ -83,8 +83,10 @@ Pinned decisions:
     - **TX scheduling:** unicast only when we and the peer share the slot's channel, with a guard; multicast only in slots 0 and 10, with a 16 TU guard.
     - **Advertised capabilities** must match what the dongle actually receives.
     - **BlockAck responder:** TID 0, 64-frame window, ~100 ms reorder buffer.
+- **`warlock-usb`** (done in W0): claims the adapter for WinUSB with Windows' own Microsoft-signed `winusb.inf`, the way Device Manager's "Have Disk" does: a class driver list from that one INF, its generic `USB\MS_COMP_WINUSB` node, `DiInstallDevice`, after moving the device from the Net to the USBDevice setup class. No generated catalog and no certificate. `release` reinstalls the best store driver (`netrtwlanu.inf`).
 - **`warlock`** (service binary)
   - Service host via `windows-service`; stop event for clean shutdown.
+  - Claims the T3U at start and on device arrival (`CM_Register_Notification`) through `warlock-usb`; gives it back to Windows on uninstall or `warlock-ctl release`.
   - Engine thread with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` + QPC, deadline-based periodic timers, and MMCSS priority.
   - Wintun adapter via `wintun-bindings`, configured as follows:
     - fixed GUID;
@@ -121,11 +123,14 @@ Pinned decisions:
 
 ## Ground-truth tracks (start immediately; no Warlock code needed)
 1. Photograph the Apple TV's guest QR (FaceTime → Other → QR) and decode its raw bytes.
-2. When the T3U arrives: run devourer's `rxdemo` on Windows (WinUSB bound over the in-box `netrtwlanu.inf`; the T3U enumerates as a single-function device `USB\VID_2357&PID_012D`, no `MI_xx`; VID 0x2357 PID 0x012d passed explicitly) to confirm `00:17:f2` AWDL action frames on ch 6/44/149. Then capture an Apple TV ↔ iPhone guest session: AWDL TLVs and versions, sequences, Service Response records (`rpPI`), and pair-setup M1–M4.
+2. When the T3U arrives: run `rxsmoke` (WinUSB bound by `warlock-usb bind`; the T3U enumerates as a single-function device `USB\VID_2357&PID_012D`, no `MI_xx`) to confirm `00:17:f2` AWDL action frames on ch 6/44/149. Then capture an Apple TV ↔ iPhone guest session: AWDL TLVs and versions, sequences, Service Response records (`rpPI`), and pair-setup M1–M4.
 3. RE the tvOS/iOS images with `ipsw` (the guest host logic, the QR parser, iPhone-side acceptance checks). Use the macOS binaries already extracted to overture `~/ccre` (rapportd, CMContinuityCaptureHost, AVConference) for the control and media formats.
 
 ## Milestones (exit criteria)
 - **W0 Bring-up:** `devourer-sys` builds under MSVC. A Rust smoke binary receives frames with TSF from the T3U. *Measure:* sustained TX rate with RX running (devourer reports ~37 fps on Jaguar2 in this mode, which is a risk), hop latency, Windows timer jitter.
+  - *Done 2026-11-16:* build, self-binding to WinUSB, and RX with TSF on ch 6/36/44/120/161; Apple AWDL PSFs seen on ch 44.
+  - Bring-up takes ~20 s with a 1 ms timer: the PHY-table writes are one synchronous WinUSB control transfer each. Optimize later.
+  - *Remaining:* TX with RX running, hop latency, timer jitter.
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
