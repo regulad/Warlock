@@ -1,0 +1,30 @@
+[package]
+name = "warlock-tun"
+version = "0.1.0"
+description = "Warlock's virtual network adapter: a Wintun layer-3 adapter carrying IPv6 between Windows and AWDL"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Safe bindings to wintun.dll, which we load from a path we control (MIT).
+# The crate package carries Wintun's DLLs for its own examples; nothing here
+# embeds or ships them.
+wintun-bindings = "=0.7.40"
+# Reading the one DLL out of the pinned release zip (MIT). Pinned: this crate
+# releases near-daily; 9.2.2 was the newest at least two weeks old. Inflate
+# only: the plain "deflate" feature adds zopfli (for writing zips), which is
+# Apache-2.0 only and so not GPL-2.0-compatible.
+zip = { version = "=9.2.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# Checking the release against its pinned hashes (MIT OR Apache-2.0).
+sha2 = "0.11"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com_Urlmon",
+] }

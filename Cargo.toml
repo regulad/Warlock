@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock-capture", "crates/warlock-radio", "crates/warlock-usb"]
+members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock-capture", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
 
 [workspace.package]
 edition = "2024"

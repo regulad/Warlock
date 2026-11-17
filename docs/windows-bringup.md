@@ -130,6 +130,15 @@ On the safe radio (`warlock-radio`):
 - `cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
   radiotap pcapng for Wireshark and replay. Creating `<out.pcapng>.stop` ends
   it cleanly.
+- `sudo …\awdltun.exe [channel] [seconds] [width] [metric]` (Administrator):
+  as `awdljoin`, but bridged to a Wintun adapter, "Warlock AWDL", so Windows'
+  own tools reach AWDL peers. Ping a peer with
+  `ping -6 fe80::<its EUI-64>%<adapter index>`.
+  - The first run downloads Wintun into `%ProgramData%\Warlock`
+    (`warlock_tun::dll`; why it isn't bundled: PLAN.md, "`wintun.dll`").
+  - The adapter goes when the program exits.
+  - Windows binds IPv4 to it as well; the bridge drops it, along with
+    Windows' MLD, router solicitations, LLMNR and SSDP.
 
 On the raw FFI (`devourer-sys`), for W0-style measurements:
 - `cargo run --release --example hoptest -- [full|fast] [fastretune_fw] [ch,ch,…] [dwell_ms]`:
