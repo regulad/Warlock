@@ -69,9 +69,11 @@ Pinned decisions:
   - Wrap retune and TSF calls in catch-and-retry, because devourer documents 1–26 register-read failures with `LIBUSB_ERROR_PIPE` per 60–90 s on a busy channel.
   - Call `timeBeginPeriod(1)`, because devourer's internal waits use `sleep_for`.
   - Hold the open/close on one long-lived thread: devourer's Win32 lock is a named mutex, and mutexes are owned by a thread.
-- **`awdl-proto`** (pure, `no_std`-friendly)
-  - Parse and build action frames (PSF/MIF), every TLV (Sync Params, Election v1/**v2**, Channel Sequence with all encodings, Service Request/Response, Data Path State, ARPA, Version, HT/VHT through TLV 17, NAN Sync, Bloom Filter, Sync Tree), and data-frame encapsulation (LLC/SNAP `00:17:f2`/0x0800, header 0x0403).
-  - Tolerate trailing zero padding and skip unknown TLVs by length.
+- **`awdl-proto`** (done in W1; `no_std` + `alloc`)
+  - Parses and builds action frames (PSF/MIF) and data-frame encapsulation (LLC/SNAP `00:17:f2`/0x0800, then `03 04`, seq, `00 00`, EtherType).
+  - Typed TLVs: everything seen on the air: 2, 4, 5, 6, 7, 12, 16, 17, 18 (all three encodings), 20, 21, 24.
+  - Service Request (1), Bloom Filter (22) and NAN Sync (23) never appeared in a capture. iOS 27's TLV 33 does appear, but its layout is unknown. All four stay raw until there's something to decode.
+  - Unknown TLVs and bytes past known fields are kept, so every accepted frame re-emits byte-for-byte.
   - References: Wireshark `epan/dissectors/packet-awdl.c`, the MobiCom'18 paper, our own captures.
   - Fuzzed with `cargo-fuzz`, with round-trip tests against captured frames.
 - **`awdl-core`** (sans-IO, deterministic, uses the radio TSF as its clock)
@@ -137,6 +139,12 @@ Pinned decisions:
   - Details: `docs/windows-bringup.md`.
   - *Remaining:* the true over-the-air TX rate, which needs an independent sniffer.
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
+  - *Done 2026-11-17:*
+    - **Corpus round-trip:** all 4,155 action and 76 data frames re-emit byte-for-byte, both raw and rebuilt from typed TLVs (`tests/corpus.rs`, needs the local `captures/`).
+    - **Wireshark cross-check:** 638,263 field values across 4,231 frames agree with Wireshark's independent dissector (`tests/tshark_oracle.rs`).
+    - **Always-run tests:** frames built from typed values parse back to the same values, and a committed 21-frame anonymized fixture from real devices (`examples/scrub.rs`) decodes and round-trips.
+    - **Fuzzing** (cargo-fuzz, ASan, in a `wslc` Linux container): `frame` ran 3.06 M executions in 10 min and `tlv` 5.74 M in 5 min, with no failures. The exact re-emit property was asserted on every accepted input.
+    - Not done: a clippy pass. The Scoop toolchain has no clippy.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.

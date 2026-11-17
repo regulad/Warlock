@@ -27,6 +27,10 @@ Continuity Sing. An AirDrop client is the second planned user.
   receiving, and hops channels in ~3 ms within a band and ~9–10 ms across
   (firmware hops). Windows timers are within 1 ms of target at AWDL's window
   period. A devourer cross-band retune bug is fixed in our devourer fork.
+- **Wire format (W1):** done (2026-11-17). `crates/awdl-proto` parses and
+  builds every AWDL frame and TLV seen on the air. Its decoding agrees with
+  Wireshark's dissector on every field of every captured frame, and it is
+  fuzzed. The crate's module docs are the reference for the layouts.
 - **Service discovery:** settled by captures. AWDL carries service records both
   inside its action frames and as ordinary multicast mDNS.
 - **Open:** the true over-the-air transmit rate (needs an independent
