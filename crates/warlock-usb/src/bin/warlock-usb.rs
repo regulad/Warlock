@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //! Developer CLI over warlock-usb: show which driver owns the T3U, bind it to
 //! WinUSB, or give it back to Windows.
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //! Claims Warlock's USB Wi-Fi adapter for WinUSB, and gives it back.
 //!
 //! Out of the box Windows binds the TP-Link Archer T3U to its in-box Realtek

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //! W0 bring-up smoke test: open the TP-Link Archer T3U through devourer, tune
 //! to one channel and report what arrives for a few seconds, picking out AWDL
 //! frames (vendor action frames with Apple's OUI 00:17:f2 and data frames on

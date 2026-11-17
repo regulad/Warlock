@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Builds devourer (only the RTL8822BU "Jaguar2" backend used by the TP-Link
 # Archer T3U) plus Warlock's C shim over it. Driven by devourer-sys/build.rs.

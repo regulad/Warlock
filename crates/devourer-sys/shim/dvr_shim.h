@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later
+/* SPDX-License-Identifier: GPL-2.0-only
  *
  * dvr_shim: a narrow C ABI over the devourer userspace Realtek Wi-Fi driver,
  * for Warlock's Rust code. devourer is C++20 and throws; nothing here throws,

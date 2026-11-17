@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Builds devourer (RTL8822BU backend only) and the dvr_shim C ABI with CMake,
 // and links both statically. libusb comes from the libusb1-sys crate.

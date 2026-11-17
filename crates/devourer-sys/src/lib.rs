@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //! Raw FFI to the dvr_shim C ABI over the OpenIPC devourer userspace Realtek
 //! Wi-Fi driver. Declarations mirror `shim/dvr_shim.h`, which also documents
 //! the threading contract. Safe wrappers live in `warlock-radio`.

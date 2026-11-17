@@ -4,7 +4,7 @@ members = ["crates/devourer-sys", "crates/warlock-usb"]
 
 [workspace.package]
 edition = "2024"
-license = "GPL-2.0-or-later"
+license = "GPL-2.0-only"
 authors = ["Parker Wahle <regulad@regulad.xyz>"]
 
 [profile.release]

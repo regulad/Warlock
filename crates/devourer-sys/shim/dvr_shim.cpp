@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //
 // Implementation of the dvr_shim C ABI over devourer. See dvr_shim.h for the
 // threading contract.

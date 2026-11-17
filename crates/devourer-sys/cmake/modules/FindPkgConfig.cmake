@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Stand-in for CMake's FindPkgConfig, found first through CMAKE_MODULE_PATH.
 #
