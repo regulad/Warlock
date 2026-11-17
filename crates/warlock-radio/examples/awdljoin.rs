@@ -91,6 +91,27 @@ fn echo_reply_seq(packet: &[u8]) -> Option<u16> {
     }
 }
 
+/// For one of our outgoing AWDL data frames carrying an ICMPv6 echo: whether
+/// it's a request, and its sequence number.
+fn echo_in_frame(mpdu: &[u8]) -> Option<(bool, u16)> {
+    let Ok(Some(awdl_proto::Frame::Data { data, .. })) = awdl_proto::parse(mpdu) else { return None };
+    let p = SlicedPacket::from_ip(&data.payload).ok()?;
+    let Some(TransportSlice::Icmpv6(icmp)) = p.transport else { return None };
+    match icmp.icmp_type() {
+        Icmpv6Type::EchoRequest(e) => Some((true, e.seq)),
+        Icmpv6Type::EchoReply(e) => Some((false, e.seq)),
+        _ => None,
+    }
+}
+
+/// When and where one of our pings went out.
+#[derive(Clone, Copy, Debug)]
+struct PingTx {
+    queued: u64,
+    sent: Option<(u64, u8, u16, u32)>,
+    replied: Option<u64>,
+}
+
 /// The reply to an ICMPv6 echo request, if `packet` is one.
 fn echo_reply(own: &[u8; 16], packet: &[u8]) -> Option<Vec<u8>> {
     let p = SlicedPacket::from_ip(packet).ok()?;
@@ -229,6 +250,7 @@ fn main() {
     let own_ll = link_local(own);
     println!("our link-local address: {}", std::net::Ipv6Addr::from(own_ll));
     let mut pings_sent: BTreeMap<u16, u64> = BTreeMap::new();
+    let mut pings: BTreeMap<u16, PingTx> = BTreeMap::new();
     let mut from_target: BTreeMap<(MacAddr, String), u64> = BTreeMap::new();
     // The target's signal per channel: a wrong antenna path on one band
     // shows as a drop there.
@@ -287,6 +309,9 @@ fn main() {
                             }
                             if let Some(seq) = echo_reply_seq(&payload) {
                                 ping_replies += 1;
+                                if let Some(p) = pings.get_mut(&seq) {
+                                    p.replied.get_or_insert(f.tsf);
+                                }
                                 let rtt = pings_sent.get(&seq).map(|&s| f.tsf.saturating_sub(s) as f64 / 1000.0);
                                 println!("[{t:>8.3} s] echo reply #{seq} from {from}: {:.1} ms", rtt.unwrap_or(f64::NAN));
                             }
@@ -324,6 +349,7 @@ fn main() {
                 }
                 ping_seq = ping_seq.wrapping_add(1);
                 pings_sent.insert(ping_seq, now);
+                pings.insert(ping_seq, PingTx { queued: now, sent: None, replied: None });
                 engine.send_packet(now, target, ETHERTYPE_IPV6, echo_request(&own_ll, &link_local(target), ping_seq));
             }
         }
@@ -342,7 +368,19 @@ fn main() {
                 Action::Transmit { mpdu, rate_500kbps, kind } => match radio.send(&mpdu, rate_500kbps) {
                     Ok(()) => {
                         *sent.entry(format!("{kind:?}")).or_default() += 1;
-                        if kind == TxKind::Data {
+                        let echo = if kind == TxKind::Data { echo_in_frame(&mpdu) } else { None };
+                        if let Some((true, seq)) = echo {
+                            let pos = engine.position(now);
+                            if let Some(p) = pings.get_mut(&seq) {
+                                p.sent.get_or_insert((
+                                    now,
+                                    radio.channel(),
+                                    pos.map_or(0, |p| p.aw_seq),
+                                    pos.map_or(0, |p| p.offset_us),
+                                ));
+                            }
+                        }
+                        if matches!(echo, Some((false, _))) {
                             if let Some(rx) = pending_replies.pop_front() {
                                 let pos = engine.position(now);
                                 println!(
@@ -429,6 +467,50 @@ fn main() {
             v[v.len() / 2],
             v[v.len() * 9 / 10]
         );
+    }
+    // Each peer's AW grid against the cluster's, as its own claims put it:
+    // positive means its AWs start after ours.
+    if let Some(now) = radio.tsf_now() {
+        if let Some(ours) = engine.position(now) {
+            for p in engine.peers() {
+                if let Some(theirs) = p.clock.is_locked().then(|| p.clock.position(now)).flatten() {
+                    let aw = awdl_core::AW_US as i64;
+                    let d = (theirs.start_tsf as i64 - ours.start_tsf as i64).rem_euclid(aw);
+                    let d = if d > aw / 2 { d - aw } else { d };
+                    println!("  {} grid: {:+} µs from ours (its AW {}, ours {})", p.addr, d, theirs.aw_seq, ours.aw_seq);
+                }
+            }
+        }
+    }
+    if !pings.is_empty() {
+        println!("  per ping: queued → sent, channel, slot, AW in slot, µs into the AW, reply after sending");
+        let mut by: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+        let mut never = 0;
+        for (seq, p) in &pings {
+            let Some((t, ch, aw, off)) = p.sent else {
+                never += 1;
+                println!("    #{seq:<3} never sent");
+                continue;
+            };
+            let reply = p.replied.map(|r| r.saturating_sub(t) as f64 / 1000.0);
+            println!(
+                "    #{seq:<3} {:>7.1} ms  ch {ch:<3} slot {:<2} aw {} +{:>5} µs  {}",
+                t.saturating_sub(p.queued) as f64 / 1000.0,
+                aw / 4 % 16,
+                aw % 4,
+                off,
+                reply.map_or("no reply".to_string(), |r| format!("reply {r:.1} ms"))
+            );
+            for key in [format!("ch {ch}"), format!("AW {} of its slot", aw % 4), format!("{}–{} ms into the AW", off / 2000 * 2, off / 2000 * 2 + 2)] {
+                let e = by.entry(key).or_default();
+                e.0 += 1;
+                e.1 += reply.is_some() as u32;
+            }
+        }
+        println!("  never sent: {never}");
+        for (k, (n, r)) in &by {
+            println!("  {k:<22} sent {n:<3} answered {r}");
+        }
     }
     if let Some(t) = ping_target {
         println!("  pinged {t}: {} sent, {ping_replies} replies", pings_sent.len());

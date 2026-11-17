@@ -599,8 +599,17 @@ impl Engine {
             if now.saturating_sub(q.since) > PACKET_MAX_WAIT_US {
                 continue;
             }
+            // Unicast goes only in a slot the peer names explicitly. In a
+            // slot its sequence leaves empty it may still be on the channel
+            // (its PSFs say so), but it doesn't take unicast: an Apple TV
+            // received every ping we sent in its explicit 149 slots and none
+            // of those in the empty ones after them.
             let reachable = q.to.is_multicast()
-                || self.peers.get(&q.to).and_then(|p| p.schedule).and_then(|s| s.channel_at(aw_seq)) == Some(channel);
+                || self
+                    .peers
+                    .get(&q.to)
+                    .and_then(|p| p.schedule)
+                    .is_some_and(|s| s.is_explicit(aw_seq) && s.channel_at(aw_seq) == Some(channel));
             if !reachable {
                 keep.push_back(q);
                 continue;

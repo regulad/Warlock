@@ -59,7 +59,10 @@ impl ChannelSchedule {
     /// Whether AW `aw_seq` falls in a slot with an explicit channel, rather
     /// than one the fill repeats. Apple devices send a MIF once per explicit
     /// slot: an iPhone whose sequence named 149 in 2 of 16 slots sent 1.9
-    /// MIFs a second on 149, while filled slots carried none.
+    /// MIFs a second on 149, while filled slots carried none. And they take
+    /// unicast only in explicit slots: an Apple TV received every ping sent
+    /// in its explicit 149 slots and none in the filled ones after them,
+    /// though its PSFs put it on 149 there too.
     pub fn is_explicit(&self, aw_seq: u16) -> bool {
         self.slots[Self::slot_of(aw_seq)] != 0
     }

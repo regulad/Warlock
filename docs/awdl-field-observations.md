@@ -316,7 +316,26 @@ Warlock at 40 MHz:
   AirPlay; Mac 65 idle, 513–515 active; Apple TV (iOS 8) 80; another iOS
   device 539. Warlock's default stays 60, so it follows any Apple device.
 - Open: about 60–75 % of our pings to the iPhone go unanswered, leading or
-  following.
+  following. (Diagnosed on the Apple TV; see the next section.)
+
+## Unicast only in explicit slots (2026-11-17)
+
+Pinging the Apple TV as master, `awdljoin` logged each ping's slot, AW and
+offset, and the TV's `tcpdump` showed which requests arrived:
+- It received exactly the 33 of 58 requests that got replies, and every
+  reply it made reached us: the loss was all ours → TV.
+- On 149, pings got through in slots 2 and 10 and never in slots 3–5 and
+  11–13. The TV's sequence is `6 149 149 – – – 44 44`: 149 is explicit in
+  slots 1–2 and 9–10, and slots 3–5 are empty with "repeat current" fill.
+  Its PSFs put it on 149 in those empty slots too, but it takes no unicast
+  there.
+- An apparent pattern by offset into the AW (0–2 ms: 2 of 25 answered,
+  4–6 ms: 29 of 30) was a confound. Early sends landed in empty slots;
+  sends in explicit slots came late, after the band-change hold.
+
+Sending unicast only in a peer's explicit slots (`Engine::poll`): 58 of 58
+answered, p50 6.9 ms, p90 12 ms, after waiting up to ~350 ms for the next
+explicit slot.
 
 ## Waking AWDL over Bluetooth LE (2026-11-17)
 
