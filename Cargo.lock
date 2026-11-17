@@ -255,6 +255,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "warlock-radio"
+version = "0.1.0"
+dependencies = [
+ "awdl-core",
+ "awdl-proto",
+ "devourer-sys",
+ "warlock-capture",
+ "windows-sys",
+]
+
+[[package]]
 name = "warlock-usb"
 version = "0.1.0"
 dependencies = [

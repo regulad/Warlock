@@ -1,0 +1,16 @@
+[package]
+name = "warlock-radio"
+version = "0.1.0"
+description = "Warlock's radio: the TP-Link Archer T3U through devourer, or a capture replayed, behind one trait"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+devourer-sys = { path = "../devourer-sys" }
+warlock-capture = { path = "../warlock-capture" }
+windows-sys = { version = "0.61", features = ["Win32_Media"] }
+
+[dev-dependencies]
+awdl-core = { path = "../awdl-core" }
+awdl-proto = { path = "../awdl-proto" }

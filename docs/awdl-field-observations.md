@@ -116,6 +116,50 @@ TV's Wi-Fi interface carried no AirPlay traffic. Sequence, as seen on the TV's
    retransmissions reached the TV together, about 1 s after the first was sent.
    AWDL holds frames until the peer's window and data path are ready.
 
+## Synchronization
+
+Measured on the capture corpus against the receiver's hardware TSF (the T3U),
+2026-11-17. `crates/awdl-core/tests/replay.rs` re-checks it on every run.
+
+- **When a sender's next AW starts:** on the receiver's clock, at
+  `rx_tsf − (phy_tx_time − target_tx_time) + tx_counter × 1 TU`.
+  - Subtracting the sender's own TX delay is essential. iPhone frames waited
+    up to 31 ms between target time and air. Without the correction, claims
+    scatter by up to 7 ms; with it, a master's claims fit one grid.
+  - A single claim is good to ±½ TU, because `tx_counter` is whole TU.
+  - The claimed boundary falls 1–4 AWs after the frame's target time, most
+    often 3.
+- **AWs are 16 TU, and clocks drift.** Relative to the T3U, an iOS 27 iPhone
+  ran within ±2 ppm, and the Apple TV (3rd generation, iOS 8-based) at about
+  −239 ppm, which is one TU every 4 s. Following a peer means fitting its
+  drift.
+- **The AW sequence counter counts AWs**, offset by a constant. A follower
+  adopts its master's counter: the Mac's jumped by about 949 when it synced to
+  the iPhone.
+- **Followers sit about a TU off their master.** Against the iPhone's grid,
+  the Mac (macOS 11) claimed boundaries 0.7–1.7 ms late (median 1.3 ms), and
+  another iOS device between 0.4 ms early and 1.7 ms late.
+- **Channel-sequence slot = (AW sequence / 4) mod 16.** Each of the 16 slots
+  lasts one 64-TU extended AW, so a sequence spans 1024 TU. An empty slot
+  repeats the last non-empty one when the fill channel is `0xffff`. With both
+  rules, every frame from an iPhone master and its two followers was received
+  on the channel the sender's own sequence gave.
+- **The legacy encoding carries the 40 MHz centre channel.** Each entry is
+  flags plus a channel, where the channel is the centre of a 40 MHz pair and
+  the control-channel bits say whether the primary is 2 below ("lower") or 2
+  above ("upper"):
+  - the Apple TV on 44 advertises 46, lower;
+  - the iPhone's infrastructure channel 120 appears as 118, upper.
+
+  The opclass encoding (TLV 18 from iOS 27 and macOS 11) carries the primary
+  channel directly. The Synchronization Parameters TLV embeds the legacy form
+  even from senders that also send TLV 18.
+- **The election ranks metric first.** The iPhone (metric 538) was master,
+  and an iOS device (530) and the Mac (515) followed it at one hop.
+- **Open:** in one capture taken while our receiver hopped channels, an
+  iPhone sent most of its frames on channel 6 in slots its sequence didn't
+  give channel 6. Only about 30 % matched.
+
 ## Wire format
 
 The frame and TLV layouts are documented in one place: the module docs of

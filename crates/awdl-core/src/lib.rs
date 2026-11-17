@@ -23,6 +23,7 @@
 //!   extended AW.
 
 mod clock;
+pub mod diag;
 mod election;
 mod engine;
 mod schedule;

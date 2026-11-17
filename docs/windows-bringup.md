@@ -97,6 +97,10 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
     the full and the firmware paths.
 - **One silent channel-6 run** went quiet after its first second. It didn't
   reproduce in a 10 s rerun.
+- **libusb message during RX:** a long live run prints
+  `libusb: error [windows_submit_transfer] program assertion failed - transfer HANDLE is NULL after transfer was submitted`
+  every so often. Receiving carried on with no frames lost (60 s on channel
+  44, 0 queue drops). Not yet investigated.
 - Caveats from devourer's notes:
   - register reads occasionally fail with `LIBUSB_ERROR_PIPE` under load (retry);
   - transmit throughput with receive running is reportedly low on Jaguar2
@@ -105,10 +109,16 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
 
 ## Tools
 
-- `cargo run --release --example rxsmoke -- [channel] [seconds] [log level]`:
-  frame counts, AWDL peers, PSF/MIF tallies.
-- `cargo run --release --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
-  radiotap pcapng for Wireshark. Creating `<out.pcapng>.stop` ends it cleanly.
+On the safe radio (`warlock-radio`):
+- `cargo run --release -p warlock-radio --example awdlsync -- [channel] [seconds]`,
+  or `-- --replay <capture.pcapng>`: the AWDL engine live or on a capture. It
+  shows the peer table, the master, the sync source with drift, and W2's
+  prediction check.
+- `cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
+  radiotap pcapng for Wireshark and replay. Creating `<out.pcapng>.stop` ends
+  it cleanly.
+
+On the raw FFI (`devourer-sys`), for W0-style measurements:
 - `cargo run --release --example hoptest -- [full|fast] [fastretune_fw] [ch,ch,…] [dwell_ms]`:
   per-hop call time, first frame and frame counts.
 - `cargo run --release --example timerjitter -- [periods] [period_us]`.

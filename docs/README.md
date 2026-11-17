@@ -31,6 +31,12 @@ Continuity Sing. An AirDrop client is the second planned user.
   builds every AWDL frame and TLV seen on the air. Its decoding agrees with
   Wireshark's dissector on every field of every captured frame, and it is
   fuzzed. The crate's module docs are the reference for the layouts.
+- **Passive engine (W2):** done (2026-11-17). `crates/awdl-core` tracks
+  peers, follows the election and fits each peer's AW clock, drift included.
+  It predicts the AW boundaries of the peer it syncs to within ±1 TU for
+  100 % of frames, on the capture corpus and live on the T3U. The
+  measurements it rests on are in
+  [awdl-field-observations.md](awdl-field-observations.md#synchronization).
 - **Service discovery:** settled by captures. AWDL carries service records both
   inside its action frames and as ordinary multicast mDNS.
 - **Open:** the true over-the-air transmit rate (needs an independent

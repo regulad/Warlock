@@ -58,8 +58,11 @@ Pinned decisions:
     - `close`, with the mandated teardown order: StopRxLoop → ClearAckResponder → Stop → destroy → release → close → libusb_exit.
   - Models to follow: `examples/duplex/main.cpp:552-641` (InitWrite, then a TX thread plus StartRxLoop), `examples/rx/main.cpp:1581-1649` (open sequence), `examples/common/DeviceSession.h` (teardown), `src/UsbOpen.h` (claim/lock), `src/AckResponder.h`.
   - Logs: devourer's `Logger` has no callback hook, so route its diag stream to a `FILE*` pipe that Rust reads into `tracing`. Disable its JSON events.
-- **`warlock-radio`**
-  - A `Radio` trait with two backends: `DevourerRadio` (hardware) and `PcapReplayRadio` (reads pcapng captures, for tests and CI without hardware).
+- **`warlock-capture`** (done in W2): radiotap pcapng read/write over `pcap-file` (MIT) and `radiotap` (MIT/Apache), tolerant of captures cut off mid-write; locates the local corpus (`WARLOCK_CAPTURES` or `captures/air`). Every crate's tests and tools use it.
+- **`warlock-radio`** (receive side done in W2; TX in W3)
+  - Done: a `Radio` trait (`recv`, `channel`, `set_channel`) with `DevourerRadio` and `ReplayRadio` (via `warlock-capture`). `DevourerRadio` is `!Send`, so it is closed on the thread that opened it. It tears down in order (stop RX, join, close, free the callback context), hands frames over a bounded queue (drops counted), extends the 32-bit TSF, tags the channel, and holds `timeBeginPeriod(1)` while open. It uses devourer's default RX mode, which W0 validated, not SpscFat. A plain `mpsc` queue is enough so far; `rtrb` only if profiling says so.
+  - Tools: `examples/awdlsync` (the engine live or on a capture, with W2's check) and `examples/awdlcap` (capture to pcapng).
+  - Still planned:
   - Delivers RX as `RxFrame { bytes (FCS stripped), tsf_lo32 → extended u64, rssi_dbm, channel }`. C2H firmware reports (`pkt_rpt_type`) are filtered out. devourer's RX packets carry no channel field, so the channel is tagged from our own tune state.
   - Fixed DeviceConfig choices:
     - `tx.retry_limit` > 0 (the default 0 means unicast is sent once);
@@ -77,12 +80,14 @@ Pinned decisions:
   - Unknown TLVs and bytes past known fields are kept, so every accepted frame re-emits byte-for-byte.
   - Layouts follow Wireshark's `epan/dissectors/packet-awdl.c` (see the provenance section in `src/lib.rs`), checked against it by `tests/tshark_oracle.rs`. Also the MobiCom'18 paper and our own captures.
   - Fuzzed with `cargo-fuzz`, with round-trip tests against captured frames.
-- **`awdl-core`** (sans-IO, deterministic, uses the radio TSF as its clock)
+- **`awdl-core`** (sans-IO, deterministic, uses the radio TSF as its clock; `std` for float maths, but no I/O and no clock)
   - Inputs: RX frames, timer ticks, host IPv6 packets, commands. Outputs: TX frames with a target time and channel, retunes, host deliveries, peer and service events.
-  - Components:
-    - **Sync:** AW = 16 TU, EAW = 64 TU, 16-slot sequence. Index slots in the *master's* phase, using `sync_offset` taken from the Sync Params TLV.
-    - **Election:** rank by **metric first**, then counter; log every peer's election fields whenever the master changes.
+  - Done in W2 (passive), from the measurements in `docs/awdl-field-observations.md`, "Synchronization":
+    - **Sync:** an `AwClock` per peer. It does a least-squares fit of AW boundaries (phase and drift, over 256 claims) from `rx_tsf − (phy_tx − target_tx) + tx_counter·TU`, rejects outliers, and resets after 3 in a row. The channel-sequence slot is `(aw_seq / 4) mod 16`, and empty slots repeat the last channel when fill is `0xffff`.
+    - **Election (passive):** the master is the best master any peer names, ranked metric, then counter, then address. We sync to it, or to the peer closest to it; the choice is sticky.
     - **Peer table:** a peer is valid after a MIF *and* a nonzero Version TLV; timeout 5 s (data frames count as activity).
+    - `diag::SyncCheck` is W2's accuracy check, shared by the replay test and `awdlsync`.
+  - Still to do (W3 onward):
     - **Channel-sequence strategy:** `verbatim` or `intersect`, never a constant ("pin" kills TX to iOS 26). Re-read peers' sequences continuously, because the iPhone widens its sequence during a transfer.
     - **TX scheduling:** unicast only when we and the peer share the slot's channel, with a guard; multicast only in slots 0 and 10, with a 16 TU guard.
     - **Advertised capabilities** must match what the dongle actually receives.
@@ -125,7 +130,7 @@ Pinned decisions:
 
 ## Ground-truth tracks (start immediately; no Warlock code needed)
 1. Photograph the Apple TV's guest QR (FaceTime → Other → QR) and decode its raw bytes.
-2. When the T3U arrives: run `rxsmoke` (WinUSB bound by `warlock-usb bind`; the T3U enumerates as a single-function device `USB\VID_2357&PID_012D`, no `MI_xx`) to confirm `00:17:f2` AWDL action frames on ch 6/44/149. Then capture an Apple TV ↔ iPhone guest session: AWDL TLVs and versions, sequences, Service Response records (`rpPI`), and pair-setup M1–M4.
+2. When the T3U arrives: run `awdlsync` (WinUSB bound by `warlock-usb bind`; the T3U enumerates as a single-function device `USB\VID_2357&PID_012D`, no `MI_xx`) to confirm `00:17:f2` AWDL action frames on ch 6/44/149. Then capture an Apple TV ↔ iPhone guest session: AWDL TLVs and versions, sequences, Service Response records (`rpPI`), and pair-setup M1–M4.
 3. RE the tvOS/iOS images with `ipsw` (the guest host logic, the QR parser, iPhone-side acceptance checks). Use the macOS binaries extracted on a lab Mac (rapportd, CMContinuityCaptureHost, AVConference) for the control and media formats. Findings so far: `docs/`.
 
 ## Milestones (exit criteria)
@@ -147,6 +152,12 @@ Pinned decisions:
     - **Fuzzing** (cargo-fuzz, ASan, in a `wslc` Linux container): `frame` ran 3.06 M executions in 10 min and `tlv` 5.74 M in 5 min, with no failures. The exact re-emit property was asserted on every accepted input.
     - Not done: a clippy pass. The Scoop toolchain has no clippy.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
+  - *Done 2026-11-17:*
+    - **Replay** (`awdl-core/tests/replay.rs`, local corpus): 3,643 frames from the peer we sync to; 100 % within ±1 TU; p50 69 µs, p95 463 µs, max 843 µs. That covers an Apple TV drifting −239 ppm and an iPhone master with two followers.
+    - **Live** (`awdlsync` on the T3U, Apple TV on channel 44, 60 s): 1,437 frames; 100 % within ±1 TU; p50 101 µs, p95 460 µs, max 686 µs; drift fitted −235 to −242 ppm; 0 frames dropped.
+    - Election agrees with Apple's: 586 of 607 frames name the master we elect, and the iPhone (metric 538) leads an iOS device (530) and a Mac (515).
+    - Open: a recurring libusb message `windows_submit_transfer … transfer HANDLE is NULL` during live RX (no loss seen). The iPhone in one hopping capture transmitted on channel 6 outside its advertised slot; this matters for W3's TX scheduling.
+    - Not yet: a live run against an iPhone, which needs AirDrop or similar active on the phone.
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
@@ -171,5 +182,5 @@ Pinned decisions:
 ## Verification
 - Unit and fuzz tests on `awdl-proto`.
 - Deterministic `awdl-core` tests driven by captured pcapngs through `PcapReplayRadio` with a simulated TSF clock.
-- Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `rxsmoke`, `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.
+- Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `awdlsync` (engine live or on a capture, with the W2 check), `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.
 - Wireshark on `warlock-ctl capture` output for every interop bug.
