@@ -33,7 +33,8 @@ pub fn ipv6_dst(packet: &[u8]) -> Option<Ipv6Addr> {
 }
 
 /// What Windows sends on its own that AWDL peers have no use for: MLD
-/// reports and done messages, router solicitations, LLMNR and SSDP.
+/// reports and done messages, router solicitations, LLMNR, SSDP and
+/// WS-Discovery (UDP 3702 to ff02::c: 21 packets in a 2-minute run).
 pub fn is_chatter(packet: &[u8]) -> bool {
     if packet.len() < 40 {
         return false;
@@ -47,7 +48,7 @@ pub fn is_chatter(packet: &[u8]) -> bool {
     }
     match next {
         58 => packet.get(at).is_some_and(|t| matches!(t, 130..=133 | 143)),
-        17 => packet.get(at + 2..at + 4).is_some_and(|p| matches!(u16::from_be_bytes([p[0], p[1]]), 5355 | 1900)),
+        17 => packet.get(at + 2..at + 4).is_some_and(|p| matches!(u16::from_be_bytes([p[0], p[1]]), 5355 | 1900 | 3702)),
         _ => false,
     }
 }
