@@ -19,7 +19,7 @@ Pinned decisions:
 ## Repos and licensing
 | Repo | License | Contents |
 |---|---|---|
-| `Warlock` | GPL-2.0-or-later for our sources; the shipped binary is effectively GPLv2 because devourer (GPL-2.0-only) is linked in-process | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, IPC protocol crate |
+| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, IPC protocol crate |
 | `koala` | AGPL-3.0-or-later | Rapport, Continuity Capture control, media pipeline, app |
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
@@ -101,10 +101,10 @@ Pinned decisions:
   - Drain the Wintun read event until empty (auto-reset lost-wakeup bug).
   - Coalesce TCP segments to cut Windows' ACK chatter.
   - Firewall rules: allow only what clients register; suppress Windows' own LLMNR/SSDP/mDNS chatter on the adapter.
-  - **Service bridge (critical for Koala):** iPhones carry Bonjour records in Service Response TLVs inside action frames, not as mDNS packets.
-    - Inbound: TLV records → synthesized mDNS responses on the NIC.
-    - Outbound: clients register services over IPC (e.g. Koala's `_rdlink._tcp` with `rpPI`/`rpBA`/`rpFl`/`rpVr`) → encoded into our MIF Service Response TLVs.
-    - Also pass real mDNS through in multicast slots, if captures show iOS 27 using it.
+  - **Service discovery (critical for Koala; see `docs/service-discovery.md`):** AWDL carries records both as Service Response TLVs in action frames (Apple's D2D) and as ordinary multicast mDNS in data frames. Warlock is the registrar and doesn't sniff:
+    - Advertise: clients register over IPC → Warlock calls `DnsServiceRegister` on its adapter (Windows' built-in DNS-SD answers real mDNS) **and** encodes the records into our TLVs.
+    - Browse: `DnsServiceBrowse`/`Resolve` on the adapter, merged with records learned from peers' TLVs → found/lost over IPC.
+    - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former. Keep LLMNR/SSDP off the link.
 - **`warlock-ipc`** (MIT)
   - Named-pipe protocol (`postcard`) and client.
   - Commands: status, peers, enable/disable radio, keep-alive/hold AWDL active, channel preference, register/unregister a service (for the bridge), subscribe to events, start/stop a pcapng capture.
@@ -124,7 +124,7 @@ Pinned decisions:
 ## Ground-truth tracks (start immediately; no Warlock code needed)
 1. Photograph the Apple TV's guest QR (FaceTime → Other → QR) and decode its raw bytes.
 2. When the T3U arrives: run `rxsmoke` (WinUSB bound by `warlock-usb bind`; the T3U enumerates as a single-function device `USB\VID_2357&PID_012D`, no `MI_xx`) to confirm `00:17:f2` AWDL action frames on ch 6/44/149. Then capture an Apple TV ↔ iPhone guest session: AWDL TLVs and versions, sequences, Service Response records (`rpPI`), and pair-setup M1–M4.
-3. RE the tvOS/iOS images with `ipsw` (the guest host logic, the QR parser, iPhone-side acceptance checks). Use the macOS binaries already extracted to overture `~/ccre` (rapportd, CMContinuityCaptureHost, AVConference) for the control and media formats.
+3. RE the tvOS/iOS images with `ipsw` (the guest host logic, the QR parser, iPhone-side acceptance checks). Use the macOS binaries extracted on a lab Mac (rapportd, CMContinuityCaptureHost, AVConference) for the control and media formats. Findings so far: `docs/`.
 
 ## Milestones (exit criteria)
 - **W0 Bring-up:** `devourer-sys` builds under MSVC. A Rust smoke binary receives frames with TSF from the T3U. *Measure:* sustained TX rate with RX running (devourer reports ~37 fps on Jaguar2 in this mode, which is a risk), hop latency, Windows timer jitter.
@@ -134,7 +134,7 @@ Pinned decisions:
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
-- **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on overture via `dns-sd -B` on awdl0).
+- **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`).
 - **W5 Service-grade:** IPC + ctl, survives sleep/resume and dongle hot-unplug, clears the ACK responder on every exit path, ETW logging.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
 - **K2 (moment of truth):** the iPhone scans our QR and completes guest pair-setup with Koala over Warlock.
@@ -146,11 +146,11 @@ Pinned decisions:
 - Jaguar2 TX throughput with concurrent RX (~24 ms/frame reported). Mitigation: measure at W0; fallback dongle RTL8812CU (Jaguar3).
 - Unicast TX lost at the start of windows (airdrop-mt7921 FINDINGS §28). Mitigation: per-peer TX guard tuning.
 - iPhone rejects a non-genuine Apple TV host, or the QR format is unknown. Mitigation: ground-truth tracks 1 and 3 before K2.
-- AVConference negotiation blob is opaque. Mitigation: RE from the macOS AVConference on overture.
+- AVConference negotiation blob is opaque. Mitigation: RE from the macOS AVConference on a lab Mac.
 - wintun.dll licensing on distribution (see above).
 
 ## Verification
 - Unit and fuzz tests on `awdl-proto`.
 - Deterministic `awdl-core` tests driven by captured pcapngs through `PcapReplayRadio` with a simulated TSF clock.
-- Hardware loops per milestone using the T3U, an iPhone, the Apple TV and overture as a witness (macOS `dns-sd`, `ping6 %awdl0`, Wireless Diagnostics sniffer).
+- Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `rxsmoke`, `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.
 - Wireshark on `warlock-ctl capture` output for every interop bug.
