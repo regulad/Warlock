@@ -14,7 +14,7 @@ Pinned decisions:
 - Separate repos per license zone.
 - Apps reach the link through a virtual NIC (Wintun).
 - Koala UI is deferred until Warlock works.
-- OWL, winawdl and omdrop-owl are **references only**. None of their code is copied.
+- OWL, winawdl and owly (formerly omdrop-owl) are **references only**. None of their code is copied. owly's MIT crates look derived from GPLv3 OWL, so Warlock doesn't depend on them: see `docs/prior-art.md`, "Rust AWDL crates, and why Warlock implements its own".
 - Wireshark's AWDL dissector (`epan/dissectors/packet-awdl.c`, GPL-2.0-or-later, so compatible) is the **layout reference and test oracle** for `awdl-proto`. Each module names the dissector function it follows and where it departs from it. Its code isn't reused, because a dissector only reads, into a display tree.
 
 ## Repos and licensing

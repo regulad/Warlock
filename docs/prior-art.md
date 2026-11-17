@@ -19,6 +19,42 @@
 - HT/VHT capabilities must match what you actually receive;
 - iOS requests BlockAck on TID 0.
 
+## Rust AWDL crates, and why Warlock implements its own (checked 2026-11-17)
+
+| Crate | Label | Overlap | Decision |
+|---|---|---|---|
+| `owly-awdl` ([t4t5/owly](https://github.com/t4t5/owly), formerly omdrop-owl) | MIT | A sans-IO AWDL node: frames, sync, election, channel sequence, peer table, IPv6 data path. Most of W1–W3 | **Not used: its license situation is murky.** Warlock implements AWDL itself |
+| `awdl-frame-parser` ([Frostie314159](https://github.com/Frostie314159/awdl-frame-parser)) | MIT OR Apache-2.0 | Reads and writes action frames and most TLVs. Most of W1 | Found only after `awdl-proto` was written and verified. Its provenance isn't vetted, and we keep `awdl-proto` |
+
+**Why owly's license situation is murky.** The MIT label may not hold,
+because the code looks derived from OWL, which is GPL-3.0-or-later. GPLv3
+code can't be combined with GPL-2.0-only devourer, and Warlock can't move to
+GPLv3 because of devourer. So depending on owly would risk Warlock's own
+license. What we found:
+- Owly began as a wrapper that built OWL's C and shipped patches to it. The
+  Rust replaced that in a single commit (`2b8881c`, 38k lines). The crate's
+  own docs call OWL's C "the reference for behaviour" and say "the layouts
+  are OWL's".
+- `owly-awdl`'s election code mirrors OWL's `election.c` closely: the same
+  helper and assignment order, the same sequence of checks, OWL's constants,
+  and paraphrased comments. Its TLV writers reproduce values from OWL's
+  `tx.c` that OWL itself doesn't understand (sync flags `0x1800`, AP alignment
+  set to the AW counter, data-path flags `0x8f24`).
+- There's no clean-room statement, and OWL's authors aren't among the
+  contributors, so the copyright holders haven't relicensed it.
+
+Wire values Apple devices expect are facts, and any correct implementation
+shares them. What makes owly look like a translation, rather than an
+independent implementation, is that it mirrors choices the protocol doesn't
+dictate, and that it describes itself as OWL-based. We treat it like OWL: a
+source of facts and behaviour, never of code. Warlock's AWDL code is written
+from the MobiCom paper, Wireshark's dissector (GPL-2.0-or-later, so
+compatible) and our own captures, and each module cites its sources.
+
+**For the AirDrop app** (AGPL-3.0-or-later), the question doesn't arise:
+`owly-airdrop` is compatible there whether it's really MIT or GPLv3-derived.
+It gets its own provenance check before use.
+
 ## Other Windows AWDL projects (checked 2026-11)
 
 | Project | Radio approach | Notes |
