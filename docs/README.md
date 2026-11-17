@@ -26,7 +26,7 @@ Continuity Sing. An AirDrop client is the second planned user.
   from nearby Apple devices with hardware timestamps, transmits while
   receiving, and hops channels in ~3 ms within a band and ~9–10 ms across
   (firmware hops). Windows timers are within 1 ms of target at AWDL's window
-  period. A devourer cross-band retune bug is fixed by a carried patch.
+  period. A devourer cross-band retune bug is fixed in our devourer fork.
 - **Service discovery:** settled by captures. AWDL carries service records both
   inside its action frames and as ordinary multicast mDNS.
 - **Open:** the true over-the-air transmit rate (needs an independent

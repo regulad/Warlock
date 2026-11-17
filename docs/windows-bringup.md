@@ -39,12 +39,16 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
 
 ## Building devourer (`crates/devourer-sys`)
 
-- devourer is a git submodule (`third_party/devourer`, pinned), built by
-  `build.rs` through the `cmake` crate. Only the 8822B backend is enabled.
+- devourer is a git submodule (`third_party/devourer`), built by `build.rs`
+  through the `cmake` crate. Only the 8822B backend is enabled.
+- The submodule points at our fork, `regulad/devourer`, on its `warlock`
+  branch: upstream OpenIPC plus one commit per Warlock fix, so each fix can go
+  upstream as its own PR. In the checkout, `origin` is the fork and `upstream`
+  is OpenIPC.
 - devourer's CMake requires `pkg_check_modules(libusb-1.0)`.
   `cmake/modules/FindPkgConfig.cmake` stands in for CMake's module and produces
   the `PkgConfig::libusb` target from the vendored `libusb1-sys` headers, so
-  devourer isn't patched and no pkg-config binary is needed.
+  devourer needs no build change and no pkg-config binary is needed.
 - `shim/dvr_shim.{h,cpp}` is a narrow, exception-free C ABI. It covers open
   (claim, reset, `CreateRadio`), bring-up, a blocking RX loop with stop,
   inject, fast/full retune, TX-power re-apply, ACK responder arm/disarm, TSF
@@ -76,17 +80,19 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
   - Most of what's left is ~22k PHY/AGC/RF table register writes, each a
     synchronous WinUSB control transfer of about 1 ms.
   - Batching or pipelining those writes is the obvious fix.
-- **Cross-band retune bug (fixed by our patch):** after any 2.4 GHz tune, a full
+- **Cross-band retune bug (fixed in our fork):** after any 2.4 GHz tune, a full
   retune to 5 GHz left receive dead.
   - Cause: `HalJaguar2::set_channel_bw` never set RF18's 5 GHz band bits
     (16 and 8). The 2.4 GHz branch clears them, and the 5 GHz branch only
     kept what it read back. rtw88 sets them explicitly.
-  - Fix: `third_party/patches/devourer/0001-jaguar2-fix-cross-band-retune.patch`.
-    It sets the band bits, and it also re-applies the band-keyed WL-only
-    antenna grant (`0xcbc[9:8]`) on every band change, as the vendor driver
-    does.
-  - `build.rs` builds devourer from a patched copy in `OUT_DIR`; the submodule
-    stays pristine. Worth offering upstream to OpenIPC.
+  - Fix: commit "jaguar2: set the 5 GHz RF18 band bits on a 2.4 -> 5 GHz
+    retune" on the fork's `warlock` branch. It sets the band bits, and it also
+    re-applies the band-keyed WL-only antenna grant (`0xcbc[9:8]`) on every
+    band change, as the vendor driver does. The two halves weren't tested
+    separately.
+  - Firmware hops (`fastretune_fw = 2`) don't go through `set_channel_bw`, but
+    they were only measured with the fix applied. Whether they needed it is
+    open; that's the check to make before an upstream PR.
   - Verified with `hoptest`: 6 → 44, 6 → 161 and 44 → 149 all receive, on both
     the full and the firmware paths.
 - **One silent channel-6 run** went quiet after its first second. It didn't
@@ -118,7 +124,7 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
 |---|---|---|
 | Firmware hop (`fastretune_fw = 1` / `2`) | ~3 ms (2.8–5.2) | ~9–10 ms (`=2`) |
 | Software fast retune (`fastretune_fw = 0`) | 4–13 ms | falls back to the full path |
-| Full retune (`SetMonitorChannel`) | — | ~90–100 ms into 5 GHz, ~255 ms into ch 6 (a spur channel, so the full set runs a notch calibration) |
+| Full retune (`SetMonitorChannel`) | — | 90–576 ms across two runs (first run ~90–100 ms into 5 GHz, ~255 ms into ch 6, a spur channel whose full set runs a notch calibration; a rerun with identical code gave 134–576 ms). Not on Warlock's hop path |
 
 Warlock should run `fastretune_fw = 2`. Dead air on the radio is shorter than
 the call; measuring it needs a known transmitter. Time to first received frame

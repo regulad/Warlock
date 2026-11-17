@@ -45,7 +45,7 @@ Pinned decisions:
   - Builds devourer from `third_party/devourer` (a git submodule pinned to a commit) via the `cmake` crate. Only the 8822B backend is enabled: `DEVOURER_JAGUAR1/8814/JAGUAR2_8821C/JAGUAR3_*/8733B/KESTREL_*=OFF`, `--target devourer`, `DEVOURER_LOG_MAX_LEVEL=WARN`. Force the `/MD` CRT so it matches Rust.
   - libusb comes from `libusb1-sys` with `features=["vendored"]` (LGPL-2.1, static). Its `DEP_USB_1.0_INCLUDE` is passed to CMake.
   - devourer's CMake insists on `pkg_check_modules(libusb-1.0)`. Handled by a `FindPkgConfig.cmake` stand-in, so devourer isn't patched for it.
-  - Our fixes to devourer are patch files in `third_party/patches/devourer/`. `build.rs` applies them to a copy in `OUT_DIR` and verifies each one landed.
+  - Our fixes to devourer live on the `warlock` branch of our fork (`regulad/devourer`), one commit per fix on top of upstream, so each can become an upstream PR on its own. The submodule tracks that branch; remote `upstream` is OpenIPC.
   - The shim (`shim/dvr_shim.cpp`) is a narrow, hand-written `extern "C"` API. It catches every C++ exception and returns an error code, and it confines devourer's global macros (`ushort`, `rtw_read8`) to that one `.cpp`. Its surface:
     - `open(vid,pid)` → claim → `CreateRadio(handle, ctx, lock, cfg)`;
     - `init_write(ch)`;
@@ -135,7 +135,7 @@ Pinned decisions:
     - TX with RX running, confirmed on air through probe responses;
     - hops ~3 ms within a band, ~9–10 ms across bands (firmware, `fastretune_fw = 2`);
     - timer lateness p99 582 µs, max 947 µs at 16.384 ms;
-    - devourer cross-band retune bug fixed by `third_party/patches/devourer/0001-*`.
+    - devourer cross-band retune bug fixed on our fork's `warlock` branch.
   - Details: `docs/windows-bringup.md`.
   - *Remaining:* the true over-the-air TX rate, which needs an independent sniffer.
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
