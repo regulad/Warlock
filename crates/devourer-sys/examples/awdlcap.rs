@@ -1,11 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-2.0-only
 //! Capture everything the T3U receives on one channel to a pcapng file, as
 //! radiotap + 802.11 (linktype 127), for Wireshark's AWDL dissector.
 //!
 //! Usage: awdlcap <out.pcapng> [channels=44] [seconds=60] [dwell_s=5]
 //!
 //! `channels` is a comma-separated list; with more than one, the radio
-//! cycles through them, `dwell_s` seconds each.
+//! cycles through them, `dwell_s` seconds each. Creating `<out.pcapng>.stop`
+//! ends the capture early and still flushes the file.
 
 use std::ffi::{CStr, c_void};
 use std::fs::File;
@@ -189,9 +190,16 @@ fn main() {
             eprintln!("dvr_run_rx: {}", last_error());
         }
     });
+    // Creating "<out.pcapng>.stop" ends the capture early but cleanly.
+    let stop_file = std::path::PathBuf::from(format!("{path}.stop"));
+    let _ = std::fs::remove_file(&stop_file);
     let mut idx = 0;
     for sec in 1..=seconds {
         thread::sleep(Duration::from_secs(1));
+        if stop_file.exists() {
+            println!("stop file found at t={sec}s");
+            break;
+        }
         if sec % 5 == 0 {
             let c = cap.lock().unwrap();
             println!("t={sec:>3}s ch={} frames={} awdl={}", channels[idx], c.frames, c.awdl);
