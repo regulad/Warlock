@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use awdl_proto::dns::{DnsName, Label};
-use awdl_proto::tlv::{Channel, ChannelSequence, Rdata, TlvBody};
+use awdl_proto::tlv::{Channel, ChannelSequence, Rdata, Tlv, TlvBody};
 use awdl_proto::{Frame, MacAddr, parse};
 
 /// Wireshark fields compared. Each holds every occurrence in a frame, in
@@ -231,7 +231,16 @@ fn ours(frame: &Frame<'_>) -> FrameFields {
         Frame::Data { data, .. } => {
             o.hex("awdl_data.header", &awdl_proto::data::MAGIC);
             o.n("awdl_data.seq", data.seq);
-            o.hex("awdl_data.header", &data.ext);
+            match data.long_ext() {
+                Some(l) => {
+                    o.hex("awdl_data.header", l.open);
+                    for t in &l.tlvs {
+                        tlv_fields(&mut o, t);
+                    }
+                    o.hex("awdl_data.header", l.close);
+                }
+                None => o.hex("awdl_data.header", &data.ext),
+            }
             o.n("awdl_data.ethertype", data.ethertype);
         }
         Frame::Action { action, .. } => {
@@ -243,178 +252,183 @@ fn ours(frame: &Frame<'_>) -> FrameFields {
             o.n("awdl.phytime", h.phy_tx_time);
             o.n("awdl.targettime", h.target_tx_time);
             for t in action.tlvs() {
-                o.n("awdl.tag.number", t.kind);
-                o.n("awdl.tag.length", t.value.len() as i64);
-                let Ok(body) = t.decode() else {
-                    o.s("awdl.tag.number", "<our decode failed>".into());
-                    continue;
-                };
-                match &body {
-                    TlvBody::SyncParams(s) => {
-                        o.n("awdl.syncparams.txchannel", s.tx_channel);
-                        o.n("awdl.syncparams.txcounter", s.tx_counter);
-                        o.n("awdl.syncparams.masterchan", s.master_channel);
-                        o.n("awdl.syncparams.guardtime", s.guard_time);
-                        o.n("awdl.syncparams.awperiod", s.aw_period);
-                        o.n("awdl.syncparams.afperiod", s.action_frame_period);
-                        o.n("awdl.syncparams.awdlflags", s.awdl_flags);
-                        o.n("awdl.syncparams.aw.ext_len", s.aw_ext_length);
-                        o.n("awdl.syncparams.aw.common_len", s.aw_common_length);
-                        o.n("awdl.syncparams.aw.remaining", s.aw_remaining);
-                        o.n("awdl.syncparams.ext.min", s.ext_min);
-                        o.n("awdl.syncparams.ext.max_multicast", s.ext_max_multicast);
-                        o.n("awdl.syncparams.ext.max_unicast", s.ext_max_unicast);
-                        o.n("awdl.syncparams.ext.max_af", s.ext_max_af);
-                        o.mac("awdl.syncparams.master", s.master);
-                        o.n("awdl.syncparams.presencemode", s.presence_mode);
-                        o.hex("awdl.unknown", &[s.unknown]);
-                        o.n("awdl.syncparams.awseqcounter", s.aw_seq_counter);
-                        o.n("awdl.syncparams.apbeaconalignment", s.ap_beacon_alignment);
-                        o.chanseq(&s.channel_sequence);
-                        o.padding(&s.trailing);
-                    }
-                    TlvBody::ChannelSequence(c) => {
-                        o.chanseq(&c.sequence);
-                        o.padding(&c.trailing);
-                    }
-                    TlvBody::ElectionParams(e) => {
-                        o.n("awdl.electionparams.flags", e.flags);
-                        o.n("awdl.electionparams.id", e.id);
-                        o.n("awdl.electionparams.distance", e.distance_to_master);
-                        o.n("awdl.electionparams.unknown", e.unknown);
-                        o.mac("awdl.electionparams.master", e.master);
-                        o.n("awdl.electionparams.mastermetric", e.master_metric);
-                        o.n("awdl.electionparams.selfmetric", e.self_metric);
-                        if let Some(p) = &e.private {
-                            o.hex("awdl.unknown", &p.unknown.to_le_bytes());
-                            o.mac("awdl.electionparams.private.master", p.master);
-                            o.n("awdl.electionparams.private.mastermetric", p.master_metric);
-                            o.n("awdl.electionparams.private.id", p.id);
-                            o.n("awdl.electionparams.private.phc", p.phc);
-                        }
-                        o.padding(&e.trailing);
-                    }
-                    TlvBody::ElectionParamsV2(e) => {
-                        o.mac("awdl.electionparams2.master", e.master);
-                        o.mac("awdl.electionparams2.other", e.other);
-                        o.n("awdl.electionparams2.mastercounter", e.master_counter);
-                        o.n("awdl.electionparams2.disstance", e.distance_to_master);
-                        o.n("awdl.electionparams2.mastermetric", e.master_metric);
-                        o.n("awdl.electionparams2.selfmetric", e.self_metric);
-                        o.n("awdl.electionparams2.unknown", e.unknown);
-                        o.n("awdl.electionparams2.reserved", e.reserved);
-                        o.n("awdl.electionparams2.selfcounter", e.self_counter);
-                        o.padding(&e.trailing);
-                    }
-                    TlvBody::ServiceParams(s) => {
-                        o.hex("awdl.unknown", &s.unknown);
-                        o.n("awdl.serviceparams.sui", s.sui);
-                        o.n("awdl.serviceparams.bitmask", s.bitmask);
-                        for v in s.values.iter() {
-                            o.n("awdl.serviceparams.values", *v);
-                        }
-                        o.padding(&s.trailing);
-                    }
-                    TlvBody::DataPathState(d) => {
-                        o.n("awdl.datastate.flags", d.wire_flags());
-                        if let Some(c) = &d.country_code {
-                            // Wireshark shows an FT_STRING up to its first NUL.
-                            o.s("awdl.datastate.countrycode", ascii(c).split('\0').next().unwrap().to_owned());
-                        }
-                        if let Some(s) = d.social_channels {
-                            if s & 1 != 0 {
-                                o.n("awdl.datastate.social_channel_map", s);
-                            } else {
-                                o.n("awdl.datastate.social_channel", s);
-                            }
-                        }
-                        if let Some(i) = &d.infra {
-                            o.mac("awdl.datastate.infra_bssid", i.bssid);
-                            o.n("awdl.datastate.infra_channel", i.channel);
-                        }
-                        if let Some(a) = d.infra_address {
-                            o.mac("awdl.datastate.infra_addr", a);
-                        }
-                        if let Some(a) = d.awdl_address {
-                            o.mac("awdl.datastate.own_awdladdr", a);
-                        }
-                        if let Some(u) = d.umi {
-                            o.n("awdl.datastate.umi", u);
-                        }
-                        if let Some(u) = &d.unicast_options {
-                            o.n("awdl.datastate.unicast_options_length", u.len() as i64);
-                        }
-                        if let Some(e) = &d.ext {
-                            o.n("awdl.datastate.extflags", e.wire_flags());
-                            if let Some(l) = e.log_trigger {
-                                o.n("awdl.datastate.logtrigger", l);
-                            }
-                            if let Some(r) = e.rlfc {
-                                o.n("awdl.datastate.rlfc", r);
-                            }
-                            if let Some((a, b, c)) = e.counters {
-                                o.n("awdl.datastate.active_time", a);
-                                o.n("awdl.datastate.aw_sequence_counter", b);
-                                o.n("awdl.datastate.update_counter", c);
-                            }
-                        }
-                        o.padding(&d.trailing);
-                    }
-                    TlvBody::Arpa(a) => {
-                        o.n("awdl.arpa.flags", a.flags);
-                        o.name("awdl.arpa.host", "awdl.arpa.domain", &a.name);
-                    }
-                    TlvBody::ServiceResponse(s) => {
-                        o.n("awdl.dns.name.len", (s.name.as_bytes().len() + 1) as i64);
-                        o.name("awdl.dns.name.label", "awdl.dns.name.compressed", &s.name);
-                        o.n("awdl.dns.type", s.rdata.rtype());
-                        // name length, name, type, data length, unknown, data, trailing
-                        let fixed = 2 + s.name.as_bytes().len() + 1 + 2 + 2;
-                        o.n("awdl.dns.data_len", (t.value.len() - fixed - s.trailing.len()) as i64);
-                        o.n("awdl.dns.unknown", s.unknown);
-                        match &s.rdata {
-                            Rdata::Txt(_) => {
-                                for t in s.rdata.txt_strings() {
-                                    o.s("awdl.dns.txt", ascii(t));
-                                }
-                            }
-                            Rdata::Srv { priority, weight, port, target } => {
-                                o.n("awdl.dns.priority", *priority);
-                                o.n("awdl.dns.weight", *weight);
-                                o.n("awdl.dns.port", *port);
-                                o.name("awdl.dns.target.label", "awdl.dns.target.compressed", target);
-                            }
-                            Rdata::Ptr(p) => o.name("awdl.dns.ptr.label", "awdl.dns.ptr.short", p),
-                            Rdata::Other { .. } => {}
-                        }
-                        o.padding(&s.trailing);
-                    }
-                    TlvBody::Version(v) => {
-                        o.n("awdl.version", v.version.to_byte());
-                        o.n("awdl.version.device_class", v.device_class);
-                        o.padding(&v.trailing);
-                    }
-                    TlvBody::SyncTree(s) => {
-                        for a in s.addresses() {
-                            o.mac("awdl.synctree.addr", a);
-                        }
-                        o.padding(&s.trailing);
-                    }
-                    TlvBody::Ieee80211Container(_) => {
-                        // Wireshark dissects only the first element; the rest
-                        // is "padding" to it.
-                        let v = t.value;
-                        if v.len() >= 2 && 2 + (v[1] as usize) < v.len() {
-                            o.padding(&v[2 + v[1] as usize..]);
-                        }
-                    }
-                    TlvBody::HtCapabilities(h) => o.padding(&h.trailing),
-                    TlvBody::Unknown { value, .. } => o.hex("awdl.tag.data", value),
-                }
+                tlv_fields(&mut o, &t);
             }
         }
     }
     o.into_fields()
+}
+
+/// Our values for one TLV, under Wireshark's field names.
+fn tlv_fields(o: &mut Ours, t: &Tlv<'_>) {
+    o.n("awdl.tag.number", t.kind);
+    o.n("awdl.tag.length", t.value.len() as i64);
+    let Ok(body) = t.decode() else {
+        o.s("awdl.tag.number", "<our decode failed>".into());
+        return;
+    };
+    match &body {
+        TlvBody::SyncParams(s) => {
+            o.n("awdl.syncparams.txchannel", s.tx_channel);
+            o.n("awdl.syncparams.txcounter", s.tx_counter);
+            o.n("awdl.syncparams.masterchan", s.master_channel);
+            o.n("awdl.syncparams.guardtime", s.guard_time);
+            o.n("awdl.syncparams.awperiod", s.aw_period);
+            o.n("awdl.syncparams.afperiod", s.action_frame_period);
+            o.n("awdl.syncparams.awdlflags", s.awdl_flags);
+            o.n("awdl.syncparams.aw.ext_len", s.aw_ext_length);
+            o.n("awdl.syncparams.aw.common_len", s.aw_common_length);
+            o.n("awdl.syncparams.aw.remaining", s.aw_remaining);
+            o.n("awdl.syncparams.ext.min", s.ext_min);
+            o.n("awdl.syncparams.ext.max_multicast", s.ext_max_multicast);
+            o.n("awdl.syncparams.ext.max_unicast", s.ext_max_unicast);
+            o.n("awdl.syncparams.ext.max_af", s.ext_max_af);
+            o.mac("awdl.syncparams.master", s.master);
+            o.n("awdl.syncparams.presencemode", s.presence_mode);
+            o.hex("awdl.unknown", &[s.unknown]);
+            o.n("awdl.syncparams.awseqcounter", s.aw_seq_counter);
+            o.n("awdl.syncparams.apbeaconalignment", s.ap_beacon_alignment);
+            o.chanseq(&s.channel_sequence);
+            o.padding(&s.trailing);
+        }
+        TlvBody::ChannelSequence(c) => {
+            o.chanseq(&c.sequence);
+            o.padding(&c.trailing);
+        }
+        TlvBody::ElectionParams(e) => {
+            o.n("awdl.electionparams.flags", e.flags);
+            o.n("awdl.electionparams.id", e.id);
+            o.n("awdl.electionparams.distance", e.distance_to_master);
+            o.n("awdl.electionparams.unknown", e.unknown);
+            o.mac("awdl.electionparams.master", e.master);
+            o.n("awdl.electionparams.mastermetric", e.master_metric);
+            o.n("awdl.electionparams.selfmetric", e.self_metric);
+            if let Some(p) = &e.private {
+                o.hex("awdl.unknown", &p.unknown.to_le_bytes());
+                o.mac("awdl.electionparams.private.master", p.master);
+                o.n("awdl.electionparams.private.mastermetric", p.master_metric);
+                o.n("awdl.electionparams.private.id", p.id);
+                o.n("awdl.electionparams.private.phc", p.phc);
+            }
+            o.padding(&e.trailing);
+        }
+        TlvBody::ElectionParamsV2(e) => {
+            o.mac("awdl.electionparams2.master", e.master);
+            o.mac("awdl.electionparams2.other", e.other);
+            o.n("awdl.electionparams2.mastercounter", e.master_counter);
+            o.n("awdl.electionparams2.disstance", e.distance_to_master);
+            o.n("awdl.electionparams2.mastermetric", e.master_metric);
+            o.n("awdl.electionparams2.selfmetric", e.self_metric);
+            o.n("awdl.electionparams2.unknown", e.unknown);
+            o.n("awdl.electionparams2.reserved", e.reserved);
+            o.n("awdl.electionparams2.selfcounter", e.self_counter);
+            o.padding(&e.trailing);
+        }
+        TlvBody::ServiceParams(s) => {
+            o.hex("awdl.unknown", &s.unknown);
+            o.n("awdl.serviceparams.sui", s.sui);
+            o.n("awdl.serviceparams.bitmask", s.bitmask);
+            for v in s.values.iter() {
+                o.n("awdl.serviceparams.values", *v);
+            }
+            o.padding(&s.trailing);
+        }
+        TlvBody::DataPathState(d) => {
+            o.n("awdl.datastate.flags", d.wire_flags());
+            if let Some(c) = &d.country_code {
+                // Wireshark shows an FT_STRING up to its first NUL.
+                o.s("awdl.datastate.countrycode", ascii(c).split('\0').next().unwrap().to_owned());
+            }
+            if let Some(s) = d.social_channels {
+                if s & 1 != 0 {
+                    o.n("awdl.datastate.social_channel_map", s);
+                } else {
+                    o.n("awdl.datastate.social_channel", s);
+                }
+            }
+            if let Some(i) = &d.infra {
+                o.mac("awdl.datastate.infra_bssid", i.bssid);
+                o.n("awdl.datastate.infra_channel", i.channel);
+            }
+            if let Some(a) = d.infra_address {
+                o.mac("awdl.datastate.infra_addr", a);
+            }
+            if let Some(a) = d.awdl_address {
+                o.mac("awdl.datastate.own_awdladdr", a);
+            }
+            if let Some(u) = d.umi {
+                o.n("awdl.datastate.umi", u);
+            }
+            if let Some(u) = &d.unicast_options {
+                o.n("awdl.datastate.unicast_options_length", u.len() as i64);
+            }
+            if let Some(e) = &d.ext {
+                o.n("awdl.datastate.extflags", e.wire_flags());
+                if let Some(l) = e.log_trigger {
+                    o.n("awdl.datastate.logtrigger", l);
+                }
+                if let Some(r) = e.rlfc {
+                    o.n("awdl.datastate.rlfc", r);
+                }
+                if let Some((a, b, c)) = e.counters {
+                    o.n("awdl.datastate.active_time", a);
+                    o.n("awdl.datastate.aw_sequence_counter", b);
+                    o.n("awdl.datastate.update_counter", c);
+                }
+            }
+            o.padding(&d.trailing);
+        }
+        TlvBody::Arpa(a) => {
+            o.n("awdl.arpa.flags", a.flags);
+            o.name("awdl.arpa.host", "awdl.arpa.domain", &a.name);
+        }
+        TlvBody::ServiceResponse(s) => {
+            o.n("awdl.dns.name.len", (s.name.as_bytes().len() + 1) as i64);
+            o.name("awdl.dns.name.label", "awdl.dns.name.compressed", &s.name);
+            o.n("awdl.dns.type", s.rdata.rtype());
+            // name length, name, type, data length, unknown, data, trailing
+            let fixed = 2 + s.name.as_bytes().len() + 1 + 2 + 2;
+            o.n("awdl.dns.data_len", (t.value.len() - fixed - s.trailing.len()) as i64);
+            o.n("awdl.dns.unknown", s.unknown);
+            match &s.rdata {
+                Rdata::Txt(_) => {
+                    for t in s.rdata.txt_strings() {
+                        o.s("awdl.dns.txt", ascii(t));
+                    }
+                }
+                Rdata::Srv { priority, weight, port, target } => {
+                    o.n("awdl.dns.priority", *priority);
+                    o.n("awdl.dns.weight", *weight);
+                    o.n("awdl.dns.port", *port);
+                    o.name("awdl.dns.target.label", "awdl.dns.target.compressed", target);
+                }
+                Rdata::Ptr(p) => o.name("awdl.dns.ptr.label", "awdl.dns.ptr.short", p),
+                Rdata::Other { .. } => {}
+            }
+            o.padding(&s.trailing);
+        }
+        TlvBody::Version(v) => {
+            o.n("awdl.version", v.version.to_byte());
+            o.n("awdl.version.device_class", v.device_class);
+            o.padding(&v.trailing);
+        }
+        TlvBody::SyncTree(s) => {
+            for a in s.addresses() {
+                o.mac("awdl.synctree.addr", a);
+            }
+            o.padding(&s.trailing);
+        }
+        TlvBody::Ieee80211Container(_) => {
+            // Wireshark dissects only the first element; the rest
+            // is "padding" to it.
+            let v = t.value;
+            if v.len() >= 2 && 2 + (v[1] as usize) < v.len() {
+                o.padding(&v[2 + v[1] as usize..]);
+            }
+        }
+        TlvBody::HtCapabilities(h) => o.padding(&h.trailing),
+        TlvBody::Unknown { value, .. } => o.hex("awdl.tag.data", value),
+    }
 }
 
 fn same(a: &str, b: &str) -> bool {
