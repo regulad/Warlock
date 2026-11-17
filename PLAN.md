@@ -157,7 +157,7 @@ Pinned decisions:
     - **Live** (`awdlsync` on the T3U, Apple TV on channel 44, 60 s): 1,437 frames; 100 % within ±1 TU; p50 101 µs, p95 460 µs, max 686 µs; drift fitted −235 to −242 ppm; 0 frames dropped.
     - Election agrees with Apple's: 586 of 607 frames name the master we elect, and the iPhone (metric 538) leads an iOS device (530) and a Mac (515).
     - Open: a recurring libusb message `windows_submit_transfer … transfer HANDLE is NULL` during live RX (no loss seen). The iPhone in one hopping capture transmitted on channel 6 outside its advertised slot; this matters for W3's TX scheduling.
-    - Not yet: a live run against an iPhone, which needs AirDrop or similar active on the phone.
+    - **Live, iPhone** (iOS 27 with the AirDrop screen open, channel 149, 75 s): 139 MIFs; 100 % within ±1 TU; p50 24 µs, p95 103 µs, max 353 µs; drift +1 to +3 ppm; 0 frames dropped. The iPhone was master (metric 541, version 10.2) and a valid peer.
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
