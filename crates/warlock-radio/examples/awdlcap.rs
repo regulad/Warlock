@@ -2,7 +2,7 @@
 //! Captures everything the T3U receives to a radiotap pcapng file, for
 //! Wireshark's AWDL dissector and for replay.
 //!
-//!     cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [channels=44] [seconds=60] [dwell_s=5]
+//!     cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [channels=44] [seconds=60] [dwell_s=5] [width=20|40]
 //!
 //! `channels` is a comma-separated list; with more than one, the radio cycles
 //! through them, `dwell_s` seconds each. Creating `<out.pcapng>.stop` ends
@@ -29,9 +29,11 @@ fn main() {
         .collect();
     let seconds: u64 = args.next().map(|a| a.parse().expect("seconds")).unwrap_or(60);
     let dwell = Duration::from_secs(args.next().map(|a| a.parse().expect("dwell seconds")).unwrap_or(5).max(1));
+    let width: u32 = args.next().map(|a| a.parse().expect("width 20 or 40")).unwrap_or(20);
 
-    let mut radio = DevourerRadio::open(&DevourerConfig { channel: channels[0], ..Default::default() })
-        .unwrap_or_else(|e| panic!("opening the radio: {e}"));
+    let config = DevourerConfig { channel: channels[0], ..Default::default() };
+    let config = if width == 40 { config.forty(channels[0]) } else { config };
+    let mut radio = DevourerRadio::open(&config).unwrap_or_else(|e| panic!("opening the radio: {e}"));
     let mut out = Writer::radiotap(BufWriter::new(File::create(&path).expect("creating the capture file")))
         .expect("writing the capture header");
     println!("capturing channels {channels:?} to {path} for {seconds} s");

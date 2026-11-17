@@ -333,17 +333,30 @@ impl Engine {
         events
     }
 
-    /// The cluster's master is the best master any peer names. We sync to
-    /// that master if we hear it, else to the peer closest to it; the current
-    /// choice is kept while nothing strictly better is heard.
+    /// The cluster's master is the best master named by a peer we can follow
+    /// right now: its clock is locked and its last sync claim is fresh. A
+    /// master named only by peers we hear now and then is another cluster's,
+    /// and chasing it loses sync. Live, an iOS device we heard sporadically
+    /// outranked the Mac we were synced to, though the Mac kept itself master.
+    /// We sync to the master if we hear it, else to the peer closest to it;
+    /// the current choice is kept while nothing strictly better is heard.
     fn elect(&mut self, now: u64) -> Vec<Event> {
         let mut events = Vec::new();
-        let master = self.peers.values().filter_map(|p| p.election.map(|e| e.master_rank())).max().map(|r| r.addr);
+        let stale = self.config.source_stale_us;
+        let followable = |p: &Peer| {
+            p.clock.is_locked() && p.last_claim.is_some_and(|(c, _)| now.saturating_sub(c.rx_tsf) <= stale)
+        };
+        let master = self
+            .peers
+            .values()
+            .filter(|p| followable(p))
+            .filter_map(|p| p.election.map(|e| e.master_rank()))
+            .max()
+            .map(|r| r.addr);
         if master != self.master {
             self.master = master;
             events.push(Event::MasterChanged(master));
         }
-        let stale = self.config.source_stale_us;
         let rank = |p: &Peer| -> Option<(bool, u32)> {
             let m = master?;
             let fresh = p.last_claim.is_some_and(|(c, _)| now.saturating_sub(c.rx_tsf) <= stale);

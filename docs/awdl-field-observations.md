@@ -127,8 +127,11 @@ Measured on the capture corpus against the receiver's hardware TSF (the T3U),
     up to 31 ms between target time and air. Without the correction, claims
     scatter by up to 7 ms; with it, a master's claims fit one grid.
   - A single claim is good to ±½ TU, because `tx_counter` is whole TU.
-  - The claimed boundary falls 1–4 AWs after the frame's target time, most
-    often 3.
+  - **`tx_counter` counts to the start of the next slot** (a 4-AW extended
+    AW), not the next AW. In every capture, the AW that starts at a claimed
+    boundary has `aw_seq ≡ 0 (mod 4)`: 5,639 of 5,641 frames, from every
+    device. That's why claims land 1–4 AWs ahead. Warlock first claimed the
+    next AW, which put its slot grid 0–3 AWs off where it really was.
 - **AWs are 16 TU, and clocks drift.** Relative to the T3U, an iOS 27 iPhone
   ran within ±2 ppm, and the Apple TV (3rd generation, iOS 8-based) at about
   −239 ppm, which is one TU every 4 s. Following a peer means fitting its
@@ -183,11 +186,31 @@ Mac's (see `crates/awdl-core/src/active.rs`).
     counted them as acknowledged (`txOk`).
   - With an ICMPv6 echo responder behind the engine, the Mac's `ping6`
     succeeded, 7 of 8. Round trips started at 21 ms and grew by about 48 ms
-    per ping: the 1048.6 ms sequence cycle minus the 1 s ping interval. So
-    something in the exchange happens once per sequence cycle (open).
-- **The Apple TV never sent us unicast,** at 20 or 40 MHz, even with the
-  corrected clock: no data, no ADDBA, no retries. What its old stack wants
-  first is unknown, and it isn't the target.
+    per ping: the 1048.6 ms sequence cycle minus the 1 s ping interval.
+  - Instrumented, the Mac delivered its echo requests to us once per
+    sequence cycle, in slot 0, about 8 ms into the AW. Our replies left 6–13
+    ms after each request. So the wait is the Mac's: its AWDL was idle in
+    "Low Power" state, with a sparse sequence.
+  - **Control:** the Mac pinging genuine Apple peers the same way showed the
+    same pattern, and worse. An iOS device: 62, 106, 147 ms, 50 % loss. An
+    iPhone: 1009 ms, 75 % loss. Idle AWDL is like that. It should tighten when
+    AWDL is busy (e.g. during a transfer), which is to be checked.
+- **The Apple TV (iOS 8-based) never sends us unicast.** Our unicast reaches
+  it: its `tcpdump` shows our echo requests and TCP SYNs to the AirPlay port
+  (7000) arriving. Its kernel answers both, echo replies and SYN-ACKs from
+  the opted-in AirPlay socket, but its AWDL driver never puts them on the
+  air. While we ping it, it transmits nothing but broadcast and multicast
+  (it does answer our mDNS queries, to `33:33:80:00:00:fb`).
+  - Ruled out: our receive bandwidth (20 or 40 MHz); our clock (fixed); our
+    slot claim (fixed); XNU's restricted AWDL sockets (the AirPlay socket's
+    SYN-ACK was held too); being a follower rather than a master; and the
+    iPhone's TLV choices (infrastructure channel 0, the data-path extension,
+    HT40, an ARPA host name, version 10.2/iOS), alone or together.
+  - When an iPhone visited it for AirPlay, the iPhone stayed master of its
+    own cluster and alternated 149 and 44, 4 slots each. The Apple TV stayed
+    its own master (metric 80).
+  - Open: an over-the-air capture of a working iPhone → Apple TV unicast
+    exchange, to compare against.
 - **Masters change under us.** When an iPhone appeared during a join, it
   outranked the Mac and became master. We re-synced to it on our own.
 

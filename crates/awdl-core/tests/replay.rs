@@ -28,6 +28,7 @@ fn aw_boundaries_are_predicted_within_a_tu() {
         let (mut agree, mut named) = (0usize, 0usize);
         let (mut slot_ok, mut slot_n, mut seq_ok, mut seq_n) = (0usize, 0usize, 0usize, 0usize);
         let mut aws_ahead = [0usize; 5];
+        let mut boundary_phase = [0usize; 4];
         let mut engine = Engine::new(Default::default());
         for c in warlock_capture::read(file).unwrap() {
             let (Some(tsf), Some(channel)) = (c.tsf, c.channel()) else { continue };
@@ -39,6 +40,11 @@ fn aw_boundaries_are_predicted_within_a_tu() {
                         let claim = SyncClaim::new(tsf, &action.header, &s).unwrap();
                         let ahead = ((claim.boundary() - claim.target_tsf()) / AW_US as f64).ceil() as usize;
                         aws_ahead[ahead.min(4)] += 1;
+                        // The AW that starts at the claimed boundary: where
+                        // in its 4-AW slot is it?
+                        if let Some(at) = src.clock.position(claim.boundary() as u64 + AW_US / 2) {
+                            boundary_phase[(at.aw_seq % 4) as usize] += 1;
+                        }
                         if let Some(pos) = src.clock.position(claim.target_tsf() as u64) {
                             seq_n += 1;
                             seq_ok += (pos.aw_seq == claim.aw_seq) as usize;
@@ -68,6 +74,7 @@ fn aw_boundaries_are_predicted_within_a_tu() {
         eprintln!("  followers:   {}", check.followers);
         eprintln!("  AW seq agrees {seq_ok}/{seq_n}  slot model matches RX channel {slot_ok}/{slot_n}  frames naming our master {agree}/{named}");
         eprintln!("  claimed boundary is 0/1/2/3/4+ AWs after the target TX time: {aws_ahead:?}");
+        eprintln!("  AW starting at the claimed boundary, aw_seq mod 4 = 0/1/2/3: {boundary_phase:?}");
         if let Some(src) = engine.sync_source() {
             eprintln!("  synced to {} ({:+.1} ppm)", src.addr, src.clock.drift_ppm());
         }

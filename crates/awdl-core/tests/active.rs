@@ -107,7 +107,10 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
         assert_eq!((header.addr2, header.addr1), (US, MacAddr::BROADCAST));
         let Some(Ok(TlvBody::SyncParams(sp))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode()) else { panic!() };
         assert_eq!((Some(sp.master), sp.tx_channel), (s.master, s.channel));
-        assert!((1..=16).contains(&sp.tx_counter), "tx_counter {}", sp.tx_counter);
+        // Counts to the next slot (4 AWs) start, as Apple devices do.
+        assert!((1..=64).contains(&sp.tx_counter), "tx_counter {}", sp.tx_counter);
+        let boundary_seq = sp.aw_seq_counter.wrapping_add(((sp.tx_counter as u64 * TU_US) / (16 * TU_US)) as u16 + 1);
+        assert!(boundary_seq % 4 == 0 || sp.tx_counter % 16 == 0, "claimed boundary isn't a slot start: seq {} counter {}", sp.aw_seq_counter, sp.tx_counter);
         let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else { panic!() };
         assert_eq!((Some(e.master), Some(e.other)), (s.master, s.source));
         assert!(e.self_metric < e.master_metric);
