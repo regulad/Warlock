@@ -33,7 +33,7 @@ registrar for services on the AWDL link, so nothing has to be sniffed back out
 of Windows.
 
 - **Advertise.** A client (Koala, the AirDrop app) registers a service through
-  Warlock's IPC. Warlock:
+  Warlock's control API. Warlock:
   - calls `DnsServiceRegister` with `InterfaceIndex` set to its own adapter,
     so Windows answers real mDNS queries and handles probing;
   - encodes the same PTR/SRV/TXT records (plus our ARPA host name) into our
@@ -42,7 +42,7 @@ of Windows.
   - runs `DnsServiceBrowse` / `DnsServiceResolve` (or `DnsStartMulticastQuery`)
     on its adapter;
   - merges the results with records learned from peers' TLVs;
-  - delivers found/lost events over IPC.
+  - delivers found/lost events on the control API.
 
   A TLV record is "lost" when its peer times out or its SUI changes.
 - **Carry mDNS.** Multicast mDNS frames move between the Warlock adapter and

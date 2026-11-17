@@ -65,7 +65,8 @@ Useful operational lessons reported by these projects:
 
 - **Warlock is GPL-2.0-only.** It links devourer (GPL-2.0-only) in-process.
 - **Clients:** Koala and the AirDrop app are separate AGPL-3.0 programs that
-  talk to Warlock over IPC. The IPC crate is planned as MIT so they can link it.
+  talk to Warlock over its local HTTP control API, defined by an OpenAPI
+  contract (planned MIT). They link no Warlock code.
 - **Wintun:** the prebuilt `wintun.dll` ships under its own binary license while
   its source is GPL-2.0. Bundling it next to GPL-2.0-only code is a gray area,
   so plan to have it fetched separately rather than bundled.

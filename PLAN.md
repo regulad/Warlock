@@ -19,11 +19,11 @@ Pinned decisions:
 ## Repos and licensing
 | Repo | License | Contents |
 |---|---|---|
-| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, IPC protocol crate |
+| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, control API (OpenAPI contract + server) |
 | `koala` | AGPL-3.0-or-later | Rapport, Continuity Capture control, media pipeline, app |
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
-- The **IPC client crate** (`warlock-ipc`) contains no devourer code. License it MIT so the AGPL apps can link it without friction.
+- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. License the contract MIT (planned) so anyone, including the AGPL apps, can generate a client from it.
 - Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`.
 - **Open licensing issue: `wintun.dll`.** It ships under a proprietary prebuilt-binaries license; its source is GPL-2.0. Loading it into a process that contains GPLv2-only devourer is a gray area only when we *distribute* the two together. Plan: don't bundle it. The installer or user fetches the unmodified DLL from wintun.net. Revisit before any public release. Fallbacks are TAP-Windows6 (GPLv2, driven over ioctl, so no linking) or building and signing Wintun from source.
 
@@ -37,7 +37,7 @@ Pinned decisions:
         ▲                                  ▲
  Wintun session (IPv6 ⇄ AWDL data)     control channel
                                            ▲
-                         tokio named-pipe IPC server (\\.\pipe\warlock)
+              HTTP REST API on a local socket (OpenAPI contract, Docker-style)
 ```
 
 ### Crates (`Warlock` workspace)
@@ -103,16 +103,14 @@ Pinned decisions:
   - Coalesce TCP segments to cut Windows' ACK chatter.
   - Firewall rules: allow only what clients register; suppress Windows' own LLMNR/SSDP/mDNS chatter on the adapter.
   - **Service discovery (critical for Koala; see `docs/service-discovery.md`):** AWDL carries records both as Service Response TLVs in action frames (Apple's D2D) and as ordinary multicast mDNS in data frames. Warlock is the registrar and doesn't sniff:
-    - Advertise: clients register over IPC → Warlock calls `DnsServiceRegister` on its adapter (Windows' built-in DNS-SD answers real mDNS) **and** encodes the records into our TLVs.
-    - Browse: `DnsServiceBrowse`/`Resolve` on the adapter, merged with records learned from peers' TLVs → found/lost over IPC.
+    - Advertise: clients register through the control API → Warlock calls `DnsServiceRegister` on its adapter (Windows' built-in DNS-SD answers real mDNS) **and** encodes the records into our TLVs.
+    - Browse: `DnsServiceBrowse`/`Resolve` on the adapter, merged with records learned from peers' TLVs → found/lost events on the control API.
     - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former. Keep LLMNR/SSDP off the link.
-- **`warlock-ipc`** (MIT)
-  - Named-pipe protocol (`postcard`) and client.
-  - Commands: status, peers, enable/disable radio, keep-alive/hold AWDL active, channel preference, register/unregister a service (for the bridge), subscribe to events, start/stop a pcapng capture.
-- **`warlock-ctl`** (binary): CLI over the IPC — status, peers, live log tail, `capture` to pcapng (`pcap-file`) for Wireshark.
+- **Control API** (replaces the earlier postcard named-pipe IPC plan): an HTTP/1.1 REST API served on a local socket, specified first in `api/openapi.yaml`, with the server inside the `warlock` service. Scope and open decisions: the API contract task under Milestones.
+- **`warlock-ctl`** (binary): a client of the control API, the way `docker` is of the Engine API. Status, peers, live log tail, `capture` to pcapng (`pcap-file`) for Wireshark.
 
 ### Key external crates (Warlock zone, all GPLv2-compatible)
-`windows`/`windows-sys`, `windows-service`, `wintun-bindings`, `libusb1-sys` (vendored), `cmake`, `rtrb`, `tokio`, `serde`, `postcard`, `pcap-file`, `tracing` + `tracing-etw`, `simple-dns` (for the bridge's mDNS encoding).
+`windows`/`windows-sys`, `windows-service`, `wintun-bindings`, `libusb1-sys` (vendored), `cmake`, `rtrb`, `tokio`, `hyper`/`axum` (control API), `serde`, `pcap-file`, `tracing` + `tracing-etw`, `simple-dns` (for the bridge's mDNS encoding).
 
 ## Koala (`koala` repo, AGPL) — starts once Warlock can carry IPv6 to an iPhone
 - `opack` and `tlv8` codecs. Evaluate `apple-opack` (MIT) or write our own.
@@ -141,8 +139,13 @@ Pinned decisions:
 - **W1 Proto:** `awdl-proto` round-trips every TLV in our captures; fuzzing clean.
 - **W2 Passive engine:** peers tracked, synced to the master, AW boundaries predicted within ±1 TU of observed frames (replay + live).
 - **W3 Active link:** PSF/MIF TX, election, sequence strategy, ACK responder armed. iPhones list us as a valid peer (seen in their frames and sync tree). `ping6` to an iPhone's AWDL link-local works through Wintun.
+- **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
+  - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
+  - Resources to cover: daemon and radio status and control; peers; holding AWDL active and channel preference; service registration and browsing (the registrar design in `docs/service-discovery.md`); an event stream (Docker-style streamed JSON on `GET /events`); pcapng capture; one error model.
+  - The data plane stays the Wintun NIC; the API is control only.
+  - Pick the Rust server stack (hyper/axum over the chosen socket) and how the server is checked against the contract.
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`).
-- **W5 Service-grade:** IPC + ctl, survives sleep/resume and dongle hot-unplug, clears the ACK responder on every exit path, ETW logging.
+- **W5 Service-grade:** control API + ctl, survives sleep/resume and dongle hot-unplug, clears the ACK responder on every exit path, ETW logging.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
 - **K2 (moment of truth):** the iPhone scans our QR and completes guest pair-setup with Koala over Warlock.
 - **K3:** mic-only Continuity Capture session negotiated.
