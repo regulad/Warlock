@@ -102,6 +102,10 @@ pub enum TxKind {
     Data,
 }
 
+/// How often, µs, a master's election counter advances (an iPhone's, as
+/// measured).
+const MASTER_COUNTER_PERIOD_US: u64 = 3_000_000;
+
 /// Packets waiting for their peer to be on our channel are dropped after
 /// this, µs.
 const PACKET_MAX_WAIT_US: u64 = 2_000_000;
@@ -130,6 +134,8 @@ struct TxState {
     last_mif_slot: Option<u16>,
     last_psf: Option<u64>,
     self_counter: u32,
+    /// When our counter last advanced, while master.
+    counter_tick: Option<u64>,
 }
 
 impl TxState {
@@ -277,7 +283,10 @@ impl Engine {
             let schedule = ChannelSchedule::from_sequence(&legacy).expect("16 slots");
             OwnSequence { legacy, tlv18, schedule }
         });
-        Self { config, own_sequence, ..Self::default() }
+        let self_counter = config.transmit.as_ref().map_or(0, |tx| tx.self_counter_start);
+        let mut engine = Self { config, own_sequence, ..Self::default() };
+        engine.tx.self_counter = self_counter;
+        engine
     }
 
     /// Whether we're the cluster's master.
@@ -521,6 +530,16 @@ impl Engine {
         self.first_tsf.get_or_insert(now);
         let events = self.elect(now);
         self.pending.extend(events);
+        // A master's election counter advances: an iPhone's went up about
+        // every 3 s while it led. One that stood still lost an iPhone that
+        // had joined us within 20 s (a Mac stayed).
+        if self.is_master() {
+            let last = *self.tx.counter_tick.get_or_insert(now);
+            if now.saturating_sub(last) >= MASTER_COUNTER_PERIOD_US {
+                self.tx.self_counter = self.tx.self_counter.wrapping_add(1);
+                self.tx.counter_tick = Some(now);
+            }
+        }
         let mut out = std::mem::take(&mut self.outbox);
         let Some(tx) = self.config.transmit.clone() else { return out };
         if self.follower_view(now).is_none() {

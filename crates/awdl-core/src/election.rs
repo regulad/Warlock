@@ -9,6 +9,11 @@
 //! named master is compared with the one we elect. The paper describes the
 //! metric/counter pair. An address tie-break (higher wins) is our assumption,
 //! needed only for exact ties.
+//!
+//! The counter half is unconfirmed, and one capture contradicts it: of two
+//! iOS devices at metric 65, the one at counter 16163 joined the one at 130.
+//! What is confirmed about counters: Apple devices follow a master only
+//! while its counter advances (see `docs/awdl-field-observations.md`).
 
 use awdl_proto::MacAddr;
 use awdl_proto::tlv::{ElectionParams, ElectionParamsV2};

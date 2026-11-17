@@ -171,6 +171,9 @@ fn main() {
     if let Some(m) = env("WARLOCK_SELF_METRIC") {
         tx.self_metric = m.parse().expect("WARLOCK_SELF_METRIC");
     }
+    if let Some(c) = env("WARLOCK_SELF_COUNTER") {
+        tx.self_counter_start = c.parse().expect("WARLOCK_SELF_COUNTER");
+    }
     tx.aw_seq_offset = env("WARLOCK_AW_SEQ_OFFSET").map_or(0, |v| v.parse().expect("WARLOCK_AW_SEQ_OFFSET"));
     if let Some(v) = env("WARLOCK_VERSION") {
         // "major.minor/class", e.g. "10.2/2" for iOS 27.

@@ -74,6 +74,10 @@ pub struct TxConfig {
     /// pass of the 16-slot sequence) leaves our channel schedule unchanged
     /// and changes only its label. An experiment; 0 by default.
     pub aw_seq_offset: u16,
+    /// The election counter we start from (election parameters v2). Apple
+    /// devices' counters run from 2 to past 16,000; a master's advances
+    /// about every 3 s. An experiment; 0 by default.
+    pub self_counter_start: u32,
 }
 
 impl TxConfig {
@@ -95,6 +99,7 @@ impl TxConfig {
             master_fresh_grid: false,
             tlv_overrides: Vec::new(),
             aw_seq_offset: 0,
+            self_counter_start: 0,
         }
     }
 }

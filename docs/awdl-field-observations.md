@@ -286,6 +286,38 @@ Mac's (see `crates/awdl-core/src/active.rs`).
 - **Masters change under us.** When an iPhone appeared during a join, it
   outranked the Mac and became master. We re-synced to it on our own.
 
+## An iPhone (iOS 27) and Warlock (2026-11-17)
+
+With AirDrop open on the iPhone (metric 530), a Mac (macOS 11) nearby, and
+Warlock at 40 MHz:
+- **Following the iPhone**, Warlock synced in 1 s, including its infra
+  channel 120. The iPhone set up Block Ack with us at 4.2 s and answered 15
+  of 59 pings (3.6–380 ms). It also served us from its own cluster while we
+  led ours (12 of 59).
+- **Leading needs an advancing election counter.** Apple devices put a
+  counter in election parameters v2, and a master's advances about every
+  3 s (an iPhone's: 130 → 143 in 40 s; 1278 → 1284 in 25 s). Ours stood
+  still. Warlock leading at a metric above the iPhone's:
+
+  | metric | counter | iPhone | Mac |
+  |---|---|---|---|
+  | 600 | 0, still | kept its own cluster | kept following the iPhone |
+  | 600 | 20000, still | kept its own cluster | joined us |
+  | 540 | 20000, still | joined, then left within 20 s | joined us |
+  | 540 or 600 | from 0 or 20000, +1 every 3 s | joined, stayed | joined, stayed |
+
+  With the counter advancing, the iPhone answered 15–19 of 39–49 pings.
+  The engine now advances it every 3 s while master.
+- **Which counter wins isn't "the higher one".** Two iOS devices both at
+  metric 65: the one with counter 16163 joined the one with 130. The
+  engine still ranks by metric, then counter (`election.rs`); only the
+  metric case is confirmed.
+- **Metrics seen:** iPhone 65 idle, 528–538 with AirDrop open or during
+  AirPlay; Mac 65 idle, 513–515 active; Apple TV (iOS 8) 80; another iOS
+  device 539. Warlock's default stays 60, so it follows any Apple device.
+- Open: about 60–75 % of our pings to the iPhone go unanswered, leading or
+  following.
+
 ## Waking AWDL over Bluetooth LE (2026-11-17)
 
 Apple devices bring AWDL up when a nearby device asks over Bluetooth LE, in
