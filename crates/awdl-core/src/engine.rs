@@ -10,6 +10,7 @@ use awdl_proto::tlv::{ChannelSequence, TlvBody};
 use awdl_proto::{Frame, MacAddr, parse};
 
 use crate::active::{self, FollowerView, TxConfig};
+use crate::schedule::widen;
 use crate::{
     AW_US, AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, MasterRank, Observed, OwnClock,
     SyncClaim, TU_US,
@@ -207,6 +208,9 @@ pub struct Peer {
     pub sequence_legacy: Option<ChannelSequence<'static>>,
     /// See `sequence_legacy`.
     pub sequence_tlv18: Option<ChannelSequence<'static>>,
+    /// Both, with the repeated slots written out ([`crate::schedule::widen`]):
+    /// what we advertise while following it.
+    pub sequences_widened: Option<(ChannelSequence<'static>, Option<ChannelSequence<'static>>)>,
     /// Its country code (data path state).
     pub country: Option<[u8; 3]>,
 }
@@ -231,6 +235,7 @@ impl Peer {
             master_channel: None,
             sequence_legacy: None,
             sequence_tlv18: None,
+            sequences_widened: None,
             country: None,
         }
     }
@@ -367,6 +372,9 @@ impl Engine {
                 }
                 p.election = v2.or(v1).or(p.election);
                 p.schedule = from_tlv18.or(from_sync).or(p.schedule);
+                if let Some(legacy) = &p.sequence_legacy {
+                    p.sequences_widened = Some((widen(legacy), p.sequence_tlv18.as_ref().map(widen)));
+                }
             }
         }
         events.extend(self.elect(meta.tsf));
@@ -698,8 +706,9 @@ impl Engine {
             sync_parent: src.addr,
             aw_seq: pos.aw_seq,
             next_boundary: src.clock.next_boundary(now)?,
-            sequence_legacy: src.sequence_legacy.as_ref()?,
-            sequence_tlv18: src.sequence_tlv18.as_ref(),
+            // Its sequence, with the repeats we hop too made explicit.
+            sequence_legacy: &src.sequences_widened.as_ref()?.0,
+            sequence_tlv18: src.sequences_widened.as_ref()?.1.as_ref(),
             country: src.country.unwrap_or(*b"US\0"),
         })
     }

@@ -315,8 +315,8 @@ Warlock at 40 MHz:
 - **Metrics seen:** iPhone 65 idle, 528–538 with AirDrop open or during
   AirPlay; Mac 65 idle, 513–515 active; Apple TV (iOS 8) 80; another iOS
   device 539. Warlock's default stays 60, so it follows any Apple device.
-- Open: about 60–75 % of our pings to the iPhone go unanswered, leading or
-  following. (Diagnosed on the Apple TV; see the next section.)
+- About 60–75 % of our pings to the iPhone went unanswered, leading or
+  following. Fixed; see the next section.
 
 ## Unicast only in explicit slots (2026-11-17)
 
@@ -336,6 +336,25 @@ offset, and the TV's `tcpdump` showed which requests arrived:
 Sending unicast only in a peer's explicit slots (`Engine::poll`): 58 of 58
 answered, p50 6.9 ms, p90 12 ms, after waiting up to ~350 ms for the next
 explicit slot.
+
+**Apple devices apply the same rule to us.** Following, we advertised the
+master's sequence verbatim: a Mac's, with 149 explicit only in slots 0, 9
+and 10. An iPhone answered pings we sent in its explicit slot 2, but its
+reply waited ~420 ms for one of *our* explicit 149 slots. As a follower, we
+now advertise the master's sequence with its repeats written out
+(`schedule::widen`). We hop those slots anyway.
+
+With the iPhone (AirDrop open):
+
+| Warlock | answered | reply p50 | p90 | max |
+|---|---|---|---|---|
+| following, verbatim sequence | 46 of 49 | 36 ms | 439 ms | 970 ms |
+| following, widened | 47 of 49 | 4.7 ms | 21 ms | 50 ms |
+| leading (metric 600) | 47 of 48 | 4.4 ms | 17 ms | 411 ms |
+
+Widening didn't stop the iPhone from talking to us, contrary to the "pin"
+warning in prior-art.md (that one was about pinning one channel in all 16
+slots).
 
 ## Waking AWDL over Bluetooth LE (2026-11-17)
 

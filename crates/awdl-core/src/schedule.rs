@@ -15,6 +15,34 @@ use crate::{AWS_PER_SLOT, SLOTS};
 /// Fill value meaning "an empty slot repeats the current channel".
 const FILL_REPEAT: u16 = 0xffff;
 
+/// The same sequence with every slot the fill repeats written out
+/// explicitly, in the same encoding: where its sender is, made available for
+/// unicast. A follower advertises this, since it hops the repeats too: a peer
+/// sends us unicast only in our explicit slots, and an iPhone held its reply
+/// ~420 ms for one when we advertised a master's sparse sequence verbatim.
+/// Unchanged when the fill isn't "repeat current" or every slot is empty.
+pub fn widen(seq: &ChannelSequence<'_>) -> ChannelSequence<'static> {
+    let channels: Vec<_> = seq.channels().collect();
+    let Some(last) = channels.iter().rev().find(|c| !c.is_empty()).copied() else {
+        return seq.clone().into_owned();
+    };
+    if seq.fill_channel != FILL_REPEAT {
+        return seq.clone().into_owned();
+    }
+    let mut current = last;
+    let widened: Vec<_> = channels
+        .iter()
+        .map(|c| {
+            if !c.is_empty() {
+                current = *c;
+            }
+            current
+        })
+        .collect();
+    ChannelSequence::new(seq.duplicate_count, seq.step_count, seq.fill_channel, &widened)
+        .unwrap_or_else(|_| seq.clone().into_owned())
+}
+
 /// A peer's channel per slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelSchedule {
@@ -104,6 +132,23 @@ mod tests {
         assert_eq!(s.channel_at(4 * 9 + 1), Some(6)); // slot 9 empty: repeats slot 8
         assert_eq!(s.channel_at(64), Some(120)); // wraps after 16 slots
         assert!(s.visits(6) && !s.visits(44));
+    }
+
+    #[test]
+    fn widening_writes_out_the_repeats() {
+        let mut ch = [Channel::OpClass { number: 0, opclass: 0 }; 16];
+        ch[0] = Channel::OpClass { number: 120, opclass: 121 };
+        ch[2] = Channel::OpClass { number: 149, opclass: 128 };
+        ch[8] = Channel::OpClass { number: 6, opclass: 81 };
+        let seq = ChannelSequence::new(0, 3, 0xffff, &ch).unwrap();
+        let wide = ChannelSchedule::from_sequence(&widen(&seq)).unwrap();
+        let narrow = ChannelSchedule::from_sequence(&seq).unwrap();
+        assert_eq!(wide.explicit_slots(), 16);
+        for aw in (0..64).map(|s| s * 4) {
+            assert_eq!(wide.channel_at(aw), narrow.channel_at(aw), "slot {}", aw / 4);
+        }
+        // Not under another fill.
+        assert_eq!(widen(&ChannelSequence::new(0, 3, 0, &ch).unwrap()).channels().filter(|c| c.is_empty()).count(), 13);
     }
 
     #[test]
