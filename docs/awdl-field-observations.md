@@ -160,6 +160,37 @@ Measured on the capture corpus against the receiver's hardware TSF (the T3U),
   iPhone sent most of its frames on channel 6 in slots its sequence didn't
   give channel 6. Only about 30 % matched.
 
+## Joining a cluster (2026-11-17)
+
+Warlock joined as a follower, sending PSFs and MIFs modelled on the macOS 11
+Mac's (see `crates/awdl-core/src/active.rs`).
+
+- **Witnesses.** macOS 11 logs AWDL in detail on the kernel's
+  `com.apple.p2p` channel: `log stream --level debug --predicate
+  'eventMessage CONTAINS "com.apple.p2p"'`. It prints the AWDL state and
+  sequence, the peer count, and per-peer statistics such as
+  `<mac (RSSI)> txQ[…] txOk[…] RxPkts[…] TxBytes`. `dns-sd -includeAWDL -B
+  _airdrop._tcp local` keeps a Mac's AWDL active. The Apple TV (iOS 8-based)
+  has a shell but no AWDL logs.
+- **What acceptance looks like.**
+  - Both the Mac and the Apple TV add an accepted peer to their neighbour
+    table, as a *permanent* entry for its EUI-64 link-local address.
+  - Once that entry existed, the Apple TV's multicast pings went out over
+    AWDL, where before it sent nothing (its `awdl0` counters stayed at 0
+    throughout).
+  - Pinged at our link-local address, the Mac set up Block Ack first (ADDBA,
+    TID 0), then sent QoS Data frames. Our hardware ACKed them, and the Mac
+    counted them as acknowledged (`txOk`).
+  - With an ICMPv6 echo responder behind the engine, the Mac's `ping6`
+    succeeded, 7 of 8. Round trips started at 21 ms and grew by about 48 ms
+    per ping: the 1048.6 ms sequence cycle minus the 1 s ping interval. So
+    something in the exchange happens once per sequence cycle (open).
+- **The Apple TV never sent us unicast,** at 20 or 40 MHz, even with the
+  corrected clock: no data, no ADDBA, no retries. What its old stack wants
+  first is unknown, and it isn't the target.
+- **Masters change under us.** When an iPhone appeared during a join, it
+  outranked the Mac and became master. We re-synced to it on our own.
+
 ## Wire format
 
 The frame and TLV layouts are documented in one place: the module docs of

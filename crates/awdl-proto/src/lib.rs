@@ -42,6 +42,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod action;
+pub mod blockack;
 pub mod data;
 pub mod dns;
 mod error;

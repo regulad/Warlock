@@ -22,15 +22,17 @@
 //! - channel-sequence slot = (AW sequence / 4) mod 16: one slot per 64-TU
 //!   extended AW.
 
+mod active;
 mod clock;
 pub mod diag;
 mod election;
 mod engine;
 mod schedule;
 
+pub use active::TxConfig;
 pub use clock::{AwClock, AwPosition, Observed, SyncClaim};
 pub use election::{ElectionInfo, MasterRank};
-pub use engine::{Config, Engine, Event, Peer, RxMeta};
+pub use engine::{Action, Config, Engine, Event, Peer, RxMeta, TxKind};
 pub use schedule::ChannelSchedule;
 
 /// One time unit, in µs.

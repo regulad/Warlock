@@ -14,11 +14,11 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use devourer_sys::*;
 
-use crate::{Error, Radio, RxFrame};
+use crate::{Error, Radio, RxClock, RxFrame};
 
 /// Frames buffered between the RX thread and the consumer; beyond this,
 /// frames are dropped and counted.
@@ -31,8 +31,13 @@ pub struct DevourerConfig {
     pub vid: u16,
     /// See `vid`.
     pub pid: u16,
-    /// The channel to bring the radio up on (20 MHz).
+    /// The channel to bring the radio up on: the primary channel.
     pub channel: u8,
+    /// Bandwidth: `DVR_WIDTH_20` or `DVR_WIDTH_40`. Fast hops keep it.
+    pub width: u8,
+    /// For 40 MHz: 1 when the primary is the lower half (44 of 44+48), 2
+    /// when it's the upper half. See [`DevourerConfig::forty`].
+    pub offset: u8,
     /// devourer's hardware retry limit for unicast. 0 sends unicast once.
     pub retry_limit: i32,
     /// Channel hops: 0 software, 1 firmware within a band, 2 firmware across
@@ -44,7 +49,28 @@ pub struct DevourerConfig {
 
 impl Default for DevourerConfig {
     fn default() -> Self {
-        Self { vid: 0x2357, pid: 0x012d, channel: 44, retry_limit: 3, fastretune_fw: 2, log_level: DVR_LOG_WARN }
+        Self {
+            vid: 0x2357,
+            pid: 0x012d,
+            channel: 44,
+            width: DVR_WIDTH_20,
+            offset: 0,
+            retry_limit: 3,
+            fastretune_fw: 2,
+            log_level: DVR_LOG_WARN,
+        }
+    }
+}
+
+impl DevourerConfig {
+    /// 40 MHz on a 5 GHz primary channel, with the secondary on the side
+    /// 802.11's channel pairs put it (36+40, 44+48, …, 149+153, 157+161).
+    pub fn forty(mut self, primary: u8) -> Self {
+        const LOWER: [u8; 12] = [36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157];
+        self.channel = primary;
+        self.width = DVR_WIDTH_40;
+        self.offset = if LOWER.contains(&primary) { 1 } else { 2 };
+        self
     }
 }
 
@@ -78,6 +104,7 @@ unsafe extern "C" fn on_frame(user: *mut c_void, f: *const dvr_rx_frame) {
         t.0 | f.tsfl as u64
     };
     let frame = RxFrame {
+        host: Instant::now(),
         tsf,
         channel: ctx.channel.load(Ordering::Relaxed),
         rssi_dbm: (f.rssi[0] as i32 - 110) as i8,
@@ -110,6 +137,7 @@ pub struct DevourerRadio {
     rx: Receiver<RxFrame>,
     ctx: *const RxContext,
     channel: Arc<AtomicU8>,
+    rx_clock: RxClock,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -137,7 +165,7 @@ impl DevourerRadio {
             return Err(e);
         }
         // SAFETY: `radio` was just opened.
-        if let Err(e) = check("dvr_init", unsafe { dvr_init(radio, config.channel, DVR_WIDTH_20, 0) }) {
+        if let Err(e) = check("dvr_init", unsafe { dvr_init(radio, config.channel, config.width, config.offset) }) {
             unsafe {
                 dvr_close(radio);
                 windows_sys::Win32::Media::timeEndPeriod(1);
@@ -164,7 +192,15 @@ impl DevourerRadio {
                 }
             })
             .expect("spawning the RX thread");
-        Ok(Self { radio, rx_thread: Some(rx_thread), rx, ctx, channel, _not_send: PhantomData })
+        Ok(Self {
+            radio,
+            rx_thread: Some(rx_thread),
+            rx,
+            ctx,
+            channel,
+            rx_clock: RxClock::new(Instant::now()),
+            _not_send: PhantomData,
+        })
     }
 
     /// Frames dropped because the consumer fell behind.
@@ -177,7 +213,10 @@ impl DevourerRadio {
 impl Radio for DevourerRadio {
     fn recv(&mut self, timeout: Duration) -> Result<Option<RxFrame>, Error> {
         match self.rx.recv_timeout(timeout) {
-            Ok(f) => Ok(Some(f)),
+            Ok(f) => {
+                self.rx_clock.observe(f.host, f.tsf);
+                Ok(Some(f))
+            }
             Err(RecvTimeoutError::Timeout) => Ok(None),
             Err(RecvTimeoutError::Disconnected) => Err(Error::Ended),
         }
@@ -192,6 +231,35 @@ impl Radio for DevourerRadio {
         check("dvr_set_channel", unsafe { dvr_set_channel(self.radio, channel, DVR_WIDTH_20, 0) })?;
         self.channel.store(channel, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn hop(&mut self, channel: u8) -> Result<(), Error> {
+        if channel == self.channel() {
+            return Ok(());
+        }
+        // SAFETY: as above. With fastretune_fw = 2 the firmware hops, across
+        // bands too.
+        check("dvr_fast_retune", unsafe { dvr_fast_retune(self.radio, channel) })?;
+        self.channel.store(channel, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn send(&mut self, mpdu: &[u8], rate_500kbps: u8) -> Result<(), Error> {
+        let mut buf = Vec::with_capacity(9 + mpdu.len());
+        buf.extend_from_slice(&crate::tx_radiotap(rate_500kbps));
+        buf.extend_from_slice(mpdu);
+        // SAFETY: the radio is open; `buf` is valid for its length.
+        check("dvr_send", unsafe { dvr_send(self.radio, buf.as_ptr(), buf.len()) })
+    }
+
+    fn set_ack_responder(&mut self, addr: [u8; 6]) -> Result<(), Error> {
+        // SAFETY: the radio is open; `addr` is 6 bytes. dvr_close clears it.
+        check("dvr_set_ack_responder", unsafe { dvr_set_ack_responder(self.radio, addr.as_ptr()) })
+    }
+
+    fn tsf_now(&mut self) -> Option<u64> {
+        // Not dvr_read_tsf: that counter isn't the one stamping RX frames.
+        self.rx_clock.tsf_at(Instant::now())
     }
 }
 

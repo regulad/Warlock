@@ -5,16 +5,20 @@
 
 mod devourer;
 mod replay;
+mod rxclock;
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use devourer::{DevourerConfig, DevourerRadio};
 pub use replay::ReplayRadio;
+pub use rxclock::RxClock;
 
 /// A received frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RxFrame {
+    /// When the host got it from the radio.
+    pub host: Instant,
     /// The receiver's hardware TSF at reception, µs, extended to 64 bits.
     pub tsf: u64,
     /// The channel the radio was on.
@@ -34,8 +38,32 @@ pub trait Radio {
     /// The channel it's on.
     fn channel(&self) -> u8;
 
-    /// Moves to a 20 MHz channel.
+    /// Moves to a 20 MHz channel, the slow, thorough way.
     fn set_channel(&mut self, channel: u8) -> Result<(), Error>;
+
+    /// Moves to a 20 MHz channel as fast as the radio can: for AWDL's slot
+    /// changes. Defaults to [`Radio::set_channel`].
+    fn hop(&mut self, channel: u8) -> Result<(), Error> {
+        self.set_channel(channel)
+    }
+
+    /// Transmits an MPDU (no FCS) at a legacy rate, in units of 500 kb/s
+    /// (12 = 6 Mb/s).
+    fn send(&mut self, mpdu: &[u8], rate_500kbps: u8) -> Result<(), Error>;
+
+    /// Has the radio ACK unicast frames to `addr` in hardware.
+    fn set_ack_responder(&mut self, addr: [u8; 6]) -> Result<(), Error>;
+
+    /// Our hardware TSF now, µs, on the timebase that stamps received frames
+    /// (see [`RxClock`]). `None` before the first frame.
+    fn tsf_now(&mut self) -> Option<u64>;
+}
+
+/// A radiotap header that sets only the legacy rate. devourer reads the rate
+/// from radiotap; without one it falls back to 1 Mb/s CCK, which doesn't
+/// exist at 5 GHz.
+pub fn tx_radiotap(rate_500kbps: u8) -> [u8; 9] {
+    [0, 0, 9, 0, 0b100, 0, 0, 0, rate_500kbps]
 }
 
 /// Why a radio call failed.

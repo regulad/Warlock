@@ -97,6 +97,14 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
     the full and the firmware paths.
 - **One silent channel-6 run** went quiet after its first second. It didn't
   reproduce in a 10 s rerun.
+- **Two TSFs.** `dvr_read_tsf` does not read the counter that stamps
+  received frames. A register read came back about 318 ms *behind* the RX
+  timestamps of frames that had already arrived. The two tick at the same
+  rate (the gap was stable to 20 µs over 30 s) but started apart. Scheduling
+  against AWs on the register value put every frame we sent about 7 ms off
+  the AW grid. `warlock-radio`'s `RxClock` estimates "now" on the RX timebase
+  instead: each frame is paired with the host instant it arrived, and the
+  pairing with the least delay over the last 2 s wins.
 - **libusb message during RX:** a long live run prints
   `libusb: error [windows_submit_transfer] program assertion failed - transfer HANDLE is NULL after transfer was submitted`
   every so often. Receiving carried on with no frames lost (60 s on channel
@@ -114,6 +122,11 @@ On the safe radio (`warlock-radio`):
   or `-- --replay <capture.pcapng>`: the AWDL engine live or on a capture. It
   shows the peer table, the master, the sync source with drift, and W2's
   prediction check.
+- `cargo run --release -p warlock-radio --example awdljoin -- [channel] [seconds] [width 20|40]`:
+  joins the cluster as a follower. It sends PSFs and MIFs, follows the
+  channel sequence, accepts Block Ack setup, ACKs unicast in hardware, answers
+  ICMPv6 echo on our EUI-64 link-local address, and reports everything
+  addressed to us.
 - `cargo run --release -p warlock-radio --example awdlcap -- <out.pcapng> [ch1,ch2,…] [seconds] [dwell]`:
   radiotap pcapng for Wireshark and replay. Creating `<out.pcapng>.stop` ends
   it cleanly.

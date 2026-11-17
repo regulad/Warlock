@@ -59,7 +59,9 @@ fn run(radio: &mut impl Radio, limit: Option<Duration>) -> bool {
         let t0 = *first_tsf.get_or_insert(f.tsf);
         check.check(&engine, f.tsf, &f.mpdu);
         for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
-            println!("[{:>8.3} s] {ev:?}", (f.tsf - t0) as f64 / 1e6);
+            if !matches!(ev, awdl_core::Event::Packet { .. }) {
+                println!("[{:>8.3} s] {ev:?}", (f.tsf - t0) as f64 / 1e6);
+            }
         }
         if limit.is_some() && last_report.elapsed() >= Duration::from_secs(5) {
             report(&engine, &check, frames, last_tsf);

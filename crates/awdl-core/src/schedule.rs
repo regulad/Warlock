@@ -56,6 +56,19 @@ impl ChannelSchedule {
         (1..SLOTS).map(|back| self.slots[(slot + SLOTS - back) % SLOTS]).find(|&c| c != 0)
     }
 
+    /// Whether AW `aw_seq` falls in a slot with an explicit channel, rather
+    /// than one the fill repeats. Apple devices send a MIF once per explicit
+    /// slot: an iPhone whose sequence named 149 in 2 of 16 slots sent 1.9
+    /// MIFs a second on 149, while filled slots carried none.
+    pub fn is_explicit(&self, aw_seq: u16) -> bool {
+        self.slots[Self::slot_of(aw_seq)] != 0
+    }
+
+    /// How many of the 16 slots name a channel explicitly.
+    pub fn explicit_slots(&self) -> usize {
+        self.slots.iter().filter(|&&c| c != 0).count()
+    }
+
     /// Whether the peer is on `channel` at any point in its sequence.
     pub fn visits(&self, channel: u8) -> bool {
         (0..SLOTS as u16).any(|s| self.channel_at(s * AWS_PER_SLOT) == Some(channel))

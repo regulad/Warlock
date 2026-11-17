@@ -14,3 +14,5 @@ windows-sys = { version = "0.61", features = ["Win32_Media"] }
 [dev-dependencies]
 awdl-core = { path = "../awdl-core" }
 awdl-proto = { path = "../awdl-proto" }
+# IPv6/ICMPv6 parsing and building for awdljoin's echo responder (MIT OR Apache-2.0).
+etherparse = "0.21"

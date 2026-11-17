@@ -173,6 +173,17 @@ impl<'a> ChannelSequence<'a> {
         (0..self.len()).filter_map(|i| self.get(i))
     }
 
+    /// Converts to an owned sequence.
+    pub fn into_owned(self) -> ChannelSequence<'static> {
+        ChannelSequence {
+            encoding: self.encoding,
+            duplicate_count: self.duplicate_count,
+            step_count: self.step_count,
+            fill_channel: self.fill_channel,
+            entries: Bytes::Owned(self.entries.into_owned()),
+        }
+    }
+
     pub(crate) fn read(r: &mut Reader<'a>) -> Result<Self, Error> {
         let count = r.u8("channel count")? as usize + 1;
         let encoding = r.u8("channel encoding")?;

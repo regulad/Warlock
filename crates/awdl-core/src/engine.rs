@@ -4,11 +4,18 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use awdl_proto::action::AwdlVersion;
-use awdl_proto::tlv::TlvBody;
+use awdl_proto::action::{AwdlVersion, subtype};
+use awdl_proto::blockack::AddbaRequest;
+use awdl_proto::tlv::{ChannelSequence, TlvBody};
 use awdl_proto::{Frame, MacAddr, parse};
 
-use crate::{AwClock, AwPosition, ChannelSchedule, ElectionInfo, Observed, SyncClaim};
+use crate::active::{self, FollowerView, TxConfig};
+use crate::{AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, Observed, SyncClaim, TU_US};
+
+/// Transmit no earlier than this into an AW, µs: time for a hop to settle.
+const TX_FROM_US: u32 = TU_US as u32 / 2;
+/// Transmit no later than this into an AW, µs: well inside its 16 TU.
+const TX_UNTIL_US: u32 = 8 * TU_US as u32;
 
 /// What the radio knows about a received frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,17 +37,98 @@ pub struct Config {
     pub peer_timeout_us: u64,
     /// A peer whose last sync claim is older than this, µs, isn't synced to.
     pub source_stale_us: u64,
+    /// Set to take part: [`Engine::poll`] then returns frames to send and
+    /// channels to be on. `None` only listens.
+    pub transmit: Option<TxConfig>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { own_addr: None, peer_timeout_us: 5_000_000, source_stale_us: 2_000_000 }
+        Self { own_addr: None, peer_timeout_us: 5_000_000, source_stale_us: 2_000_000, transmit: None }
     }
 }
 
-/// Something that changed.
+impl Config {
+    /// Taking part as `tx.addr`.
+    pub fn active(tx: TxConfig) -> Self {
+        Self { own_addr: Some(tx.addr), transmit: Some(tx), ..Self::default() }
+    }
+}
+
+/// Something for the radio to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// Be on this channel (a fast hop).
+    Hop(u8),
+    /// Send this MPDU (no FCS) at a legacy rate, in 500 kb/s.
+    Transmit {
+        /// The frame.
+        mpdu: Vec<u8>,
+        /// The rate.
+        rate_500kbps: u8,
+        /// What it is, for logs.
+        kind: TxKind,
+    },
+}
+
+/// What a transmitted frame is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxKind {
+    /// A Periodic Synchronization Frame.
+    Psf,
+    /// A Master Indication Frame.
+    Mif,
+    /// An answer to a peer's Block Ack setup.
+    AddbaResponse,
+    /// A data frame carrying a host packet.
+    Data,
+}
+
+/// Packets waiting for their peer to be on our channel are dropped after
+/// this, µs.
+const PACKET_MAX_WAIT_US: u64 = 2_000_000;
+
+/// A packet waiting to go out as a data frame.
+#[derive(Clone, Debug)]
+struct Queued {
+    to: MacAddr,
+    ethertype: u16,
+    payload: Vec<u8>,
+    since: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TxState {
+    queue: std::collections::VecDeque<Queued>,
+    data_seq: u16,
+    sequence_number: u16,
+    tuned: Option<u8>,
+    last_mif_slot: Option<u16>,
+    last_psf: Option<u64>,
+    self_counter: u32,
+}
+
+impl TxState {
+    fn next_sequence_number(&mut self) -> u16 {
+        self.sequence_number = (self.sequence_number + 1) & 0x0fff;
+        self.sequence_number
+    }
+}
+
+/// Something that changed, or arrived.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// A data frame for us (or multicast): its payload, for the host.
+    Packet {
+        /// The sender.
+        from: MacAddr,
+        /// Us, or a multicast group.
+        to: MacAddr,
+        /// The payload's EtherType (0x86dd, IPv6, in practice).
+        ethertype: u16,
+        /// The payload.
+        payload: Vec<u8>,
+    },
     /// A peer's first frame.
     PeerFound(MacAddr),
     /// A peer timed out.
@@ -82,6 +170,15 @@ pub struct Peer {
     pub clock: AwClock,
     /// Its latest sync claim, and what the clock made of it.
     pub last_claim: Option<(SyncClaim, Observed)>,
+    /// The master's channel, as it reports it.
+    pub master_channel: Option<u8>,
+    /// Its latest channel sequences as sent: embedded in its sync parameters
+    /// (legacy encoding) and in TLV 18.
+    pub sequence_legacy: Option<ChannelSequence<'static>>,
+    /// See `sequence_legacy`.
+    pub sequence_tlv18: Option<ChannelSequence<'static>>,
+    /// Its country code (data path state).
+    pub country: Option<[u8; 3]>,
 }
 
 impl Peer {
@@ -101,6 +198,10 @@ impl Peer {
             hostname: None,
             clock: AwClock::new(),
             last_claim: None,
+            master_channel: None,
+            sequence_legacy: None,
+            sequence_tlv18: None,
+            country: None,
         }
     }
 
@@ -123,6 +224,8 @@ pub struct Engine {
     peers: BTreeMap<MacAddr, Peer>,
     master: Option<MacAddr>,
     source: Option<MacAddr>,
+    outbox: Vec<Action>,
+    tx: TxState,
 }
 
 impl Engine {
@@ -134,16 +237,33 @@ impl Engine {
     /// Feeds one received MPDU (no radiotap, no FCS).
     pub fn on_frame(&mut self, meta: RxMeta, mpdu: &[u8]) -> Vec<Event> {
         let mut events = self.expire(meta.tsf);
+        if let (Some(tx), Ok(Some(req))) = (&self.config.transmit, AddbaRequest::parse(mpdu)) {
+            if req.to == tx.addr {
+                let n = self.tx.next_sequence_number();
+                let mpdu = if req.tid() == 0 { req.accept(n) } else { req.decline(n) };
+                self.outbox.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind: TxKind::AddbaResponse });
+            }
+            return events;
+        }
         let Ok(Some(frame)) = parse(mpdu) else { return events };
         let src = frame.header().source();
         if Some(src) == self.config.own_addr || src.is_multicast() {
             return events;
         }
         match &frame {
-            Frame::Data { .. } => {
+            Frame::Data { header, data } => {
                 if let Some(p) = self.peers.get_mut(&src) {
                     p.last_seen = meta.tsf;
                     p.data_frames += 1;
+                }
+                let to = header.destination();
+                if to.is_multicast() || Some(to) == self.config.own_addr {
+                    events.push(Event::Packet {
+                        from: src,
+                        to,
+                        ethertype: data.ethertype,
+                        payload: data.payload.to_vec(),
+                    });
                 }
             }
             Frame::Action { action, .. } => {
@@ -168,8 +288,14 @@ impl Engine {
                                 p.last_claim = Some((claim, observed));
                             }
                             from_sync = ChannelSchedule::from_sequence(&s.channel_sequence);
+                            p.master_channel = Some(s.master_channel);
+                            p.sequence_legacy = Some(s.channel_sequence.into_owned());
                         }
-                        Ok(TlvBody::ChannelSequence(c)) => from_tlv18 = ChannelSchedule::from_sequence(&c.sequence),
+                        Ok(TlvBody::ChannelSequence(c)) => {
+                            from_tlv18 = ChannelSchedule::from_sequence(&c.sequence);
+                            p.sequence_tlv18 = Some(c.sequence.into_owned());
+                        }
+                        Ok(TlvBody::DataPathState(d)) => p.country = d.country_code.or(p.country),
                         Ok(TlvBody::ElectionParamsV2(e)) => v2 = Some(ElectionInfo::from_v2(&e)),
                         Ok(TlvBody::ElectionParams(e)) => v1 = Some(ElectionInfo::from_v1(&e)),
                         Ok(TlvBody::Version(v)) => p.version = Some((v.version, v.device_class)),
@@ -262,5 +388,129 @@ impl Engine {
     pub fn position(&self, tsf: u64) -> Option<AwPosition> {
         let clock = &self.sync_source()?.clock;
         clock.is_locked().then(|| clock.position(tsf)).flatten()
+    }
+
+    /// What to do now, at TSF `now`: answers owed to peers (ADDBA), the
+    /// channel to be on, and our PSFs and MIFs. Only an engine configured to
+    /// transmit, and synced to a locked peer, sends anything of its own; until
+    /// then we stay silent rather than advertise a guess.
+    pub fn poll(&mut self, now: u64) -> Vec<Action> {
+        let mut out = std::mem::take(&mut self.outbox);
+        let Some(tx) = self.config.transmit.clone() else { return out };
+        if self.follower_view(now).is_none() {
+            return out;
+        }
+        let Some((pos, channel, explicit)) = self.schedule_at(now) else { return out };
+        if self.tx.tuned != Some(channel) {
+            self.tx.tuned = Some(channel);
+            out.push(Action::Hop(channel));
+        }
+        if pos.offset_us < TX_FROM_US || pos.offset_us > TX_UNTIL_US {
+            return out;
+        }
+        self.send_queued(now, pos.aw_seq, channel, &tx, &mut out);
+        // One MIF per explicit slot; otherwise a PSF when its period is up.
+        let slot = pos.aw_seq / AWS_PER_SLOT;
+        let kind = if explicit && self.tx.last_mif_slot != Some(slot) {
+            self.tx.last_mif_slot = Some(slot);
+            TxKind::Mif
+        } else if self.tx.last_psf.is_none_or(|t| now.saturating_sub(t) >= tx.psf_interval_tu as u64 * TU_US) {
+            self.tx.last_psf = Some(now);
+            TxKind::Psf
+        } else {
+            return out;
+        };
+        let n = self.tx.next_sequence_number();
+        let self_counter = self.tx.self_counter;
+        let view = FollowerView { channel, ..self.follower_view(now).expect("checked above") };
+        let st = if kind == TxKind::Mif { subtype::MIF } else { subtype::PSF };
+        let mpdu = active::build(&tx, &view, st, self_counter, n);
+        out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind });
+        out
+    }
+
+    /// Queues a packet for a peer (or a multicast group) as an AWDL data
+    /// frame. [`Engine::poll`] sends it in the next transmit window where the
+    /// peer's own sequence puts it on our channel; multicast goes in the next
+    /// window. Packets that can't go out within 2 s are dropped.
+    pub fn send_packet(&mut self, now: u64, to: MacAddr, ethertype: u16, payload: Vec<u8>) {
+        self.tx.queue.push_back(Queued { to, ethertype, payload, since: now });
+    }
+
+    fn send_queued(&mut self, now: u64, aw_seq: u16, channel: u8, tx: &TxConfig, out: &mut Vec<Action>) {
+        let mut keep = std::collections::VecDeque::new();
+        while let Some(q) = self.tx.queue.pop_front() {
+            if now.saturating_sub(q.since) > PACKET_MAX_WAIT_US {
+                continue;
+            }
+            let reachable = q.to.is_multicast()
+                || self.peers.get(&q.to).and_then(|p| p.schedule).and_then(|s| s.channel_at(aw_seq)) == Some(channel);
+            if !reachable {
+                keep.push_back(q);
+                continue;
+            }
+            let n = self.tx.next_sequence_number();
+            self.tx.data_seq = self.tx.data_seq.wrapping_add(1);
+            let mut mpdu = Vec::with_capacity(40 + q.payload.len());
+            Frame::Data {
+                header: awdl_proto::ieee80211::Header::data(tx.addr, q.to, n),
+                data: awdl_proto::data::DataFrame::new(self.tx.data_seq, q.ethertype, &q.payload),
+            }
+            .emit(&mut mpdu);
+            out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind: TxKind::Data });
+        }
+        self.tx.queue = keep;
+    }
+
+    /// When to call [`Engine::poll`] next, if something is due before the
+    /// next frame: the next AW's transmit window, or now if answers are owed.
+    pub fn next_wakeup(&self, now: u64) -> Option<u64> {
+        if !self.outbox.is_empty() {
+            return Some(now);
+        }
+        self.config.transmit.as_ref()?;
+        let src = self.sync_source()?;
+        if !src.clock.is_locked() {
+            return None;
+        }
+        let pos = src.clock.position(now)?;
+        if pos.offset_us < TX_FROM_US {
+            Some(pos.start_tsf + TX_FROM_US as u64)
+        } else {
+            Some(src.clock.next_boundary(now)? + TX_FROM_US as u64)
+        }
+    }
+
+    /// Our AW position, the channel the sync source's sequence puts us on at
+    /// `now`, and whether that slot names it explicitly.
+    fn schedule_at(&self, now: u64) -> Option<(AwPosition, u8, bool)> {
+        let src = self.sync_source()?;
+        let pos = self.position(now)?;
+        let sched = src.schedule?;
+        Some((pos, sched.channel_at(pos.aw_seq)?, sched.is_explicit(pos.aw_seq)))
+    }
+
+    /// The cluster as our frames describe it: we follow the sync source, one
+    /// hop further from the master than it is.
+    fn follower_view(&self, now: u64) -> Option<FollowerView<'_>> {
+        let master = self.master?;
+        let src = self.sync_source()?;
+        let e = src.election?;
+        let pos = self.position(now)?;
+        Some(FollowerView {
+            now,
+            channel: src.channel,
+            master,
+            master_channel: src.master_channel.unwrap_or(src.channel),
+            master_metric: e.master_metric,
+            master_counter: e.master_counter.unwrap_or(0),
+            distance: if src.addr == master { 1 } else { e.distance + 1 },
+            sync_parent: src.addr,
+            aw_seq: pos.aw_seq,
+            next_boundary: src.clock.next_boundary(now)?,
+            sequence_legacy: src.sequence_legacy.as_ref()?,
+            sequence_tlv18: src.sequence_tlv18.as_ref(),
+            country: src.country.unwrap_or(*b"US\0"),
+        })
     }
 }

@@ -9,11 +9,15 @@ use warlock_capture::Captured;
 use crate::{Error, Radio, RxFrame};
 
 /// Plays a radiotap capture back, frame by frame, as fast as it's read.
-/// Frames without a TSF or a 2.4/5 GHz channel are skipped. It can't retune:
-/// [`Radio::set_channel`] only records the request.
+/// Frames without a TSF or a 2.4/5 GHz channel are skipped. It can't retune
+/// or transmit: channel changes are only recorded, and sent frames are kept
+/// in [`ReplayRadio::sent`] for inspection. Its TSF is the latest frame's.
 pub struct ReplayRadio {
     frames: std::vec::IntoIter<Captured>,
     channel: u8,
+    tsf: Option<u64>,
+    /// Frames "sent": (TSF at the time, channel, MPDU).
+    pub sent: Vec<(u64, u8, Vec<u8>)>,
 }
 
 impl ReplayRadio {
@@ -21,7 +25,7 @@ impl ReplayRadio {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, Error> {
         let frames = warlock_capture::read(path).map_err(Error::Capture)?;
         let channel = frames.iter().find_map(Captured::channel).unwrap_or(0);
-        Ok(Self { frames: frames.into_iter(), channel })
+        Ok(Self { frames: frames.into_iter(), channel, tsf: None, sent: Vec::new() })
     }
 }
 
@@ -30,7 +34,9 @@ impl Radio for ReplayRadio {
         for c in self.frames.by_ref() {
             let (Some(tsf), Some(channel)) = (c.tsf, c.channel()) else { continue };
             self.channel = channel;
-            return Ok(Some(RxFrame { tsf, channel, rssi_dbm: c.rssi_dbm.unwrap_or(0), mpdu: c.mpdu }));
+            self.tsf = Some(tsf);
+            let host = std::time::Instant::now();
+            return Ok(Some(RxFrame { host, tsf, channel, rssi_dbm: c.rssi_dbm.unwrap_or(0), mpdu: c.mpdu }));
         }
         Err(Error::Ended)
     }
@@ -42,5 +48,18 @@ impl Radio for ReplayRadio {
     fn set_channel(&mut self, channel: u8) -> Result<(), Error> {
         self.channel = channel;
         Ok(())
+    }
+
+    fn send(&mut self, mpdu: &[u8], _rate_500kbps: u8) -> Result<(), Error> {
+        self.sent.push((self.tsf.unwrap_or(0), self.channel, mpdu.to_vec()));
+        Ok(())
+    }
+
+    fn set_ack_responder(&mut self, _addr: [u8; 6]) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn tsf_now(&mut self) -> Option<u64> {
+        self.tsf
     }
 }
