@@ -37,8 +37,9 @@ standing query, so nothing has to be sniffed back out of Windows.
   - registers its service with Windows itself: `DnsServiceRegister` on the
     Warlock adapter's interface index. Windows answers real mDNS queries and
     handles probing;
-  - names the service **type** (e.g. `_rdlink._tcp`) through Warlock's control
-    API. Nothing else about the service goes through the API.
+  - names the service **type** (e.g. `_rdlink._tcp`) on its control API
+    session, a WebSocket. Nothing else about the service goes through the API.
+    The type stays watched only while that connection is open.
 
   For each named type, Warlock:
   - keeps a standing `DnsStartMulticastQuery` for the type's PTR on its

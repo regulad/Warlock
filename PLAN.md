@@ -184,10 +184,22 @@ Pinned decisions:
       - It stops cleanly on Stop/Shutdown, logging to `%ProgramData%\Warlock\warlock.log`.
       - Still ahead: the event-driven engine thread, device arrival, the control API, ETW (W5).
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
-  - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
-  - Resources to cover: daemon and radio status and control; peers; holding AWDL active and channel preference; service types to advertise (clients name a type; registration itself stays with Windows; decide whether a named type lasts for the client's connection or until withdrawn) and browsing (`docs/service-discovery.md`); an event stream (Docker-style streamed JSON on `GET /events`); pcapng capture; one error model.
+  - **Transport:** HTTP/1.1 on a named pipe `\\.\pipe\warlock`, as Docker on Windows serves `\\.\pipe\docker_engine`. Version in the path (`/v1/…`). The pipe:
+    - rejects remote clients (`PIPE_REJECT_REMOTE_CLIENTS`; named pipes are otherwise reachable over SMB);
+    - is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so nothing can squat the name before the service starts;
+    - has a security descriptor allowing Administrators and a `warlock-users` group (like `docker-users`);
+    - keeps a spare instance listening, so concurrent clients don't get `ERROR_PIPE_BUSY`.
+  - **Sessions (Parker, 2026-11-17):** an app opens a **WebSocket** (HTTP `Upgrade` on the pipe) as its session. Everything it creates over the session lives exactly as long as the connection:
+    - the service types it names for advertising (registration itself stays with Windows; `docs/service-discovery.md`);
+    - its event subscriptions;
+    - its activity holds ("I'm using AWDL now": raised metric, link kept active).
+
+    When the connection closes, whether the app exits cleanly or crashes, Warlock withdraws the types and releases the holds. Nothing is created outside a session, so nothing can leak. `GetNamedPipeClientProcessId` names the owning process in logs and `warlock-ctl`.
+  - Plain HTTP endpoints, for `warlock-ctl`: daemon and radio status; peers; pcapng capture; one error model.
+  - Open: browsing for peers that only advertise in TLVs. Either a session subscription, or Warlock writes those records onto its adapter as mDNS answers so apps browse with Windows' own APIs (try first; needs Windows to cache unsolicited answers).
+  - Open: how the session's messages are specified. OpenAPI 3.1 can describe the upgrade endpoint but not the message exchange; JSON Schema components in the same document, or an AsyncAPI document beside it.
   - The data plane stays the Wintun NIC; the API is control only.
-  - Pick the Rust server stack (hyper/axum over the chosen socket) and how the server is checked against the contract.
+  - Server stack: tokio's named-pipe server behind axum 0.8 (a custom `Listener`), with axum's WebSocket support. Still to pick: how the server is checked against the contract.
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`).
 - **W5 Service-grade:** control API + ctl, survives sleep/resume and dongle hot-unplug, clears the ACK responder on every exit path, ETW logging.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
