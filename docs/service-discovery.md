@@ -54,9 +54,10 @@ standing query, so nothing has to be sniffed back out of Windows.
   - registers its service with Windows itself: `DnsServiceRegister` on the
     Warlock adapter's interface index. Windows answers real mDNS queries and
     handles probing;
-  - names the service **type** (e.g. `_rdlink._tcp`) on its control API
-    session, a WebSocket. Nothing else about the service goes through the API.
-    The type stays watched only while that connection is open.
+  - names the service **type** (e.g. `_rdlink._tcp`) to Warlock with
+    `POST /v1/advertising` (`api/openapi.yaml`), a request it keeps open for
+    as long as the type should be advertised. Nothing else about the service
+    goes through the API.
 
   For each named type, Warlock (`crates/warlock/src/advertise.rs`; named
   with `--advertise` until the API exists):

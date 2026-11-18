@@ -1,0 +1,561 @@
+# SPDX-License-Identifier: GPL-2.0-only
+openapi: 3.2.0
+info:
+  title: Warlock API
+  version: 1.0.0-draft
+  license:
+    name: GPL-2.0-only
+    identifier: GPL-2.0-only
+  summary: Control of Warlock, the AWDL service for Windows.
+  description: |
+    The control API of Warlock, for programs that use AWDL (Koala, an
+    AirDrop app, `warlock-ctl`). It is control only: data goes through the
+    "Warlock AWDL" network adapter as ordinary IPv6.
+
+    ## Transport
+
+    HTTP/1.1 on the named pipe `\\.\pipe\warlock`, as Docker on Windows
+    serves `\\.\pipe\docker_engine`. The `Host` header is ignored. The pipe
+    rejects remote clients, and only Administrators and members of the
+    `warlock-users` group may open it.
+
+    ## Locks
+
+    Whatever a program asks Warlock to keep doing lasts exactly as long as
+    the request that asked for it. A lock is a request whose response never
+    ends on its own: `POST /v1/advertising` and `POST /v1/holds`. The
+    response is a stream of JSON Lines describing the lock's state, sent
+    whenever that state changes and at least every 2 seconds.
+
+    - Closing the connection releases the lock. So does the program
+      exiting or crashing, because Windows then closes its handles.
+      Warlock notices at once, or at the latest at its next line.
+    - Each lock needs its own connection: send nothing else on it.
+    - Read the stream, even if only to discard it.
+    - If the stream ends, Warlock stopped. The lock is gone; open it again
+      once Warlock is back.
+
+    Nothing an API call starts outlives its connection, so nothing can be
+    left behind.
+
+    ## Services
+
+    Programs register their services with Windows' own DNS-SD
+    (`DnsServiceRegister`) on the adapter's interface index
+    (`adapter.index` in `GET /v1/info`), with `<host_name>.local` as the
+    target. Windows answers address queries only for its own host name.
+    Naming the service type in `POST /v1/advertising` also puts the
+    registrations in Warlock's AWDL frames, where Apple devices look first.
+
+    To browse, programs use Windows' DNS-SD on the adapter. Warlock writes
+    the records peers carry in their frames onto the adapter as mDNS, so
+    they are found like any other.
+
+    ## Captures
+
+    For packets, capture on the "Warlock AWDL" adapter, for instance with
+    Wireshark.
+
+    ## Errors
+
+    Every 4xx and 5xx response carries an `Error`.
+tags:
+  - name: daemon
+    summary: Warlock itself, its radio and its adapter
+  - name: peers
+    summary: AWDL devices in range
+  - name: advertising
+    summary: Service types advertised in Warlock's frames
+  - name: holds
+    summary: Keeping AWDL active
+  - name: events
+    summary: What happens, as it happens
+servers:
+  - url: http://localhost
+    description: The named pipe `\\.\pipe\warlock`; the host is ignored.
+paths:
+  /v1/info:
+    get:
+      operationId: getInfo
+      tags: [daemon]
+      summary: Warlock, its radio, adapter and AWDL state
+      responses:
+        '200':
+          description: The current state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Info' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/peers:
+    get:
+      operationId: listPeers
+      tags: [peers]
+      summary: The AWDL devices Warlock hears
+      responses:
+        '200':
+          description: Every current peer.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Peer' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/peers/{address}:
+    get:
+      operationId: getPeer
+      tags: [peers]
+      summary: One peer
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/MacAddress' }
+      responses:
+        '200':
+          description: The peer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Peer' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/advertising:
+    get:
+      operationId: listAdvertising
+      tags: [advertising]
+      summary: The service types being advertised, and who asked
+      responses:
+        '200':
+          description: One entry per type with at least one lock.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdvertisedType' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: advertise
+      tags: [advertising]
+      summary: Advertise a service type in Warlock's frames (a lock)
+      description: |
+        While this request is open, Warlock watches Windows' registrations
+        of the type on the adapter and carries those that target this
+        computer (`<host_name>.local`) in its AWDL frames, as Apple devices
+        carry theirs. Registrations come and go with Windows; the stream
+        says which instances are advertised. When the last lock on a type
+        closes, its instances leave Warlock's frames.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdvertiseRequest' }
+      responses:
+        '200':
+          description: The lock is held until the connection closes.
+          content:
+            application/jsonl:
+              itemSchema: { $ref: '#/components/schemas/AdvertisingState' }
+        '400': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/holds:
+    get:
+      operationId: listHolds
+      tags: [holds]
+      summary: The open holds, and who holds them
+      responses:
+        '200':
+          description: Every open hold.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Hold' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: hold
+      tags: [holds]
+      summary: Keep AWDL active (a lock)
+      description: |
+        For a program using the link, for example during a call or a
+        transfer. While any hold is open, Warlock keeps taking part in AWDL
+        as an active device, so peers keep it in their schedules. How (for
+        example its election metric) is Warlock's choice. Without holds or
+        advertising, Warlock may go idle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HoldRequest' }
+      responses:
+        '200':
+          description: The hold lasts until the connection closes.
+          content:
+            application/jsonl:
+              itemSchema: { $ref: '#/components/schemas/HoldState' }
+        '400': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/events:
+    get:
+      operationId: events
+      tags: [events]
+      summary: Follow what happens
+      description: |
+        A stream of events from the moment of the request until the
+        connection closes. It holds nothing: closing it changes nothing.
+        Events say what changed; `GET /v1/info` and `GET /v1/peers` give
+        the state to start from.
+      responses:
+        '200':
+          description: Events, one per line, as they happen.
+          content:
+            application/jsonl:
+              itemSchema: { $ref: '#/components/schemas/Event' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  responses:
+    Error:
+      description: The request failed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: What went wrong, for people.
+    MacAddress:
+      type: string
+      description: An 802.11 address, lowercase.
+      pattern: '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'
+      examples: ['02:11:22:33:44:55']
+    LinkLocal:
+      type: string
+      format: ipv6
+      description: |
+        An IPv6 link-local address on the adapter, without a zone. Reach it
+        as `<address>%<adapter.index>`.
+      examples: ['fe80::11:22ff:fe33:4455']
+    ServiceType:
+      type: string
+      description: |
+        A DNS-SD service type: an RFC 6335 service name and its protocol,
+        without a domain (AWDL is `local.` only).
+      pattern: '^_[A-Za-z0-9](-?[A-Za-z0-9]){0,14}\._(tcp|udp)$'
+      examples: ['_rdlink._tcp']
+    Owner:
+      type: object
+      description: The program holding a lock.
+      required: [pid, image, since]
+      properties:
+        pid:
+          type: integer
+          description: Its process ID (`GetNamedPipeClientProcessId`).
+        image:
+          type: string
+          description: Its executable's path.
+        since:
+          type: string
+          format: date-time
+          description: When it took the lock.
+    Info:
+      type: object
+      required: [version, host_name, adapter, radio, awdl]
+      properties:
+        version:
+          type: string
+          description: Warlock's version.
+        host_name:
+          type: string
+          description: |
+            This computer's host name, without `.local`: the target for
+            service registrations, and the name Warlock gives itself on
+            AWDL.
+          examples: ['winlite']
+        adapter:
+          type: object
+          description: The "Warlock AWDL" network adapter.
+          required: [name, index, address, mtu]
+          properties:
+            name:
+              type: string
+              examples: ['Warlock AWDL']
+            index:
+              type: integer
+              description: Its interface index, for `DnsServiceRegister` and scoped addresses.
+            address:
+              description: Its only address, derived from `radio.address`.
+              $ref: '#/components/schemas/LinkLocal'
+            mtu:
+              type: integer
+              examples: [1450]
+        radio:
+          $ref: '#/components/schemas/Radio'
+        awdl:
+          type: object
+          required: [master, peers]
+          properties:
+            master:
+              description: The cluster's master, which may be Warlock itself; null when there's none yet.
+              oneOf:
+                - $ref: '#/components/schemas/MacAddress'
+                - type: 'null'
+            peers:
+              type: integer
+              description: How many peers Warlock hears.
+        traffic:
+          type: object
+          description: Packets through the adapter since Warlock started.
+          properties:
+            to_air:
+              type: integer
+              description: From Windows, sent to AWDL.
+            to_windows:
+              type: integer
+              description: From AWDL peers, delivered to Windows.
+            announced:
+              type: integer
+              description: mDNS packets Warlock wrote for peers' in-frame records.
+            unroutable:
+              type: integer
+              description: From Windows with no AWDL destination (e.g. IPv4), dropped.
+    Radio:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [absent, opening, up]
+          description: |
+            `absent`: no adapter plugged in. `opening`: starting it (about 8
+            s). `up`: taking part in AWDL.
+        address:
+          description: Warlock's AWDL address while `up`; a new random one each time it comes up.
+          $ref: '#/components/schemas/MacAddress'
+        channel:
+          type: integer
+          description: The channel it came up on.
+        width_mhz:
+          type: integer
+          enum: [20, 40]
+    Peer:
+      type: object
+      required: [address, ipv6, channel, rssi_dbm, since_last_frame_ms, frames, services]
+      properties:
+        address:
+          $ref: '#/components/schemas/MacAddress'
+        ipv6:
+          description: Its link-local address (from its AWDL address).
+          $ref: '#/components/schemas/LinkLocal'
+        host_name:
+          type: ['string', 'null']
+          description: Its host name, from its frames (ARPA).
+          examples: ['0b5e7c2a-1d3f-4e6a-9c8b-2f4d6a8c0e1f.local']
+        awdl_version:
+          type: ['string', 'null']
+          description: The AWDL version it reports, `major.minor`.
+          examples: ['3.4']
+        device_class:
+          type: ['integer', 'null']
+          description: |
+            Its device class as reported: 1 macOS, 2 iOS and iPadOS,
+            4 watchOS, 8 tvOS.
+        master:
+          description: The master it follows; itself when it's the master.
+          oneOf:
+            - $ref: '#/components/schemas/MacAddress'
+            - type: 'null'
+        channel:
+          type: integer
+          description: The channel of its latest frame.
+        rssi_dbm:
+          type: integer
+          description: The signal of its latest frame.
+        since_last_frame_ms:
+          type: integer
+        frames:
+          type: object
+          description: Frames received from it.
+          required: [psf, mif, data]
+          properties:
+            psf: { type: integer }
+            mif: { type: integer }
+            data: { type: integer }
+        sequence:
+          type: ['array', 'null']
+          description: Its channel in each of the 16 slots; 0 for none.
+          items: { type: integer }
+          minItems: 16
+          maxItems: 16
+        services:
+          $ref: '#/components/schemas/ServiceSet'
+    ServiceSet:
+      type: object
+      description: The service records a peer carries in its frames.
+      required: [update, records]
+      properties:
+        update:
+          type: ['integer', 'null']
+          description: Its service-update counter, which changes when the records do.
+        records:
+          type: array
+          items: { $ref: '#/components/schemas/ServiceRecord' }
+    ServiceRecord:
+      description: One DNS record, names written out in full.
+      oneOf:
+        - $ref: '#/components/schemas/PtrRecord'
+        - $ref: '#/components/schemas/SrvRecord'
+        - $ref: '#/components/schemas/TxtRecord'
+        - $ref: '#/components/schemas/OtherRecord'
+    PtrRecord:
+      type: object
+      required: [name, type, target]
+      properties:
+        name: { type: string, examples: ['_airdrop._tcp.local'] }
+        type: { const: PTR }
+        target: { type: string, examples: ['0123456789ab._airdrop._tcp.local'] }
+    SrvRecord:
+      type: object
+      required: [name, type, priority, weight, port, target]
+      properties:
+        name: { type: string }
+        type: { const: SRV }
+        priority: { type: integer }
+        weight: { type: integer }
+        port: { type: integer }
+        target: { type: string }
+    TxtRecord:
+      type: object
+      required: [name, type, strings]
+      properties:
+        name: { type: string }
+        type: { const: TXT }
+        strings:
+          type: array
+          description: Its strings as UTF-8, invalid bytes replaced by U+FFFD.
+          items: { type: string }
+          examples: [['flags=1019']]
+    OtherRecord:
+      type: object
+      required: [name, type, data]
+      properties:
+        name: { type: string }
+        type:
+          type: string
+          description: Its type in RFC 3597 form.
+          pattern: '^TYPE[0-9]+$'
+        data:
+          type: string
+          description: Its data, in hex.
+          pattern: '^([0-9a-f]{2})*$'
+    AdvertiseRequest:
+      type: object
+      required: [type]
+      properties:
+        type: { $ref: '#/components/schemas/ServiceType' }
+    AdvertisingState:
+      type: object
+      description: A line of the advertising stream.
+      required: [type, instances]
+      properties:
+        type: { $ref: '#/components/schemas/ServiceType' }
+        instances:
+          type: array
+          description: The instances of the type in Warlock's frames now.
+          items: { type: string }
+          examples: [['koala._rdlink._tcp.local']]
+    AdvertisedType:
+      type: object
+      required: [type, instances, owners]
+      properties:
+        type: { $ref: '#/components/schemas/ServiceType' }
+        instances:
+          type: array
+          items: { type: string }
+        owners:
+          type: array
+          items: { $ref: '#/components/schemas/Owner' }
+    HoldRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: Why, for logs and `GET /v1/holds`.
+          examples: ['call']
+    HoldState:
+      type: object
+      description: A line of the hold stream.
+      required: [active]
+      properties:
+        active:
+          type: boolean
+          description: Whether AWDL is up and Warlock is taking part; false while the radio is absent or opening.
+    Hold:
+      type: object
+      required: [reason, owner]
+      properties:
+        reason: { type: string }
+        owner: { $ref: '#/components/schemas/Owner' }
+    Event:
+      oneOf:
+        - $ref: '#/components/schemas/PeerFound'
+        - $ref: '#/components/schemas/PeerLost'
+        - $ref: '#/components/schemas/ServicesChanged'
+        - $ref: '#/components/schemas/MasterChanged'
+        - $ref: '#/components/schemas/RadioChanged'
+        - $ref: '#/components/schemas/AdvertisingChanged'
+      discriminator:
+        propertyName: event
+        mapping:
+          peer_found: '#/components/schemas/PeerFound'
+          peer_lost: '#/components/schemas/PeerLost'
+          services_changed: '#/components/schemas/ServicesChanged'
+          master_changed: '#/components/schemas/MasterChanged'
+          radio_changed: '#/components/schemas/RadioChanged'
+          advertising_changed: '#/components/schemas/AdvertisingChanged'
+    PeerFound:
+      type: object
+      required: [event, peer]
+      properties:
+        event: { const: peer_found }
+        peer: { $ref: '#/components/schemas/Peer' }
+    PeerLost:
+      type: object
+      required: [event, address]
+      properties:
+        event: { const: peer_lost }
+        address: { $ref: '#/components/schemas/MacAddress' }
+    ServicesChanged:
+      type: object
+      required: [event, address, services]
+      properties:
+        event: { const: services_changed }
+        address: { $ref: '#/components/schemas/MacAddress' }
+        services: { $ref: '#/components/schemas/ServiceSet' }
+    MasterChanged:
+      type: object
+      required: [event, master]
+      properties:
+        event: { const: master_changed }
+        master:
+          oneOf:
+            - $ref: '#/components/schemas/MacAddress'
+            - type: 'null'
+    RadioChanged:
+      type: object
+      required: [event, radio]
+      properties:
+        event: { const: radio_changed }
+        radio: { $ref: '#/components/schemas/Radio' }
+    AdvertisingChanged:
+      type: object
+      description: The instances Warlock advertises for a type changed.
+      required: [event, type, instances]
+      properties:
+        event: { const: advertising_changed }
+        type: { $ref: '#/components/schemas/ServiceType' }
+        instances:
+          type: array
+          items: { type: string }
