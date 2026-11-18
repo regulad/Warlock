@@ -1,34 +1,43 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! Developer CLI over warlock-usb: show which driver owns the T3U, bind it to
-//! WinUSB, or give it back to Windows.
+//! Developer CLI over warlock-usb: show which driver owns Warlock's adapter
+//! (the T3U v1, or another supported RTL8812BU/RTL8822BU), bind it to WinUSB,
+//! or give it back to Windows.
 //!
 //! Usage: warlock-usb [status|bind|release]
 
-use warlock_usb::{T3U_PID, T3U_VID, UsbDevice};
+use warlock_usb::{Model, REFERENCE, UsbDevice};
 
-fn show(dev: &UsbDevice) {
+fn show(dev: &UsbDevice, model: &Model) {
+    println!("model:     {} ({:04x}:{:04x})", model.name, model.vid, model.pid);
     println!("instance:  {}", dev.instance_id);
     println!("class:     {}", dev.class.as_deref().unwrap_or("-"));
     println!("service:   {}", dev.service.as_deref().unwrap_or("-"));
     println!("winusb:    {}", dev.is_winusb());
 }
 
-fn main() {
-    let cmd = std::env::args().nth(1).unwrap_or_else(|| "status".into());
-    let dev = match warlock_usb::find(T3U_VID, T3U_PID) {
-        Ok(Some(dev)) => dev,
+fn find() -> (UsbDevice, Model) {
+    match warlock_usb::find_supported() {
+        Ok(Some(found)) => found,
         Ok(None) => {
-            eprintln!("no {T3U_VID:04x}:{T3U_PID:04x} adapter is present");
+            eprintln!("no supported adapter is present");
             std::process::exit(2);
         }
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
-    };
+    }
+}
+
+fn main() {
+    let cmd = std::env::args().nth(1).unwrap_or_else(|| "status".into());
+    let (dev, model) = find();
+    if !model.is_reference() {
+        eprintln!("warning: not the {} Warlock is tested with", REFERENCE.name);
+    }
     let result = match cmd.as_str() {
         "status" => {
-            show(&dev);
+            show(&dev, &model);
             return;
         }
         "bind" if dev.is_winusb() => {
@@ -47,11 +56,8 @@ fn main() {
             if installed.reboot_required {
                 println!("done; Windows says a reboot is required");
             }
-            match warlock_usb::find(T3U_VID, T3U_PID) {
-                Ok(Some(dev)) => show(&dev),
-                Ok(None) => println!("adapter not present after the change"),
-                Err(e) => eprintln!("{e}"),
-            }
+            let (dev, model) = find();
+            show(&dev, &model);
         }
         Err(e) => {
             eprintln!("{e}");

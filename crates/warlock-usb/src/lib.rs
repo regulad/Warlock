@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Claims Warlock's USB Wi-Fi adapter for WinUSB, and gives it back.
 //!
-//! Out of the box Windows binds the TP-Link Archer T3U to its in-box Realtek
-//! Wi-Fi driver (`netrtwlanu.inf`). Warlock drives the radio from user space
-//! through libusb, which needs the device on WinUSB instead.
+//! Warlock is built around the TP-Link Archer T3U v1 ([`REFERENCE`]) and tries
+//! any other RTL8812BU/RTL8822BU adapter ([`MODELS`], [`find_supported`]).
+//! Out of the box Windows binds them to its in-box Realtek Wi-Fi driver
+//! (`netrtwlanu.inf`). Warlock drives the radio from user space through
+//! libusb, which needs the device on WinUSB instead.
 //!
 //! Binding uses only Microsoft-signed parts: it does what Device Manager's
 //! "Have Disk" does with `%windir%\INF\winusb.inf`. It builds a driver list
@@ -27,9 +29,77 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::*;
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_NO_MORE_ITEMS, GetLastError};
 use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
 
-/// The adapter Warlock is built around.
-pub const T3U_VID: u16 = 0x2357;
-pub const T3U_PID: u16 = 0x012d;
+/// A USB Wi-Fi adapter model on Realtek's RTL8812BU or RTL8822BU, which
+/// devourer's 8822B backend drives (devourer picks its backend from the chip,
+/// not the USB ID).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Model {
+    pub vid: u16,
+    pub pid: u16,
+    pub name: &'static str,
+}
+
+impl Model {
+    /// Whether this is [`REFERENCE`], the one Warlock is tested with.
+    pub fn is_reference(&self) -> bool {
+        *self == REFERENCE
+    }
+
+    /// Its hardware ID prefix, `USB\VID_xxxx&PID_xxxx`.
+    fn hardware_id(&self) -> String {
+        format!("USB\\VID_{:04X}&PID_{:04X}", self.vid, self.pid)
+    }
+}
+
+/// The adapter Warlock is built and tested around.
+pub const REFERENCE: Model = Model { vid: 0x2357, pid: 0x012d, name: "TP-Link Archer T3U v1" };
+pub const T3U_VID: u16 = REFERENCE.vid;
+pub const T3U_PID: u16 = REFERENCE.pid;
+
+const REALTEK: u16 = 0x0bda;
+
+/// Every adapter Warlock will try: the RTL8812BU/RTL8822BU models in Linux's
+/// rtw88 driver (`drivers/net/wireless/realtek/rtw88/rtw8822bu.c`, its
+/// `rtw_8822bu_id_table`), named as its comments name them. Only
+/// [`REFERENCE`] is tested; Warlock warns when it uses another.
+pub const MODELS: [Model; 36] = [
+    REFERENCE,
+    Model { vid: REALTEK, pid: 0xb812, name: "Realtek RTL8812BU/RTL8822BU" },
+    Model { vid: REALTEK, pid: 0xb82c, name: "Realtek RTL8812BU/RTL8822BU" },
+    Model { vid: REALTEK, pid: 0x2102, name: "Realtek (CCNC)" },
+    Model { vid: REALTEK, pid: 0xb81a, name: "Realtek (default ID)" },
+    Model { vid: 0x7392, pid: 0xb822, name: "Edimax EW-7822ULC" },
+    Model { vid: 0x7392, pid: 0xc822, name: "Edimax EW-7822UTC" },
+    Model { vid: 0x7392, pid: 0xd822, name: "Edimax" },
+    Model { vid: 0x7392, pid: 0xe822, name: "Edimax" },
+    Model { vid: 0x7392, pid: 0xf822, name: "Edimax EW-7822UAD" },
+    Model { vid: 0x0b05, pid: 0x1841, name: "ASUS AC1300 USB-AC55 B1" },
+    Model { vid: 0x0b05, pid: 0x184c, name: "ASUS U2" },
+    Model { vid: 0x0b05, pid: 0x19aa, name: "ASUS USB-AC58 rev A1" },
+    Model { vid: 0x0b05, pid: 0x1870, name: "ASUS" },
+    Model { vid: 0x0b05, pid: 0x1874, name: "ASUS" },
+    Model { vid: 0x2001, pid: 0x331e, name: "D-Link DWA-181" },
+    Model { vid: 0x2001, pid: 0x331c, name: "D-Link DWA-182 D1" },
+    Model { vid: 0x2001, pid: 0x331f, name: "D-Link DWA-183 D" },
+    Model { vid: 0x2001, pid: 0x3322, name: "D-Link DWA-T185 rev. A1" },
+    Model { vid: 0x13b1, pid: 0x0043, name: "Linksys WUSB6400M" },
+    Model { vid: 0x13b1, pid: 0x0045, name: "Linksys WUSB3600 v2" },
+    Model { vid: 0x2357, pid: 0x0138, name: "TP-Link Archer T3U Plus v1" },
+    Model { vid: 0x2357, pid: 0x0115, name: "TP-Link Archer T4U v3" },
+    Model { vid: 0x2357, pid: 0x012e, name: "TP-Link" },
+    Model { vid: 0x2357, pid: 0x0116, name: "TP-Link" },
+    Model { vid: 0x2357, pid: 0x0117, name: "TP-Link" },
+    Model { vid: 0x0846, pid: 0x9055, name: "Netgear A6150" },
+    Model { vid: 0x0e66, pid: 0x0025, name: "Hawking HW12ACU" },
+    Model { vid: 0x04ca, pid: 0x8602, name: "LiteOn" },
+    Model { vid: 0x20f4, pid: 0x808a, name: "TRENDnet TEW-808UBM" },
+    Model { vid: 0x20f4, pid: 0x805a, name: "TRENDnet TEW-805UBH" },
+    Model { vid: 0x056e, pid: 0x4011, name: "ELECOM WDB-867DU3S" },
+    Model { vid: 0x2c4e, pid: 0x0107, name: "Mercusys MA30H" },
+    Model { vid: 0x2c4e, pid: 0x010a, name: "Mercusys MA30N" },
+    Model { vid: 0x0411, pid: 0x03d1, name: "BUFFALO WI-U2-866DM" },
+    Model { vid: 0x0411, pid: 0x03d0, name: "BUFFALO WI-U3-866DHP" },
+];
 
 /// Setup class of the generic WinUSB driver node in winusb.inf.
 const USBDEVICE_CLASS_GUID: &str = "{88BAE032-5A81-49f0-BC3D-A4FF138216D6}";
@@ -65,6 +135,8 @@ fn last_error(op: &'static str) -> Error {
 pub struct UsbDevice {
     pub instance_id: String,
     pub hardware_ids: Vec<String>,
+    /// E.g. `USB\Class_ff&SubClass_ff&Prot_ff` for a vendor-specific interface.
+    pub compatible_ids: Vec<String>,
     /// Name of the function driver's service, e.g. `WinUSB` or `rtwlanu`.
     pub service: Option<String>,
     /// Setup class name, e.g. `Net` or `USBDevice`.
@@ -74,6 +146,30 @@ pub struct UsbDevice {
 impl UsbDevice {
     pub fn is_winusb(&self) -> bool {
         self.service.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("WinUSB"))
+    }
+
+    /// Whether this node is `model` (the device, or one of its interfaces).
+    fn is(&self, model: &Model) -> bool {
+        let want = model.hardware_id();
+        self.hardware_ids.iter().any(|h| {
+            let h = h.to_ascii_uppercase();
+            h == want || h.starts_with(&format!("{want}&"))
+        })
+    }
+
+    /// Whether this is the node to bind for Wi-Fi. An adapter with Bluetooth
+    /// too (RTL8822BU) is a composite device: Windows gives it a parent node
+    /// (`usbccgp`) and a node per interface (`…&MI_xx`), and the Wi-Fi one is
+    /// the vendor-specific interface (class FF), the one devourer claims
+    /// (`UsbOpen.cpp`). Binding only that leaves Bluetooth alone. A
+    /// single-function adapter, such as the T3U, has just the device node.
+    fn is_wifi_function(&self) -> bool {
+        let interface = self.hardware_ids.iter().any(|h| h.to_ascii_uppercase().contains("&MI_"));
+        if interface {
+            self.compatible_ids.iter().any(|c| c.to_ascii_uppercase().starts_with("USB\\CLASS_FF"))
+        } else {
+            !self.service.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("usbccgp"))
+        }
     }
 }
 
@@ -150,6 +246,7 @@ impl DevInfoSet {
         Some(UsbDevice {
             instance_id: self.instance_id(d)?,
             hardware_ids: self.property(d, SPDRP_HARDWAREID).map(|b| multi_sz(&b)).unwrap_or_default(),
+            compatible_ids: self.property(d, SPDRP_COMPATIBLEIDS).map(|b| multi_sz(&b)).unwrap_or_default(),
             service: self.property(d, SPDRP_SERVICE).map(|b| from_wide(&b)),
             class: self.property(d, SPDRP_CLASS).map(|b| from_wide(&b)),
         })
@@ -158,6 +255,21 @@ impl DevInfoSet {
     fn find(&self, instance_id: &str) -> Option<SP_DEVINFO_DATA> {
         self.devices().find(|d| self.instance_id(d).is_some_and(|id| id.eq_ignore_ascii_case(instance_id)))
     }
+}
+
+/// The supported adapter that's present, if any, and its model: the node to
+/// bind for its Wi-Fi ([`UsbDevice::is_wifi_function`]). [`REFERENCE`] comes
+/// first when several are present; otherwise the first in [`MODELS`].
+pub fn find_supported() -> Result<Option<(UsbDevice, Model)>> {
+    let set = DevInfoSet::present_usb()?;
+    let mut found: Vec<(UsbDevice, Model)> = set
+        .devices()
+        .filter_map(|d| set.describe(&d))
+        .filter(UsbDevice::is_wifi_function)
+        .filter_map(|dev| MODELS.iter().find(|m| dev.is(m)).map(|m| (dev, *m)))
+        .collect();
+    found.sort_by_key(|(_, m)| MODELS.iter().position(|x| x == m));
+    Ok(found.into_iter().next())
 }
 
 /// Finds a present USB device by vendor and product ID.
@@ -286,4 +398,50 @@ pub fn release(instance_id: &str) -> Result<Installed> {
         return Err(last_error("DiInstallDevice(best match)"));
     }
     Ok(Installed { reboot_required: reboot != 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(hardware_ids: &[&str], compatible_ids: &[&str], service: Option<&str>) -> UsbDevice {
+        UsbDevice {
+            instance_id: String::new(),
+            hardware_ids: hardware_ids.iter().map(|s| s.to_string()).collect(),
+            compatible_ids: compatible_ids.iter().map(|s| s.to_string()).collect(),
+            service: service.map(Into::into),
+            class: None,
+        }
+    }
+
+    #[test]
+    fn the_model_table_is_sound() {
+        assert_eq!(MODELS[0], REFERENCE);
+        for (i, a) in MODELS.iter().enumerate() {
+            assert!(MODELS[i + 1..].iter().all(|b| (a.vid, a.pid) != (b.vid, b.pid)), "{a:?} twice");
+        }
+    }
+
+    #[test]
+    fn a_single_function_adapter_is_its_device_node() {
+        let t3u = node(&["USB\\VID_2357&PID_012D&REV_0210", "USB\\VID_2357&PID_012D"], &[], Some("rtwlanu"));
+        assert!(t3u.is(&REFERENCE) && t3u.is_wifi_function());
+        // Another product ID that merely starts the same isn't it.
+        let other = node(&["USB\\VID_2357&PID_012DA"], &[], None);
+        assert!(!other.is(&REFERENCE));
+    }
+
+    #[test]
+    fn a_wifi_and_bluetooth_adapter_binds_only_its_vendor_interface() {
+        let parent = node(&["USB\\VID_2001&PID_331E"], &["USB\\COMPOSITE"], Some("usbccgp"));
+        let wifi = node(&["USB\\VID_2001&PID_331E&MI_02"], &["USB\\Class_ff&SubClass_ff&Prot_ff"], Some("rtwlanu"));
+        let bluetooth = node(&["USB\\VID_2001&PID_331E&MI_00"], &["USB\\Class_e0&SubClass_01&Prot_01"], Some("BTHUSB"));
+        let model = MODELS.iter().find(|m| m.pid == 0x331e).unwrap();
+        for n in [&parent, &wifi, &bluetooth] {
+            assert!(n.is(model));
+        }
+        assert!(!parent.is_wifi_function());
+        assert!(wifi.is_wifi_function());
+        assert!(!bluetooth.is_wifi_function());
+    }
 }

@@ -10,6 +10,7 @@ So the foundation is **Warlock** (formerly `wawdld`): a Windows Service that imp
 Pinned decisions:
 - All code in Rust, with a thin FFI shim down to devourer (C++20).
 - Hardware: TP-Link Archer T3U (RTL8812BU, devourer's "Jaguar2" backend, USB `2357:012d`). Ordered.
+  - **Other adapters (Parker, 2026-11-18):** Warlock also tries any other RTL8812BU/RTL8822BU adapter, the 36 IDs of Linux's rtw88 table (`warlock_usb::MODELS`), with a warning that it isn't the T3U v1 it's tested with. When several are present it takes the T3U first. For a Wi-Fi + Bluetooth adapter (RTL8822BU, a composite USB device) it binds only the vendor-specific interface, which devourer claims, so Bluetooth keeps working.
 - Audio sink: the existing VB-Audio virtual cable, fed from user space.
 - Separate repos per license zone.
 - Apps reach the link through a virtual NIC (Wintun).

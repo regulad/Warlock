@@ -165,17 +165,29 @@ fn random_addr() -> MacAddr {
     MacAddr([(b[0] & 0xfc) | 0x02, b[1], b[2], b[3], b[4], b[5]])
 }
 
-/// Puts the T3U on WinUSB if Windows has its own driver on it.
-fn claim_dongle() -> Result<(), Box<dyn Error>> {
-    let dev = warlock_usb::find(warlock_usb::T3U_VID, warlock_usb::T3U_PID)?
-        .ok_or("no TP-Link Archer T3U (2357:012d) is plugged in")?;
+/// Finds a supported adapter, preferring the T3U v1, and puts it on WinUSB if
+/// Windows has its own driver on it; which model it is.
+fn claim_dongle() -> Result<warlock_usb::Model, Box<dyn Error>> {
+    let (dev, model) = warlock_usb::find_supported()?
+        .ok_or("no supported adapter is plugged in (a TP-Link Archer T3U, or another RTL8812BU/RTL8822BU)")?;
+    if model.is_reference() {
+        info!(model = model.name, device = %dev.instance_id, "adapter");
+    } else {
+        warn!(
+            model = model.name,
+            id = format!("{:04x}:{:04x}", model.vid, model.pid),
+            device = %dev.instance_id,
+            "not the {} Warlock is tested with; trying it anyway",
+            warlock_usb::REFERENCE.name
+        );
+    }
     if !dev.is_winusb() {
         info!(device = %dev.instance_id, driver = ?dev.service, "binding the adapter to WinUSB");
         if warlock_usb::bind_winusb(&dev.instance_id)?.reboot_required {
             warn!("Windows asks for a reboot to finish binding the adapter");
         }
     }
-    Ok(())
+    Ok(model)
 }
 
 /// The radio's part of the control API's info.
@@ -207,11 +219,11 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     })?;
     info!(pipe = warlock_api::PIPE, "control API up");
 
-    claim_dongle()?;
+    let model = claim_dongle()?;
     let wintun = dll::load(&dll::ensure(&dll::default_root())?)?;
     let own = random_addr();
     info!(address = %own, channel = o.channel, width = o.width, metric = o.metric, "opening the radio (~8 s)");
-    let config = DevourerConfig { channel: o.channel, ..Default::default() };
+    let config = DevourerConfig { channel: o.channel, vid: model.vid, pid: model.pid, ..Default::default() };
     let config = if o.width == 40 { config.forty(o.channel) } else { config };
     let mut radio = DevourerRadio::open(&config)?;
     radio.set_ack_responder(own.0)?;
