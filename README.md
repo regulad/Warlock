@@ -35,8 +35,9 @@ changes to the API between 0.y versions.
 ## Install
 
 Download `Warlock-<version>-x64.msi` from
-[Releases](https://github.com/regulad/Warlock/releases) and run it. The
-packages are signed.
+[Releases](https://github.com/regulad/Warlock/releases) and run it. It shows
+the licences and asks where to install, and run again, offers to repair or
+remove Warlock. The packages are signed.
 
 Once Warlock is in winget, `winget install Regulad.Warlock` will install it
 and the Visual C++ runtime together.

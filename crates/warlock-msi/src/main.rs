@@ -28,6 +28,11 @@
 //! A newer version replaces an older one (and a rebuild of the same version
 //! replaces itself); an older one won't install over a newer one.
 //!
+//! Started by hand, it shows its own pages ([`ui`]): the licences
+//! ([`licence`], from the repository's licence files), the install folder,
+//! progress and the end; opened again, repair or remove. Silent installs,
+//! winget's among them, show none.
+//!
 //! `winget` writes winget's three manifests for a finished package, from what
 //! the package itself records (version, product and upgrade codes, the least
 //! runtime version) and its SHA-256, so it runs on the package as published:
@@ -41,6 +46,9 @@
 //! (`MsiDatabaseImportW`). Their column definitions are copied from MSIs
 //! Windows itself installed, exported from `C:\Windows\Installer` on
 //! 2026-11-18. Sequence numbers are Windows Installer's suggested ones.
+
+mod licence;
+mod ui;
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -215,8 +223,8 @@ struct Payload {
 
 /// Every table, filled in. `runtime_min` is the least Visual C++ runtime
 /// version (`14.50`) the binaries need.
-fn tables(version: &str, product_code: &str, runtime_min: &str, files: &[(Payload, u64)]) -> Vec<Table> {
-    let mut all = Vec::new();
+fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, files: &[(Payload, u64)]) -> Vec<Table> {
+    let mut all = ui::tables(licence);
 
     let mut property = Table::new("Property", &[("Property", "s72"), ("Value", "l0")], &["Property"]);
     for (k, v) in [
@@ -232,7 +240,10 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, files: &[(Payloa
         ("ARPCOMMENTS", "Apple Wireless Direct Link (AWDL) for Windows"),
         // Found by FindRelatedProducts in the UI, used by the elevated part.
         ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND"),
-    ] {
+    ]
+    .into_iter()
+    .chain(ui::PROPERTIES)
+    {
         property.row(vec![s(k), s(v)]);
     }
     all.push(property);
@@ -526,19 +537,21 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, files: &[(Payloa
     // there before, with its members.
     let fresh_install = Some("NOT REMOVE~=\"ALL\" AND NOT OLDERFOUND");
     let real_uninstall = Some("REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE");
-    all.push(sequence(
-        "InstallUISequence",
-        &[
-            ("FindRelatedProducts", None, 25),
-            ("AppSearch", None, 50),
-            ("LaunchConditions", None, 100),
-            ("CostInitialize", None, 800),
-            ("FileCost", None, 900),
-            ("CostFinalize", None, 1000),
-            ("MigrateFeatureStates", None, 1200),
-            ("ExecuteAction", None, 1300),
-        ],
-    ));
+    // With the dialogs (`ui`) between costing and executing.
+    let ui_sequence: Vec<(&str, Option<&str>, i32)> = [
+        ("FindRelatedProducts", None, 25),
+        ("AppSearch", None, 50),
+        ("LaunchConditions", None, 100),
+        ("CostInitialize", None, 800),
+        ("FileCost", None, 900),
+        ("CostFinalize", None, 1000),
+        ("MigrateFeatureStates", None, 1200),
+        ("ExecuteAction", None, 1300),
+    ]
+    .into_iter()
+    .chain(ui::SEQUENCE)
+    .collect();
+    all.push(sequence("InstallUISequence", &ui_sequence));
     all.push(sequence(
         "InstallExecuteSequence",
         &[
@@ -781,6 +794,7 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     let exes: Vec<&Path> =
         files.iter().filter(|(p, _)| p.key.ends_with(".exe")).map(|(p, _)| p.source.as_path()).collect();
     let runtime_min = runtime_min(&exes)?;
+    let licence = licence::rtf(root)?;
 
     let work = out.with_extension("work");
     let _ = std::fs::remove_dir_all(&work);
@@ -794,7 +808,7 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     // SAFETY: valid paths and out-parameter.
     check("creating the database", unsafe { MsiOpenDatabaseW(wide_path(out).as_ptr(), MSIDBOPEN_CREATE, &mut db) })?;
     let db = Handle(db);
-    for t in tables(version, &product_code, &runtime_min, &files) {
+    for t in tables(version, &product_code, &runtime_min, &licence, &files) {
         let file = format!("{}.idt", t.name);
         std::fs::write(work.join("idt").join(&file), t.idt()?)?;
         // SAFETY: valid handle and paths.
