@@ -1,0 +1,164 @@
+# Builds Warlock, signs it with Azure Artifact Signing and packages it:
+# Warlock-<version>-x64.msi, signed, with signed binaries inside.
+#
+# Building and signing are separate jobs. Only the signing jobs can reach
+# the signing account (the `id-token` permission, an environment's
+# secrets), and they run nothing but GitHub's and Microsoft's actions and a
+# signature check. Nothing built here runs there, so no build script of any
+# dependency is ever where it could mint the token and get something else
+# signed.
+#
+# A `v*` tag signs from the `release` environment, anything else (a run
+# started by hand) from `testing` (.github/settings.yml).
+name: Build and sign
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          cargo --version
+      - name: Build
+        run: cargo build --release --locked -p warlock -p warlockctl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-binaries
+          path: |
+            target/release/warlock.exe
+            target/release/warlockctl.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-binaries:
+    name: Sign the binaries
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'testing' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: unsigned-binaries
+          path: binaries
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: binaries
+          files-folder-filter: exe
+      - name: Check the signatures
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem binaries -Filter *.exe) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            "$($f.Name): $($s.Status), $($s.SignerCertificate.Subject), timestamped: $($null -ne $s.TimeStamperCertificate)"
+            if ($s.Status -ne 'Valid') { $bad++ }
+          }
+          exit $bad
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-binaries
+          path: binaries/*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    name: Package
+    needs: sign-binaries
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      # The licence texts; the package builder itself is built here.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-binaries
+          path: target/release
+      - name: Package
+        run: cargo run --locked -p warlock-msi -- --no-build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-package
+          path: target/msi/*.msi
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-package:
+    name: Sign the package
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'testing' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: unsigned-package
+          path: package
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: package
+          files-folder-filter: msi
+      # The package, and the binaries inside it, unpacked by an
+      # administrative install.
+      - name: Check the signatures
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem package -Filter *.msi | Select-Object -First 1
+          $p = Start-Process msiexec -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$env:RUNNER_TEMP\unpacked`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { "msiexec /a exit $($p.ExitCode)"; exit 1 }
+          $files = @($msi) + @(Get-ChildItem "$env:RUNNER_TEMP\unpacked" -Recurse -Filter *.exe)
+          $bad = 0
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            "$($f.Name): $($s.Status), $($s.SignerCertificate.Subject), timestamped: $($null -ne $s.TimeStamperCertificate)"
+            if ($s.Status -ne 'Valid') { $bad++ }
+          }
+          if ($files.Count -lt 3) { "expected the package and two binaries, found $($files.Count) files"; $bad++ }
+          exit $bad
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: package/*.msi
+          if-no-files-found: error

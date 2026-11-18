@@ -64,14 +64,17 @@ labels:
     color: "cfd3d7"
     description: This issue or PR already exists
 
-# Where the release workflow's secrets live: the Azure Artifact Signing
+# Where the signing workflow's secrets live: the Azure Artifact Signing
 # account it signs with, reached through GitHub's OIDC token rather than a
-# stored password. Azure's federated credential can trust this environment
-# alone (subject `repo:regulad/Warlock:environment:release`), and only runs
-# from `master` (to try signing) or a `v*` tag (a release) may enter it.
-# Secrets themselves aren't settings: they're set with `gh secret set --env
-# release`.
+# stored password. Azure's federated credentials trust these environments
+# (subject `repo:regulad/Warlock:environment:<name>`), which decide which
+# refs may use them. Both hold the same secrets, set with `gh secret set
+# --env <name>`: secrets aren't settings.
+#
+# Every environment the repository has must be listed: the Settings app
+# deletes any that isn't, and its secrets with it.
 environments:
+  # Releases: `v*` tags (and `master`).
   - name: release
     deployment_branch_policy:
       custom_branches:
@@ -79,6 +82,14 @@ environments:
           type: branch
         - name: v*
           type: tag
+  # Signing anything else, to try the pipeline: runs started by hand.
+  - name: testing
+    deployment_branch_policy:
+      custom_branches:
+        - name: master
+          type: branch
+        - name: testing
+          type: branch
 
 # No branch-protection rules — solo-maintainer repo, direct pushes to the
 # default branch are expected. Add rules here if that changes.
