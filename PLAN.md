@@ -21,11 +21,11 @@ Pinned decisions:
 ## Repos and licensing
 | Repo | License | Contents |
 |---|---|---|
-| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, control API (OpenAPI contract + server) |
+| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, control API (OpenAPI contract, itself GPL-2.0-only OR AGPL-3.0-or-later; server) |
 | `koala` | AGPL-3.0-or-later | Rapport, Continuity Capture control, media pipeline, app |
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
-- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. The contract is MIT (since 2026-11-18) so anyone, including the AGPL apps, can generate a client from it.
+- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. The contract is dual-licensed **GPL-2.0-only OR AGPL-3.0-or-later** (Parker, 2026-11-18; it was briefly MIT, as first planned): Warlock takes it under GPLv2, and the AGPL apps (Koala, AirDrop) under AGPLv3, since the two licences can't be combined with each other. Texts: `LICENSE.md` and `api/AGPL-3.0.md`.
 - Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`. **Enforced since 2026-11-18** by `deny.toml` (cargo-deny 0.20.2), which pre-commit runs whenever a manifest or the lock file changes; it also allows our own GPL-2.0 crates and bans `bincode`.
 - **`wintun.dll` (decided 2026-11-17).** It ships under WireGuard LLC's prebuilt-binaries license; its source is GPL-2.0.
   - **Decision:** Warlock loads it in-process. It is never bundled: Warlock downloads the pinned release from wintun.net at runtime, checks the zip's and the DLL's SHA-256, and keeps it in an admin-only directory (`crates/warlock-tun`).

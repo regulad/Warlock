@@ -5,8 +5,8 @@
 # Needs on PATH: cargo with its fmt and clippy subcommands, and Node.js for
 # the API lint.
 #
-# The licence text stays exactly as published.
-exclude: '^LICENSE\.md$'
+# The licence texts stay exactly as published.
+exclude: '^(LICENSE\.md|api/AGPL-3\.0\.md)$'
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
