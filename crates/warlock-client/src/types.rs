@@ -5,6 +5,13 @@
 //!
 //! Addresses are kept as the strings the contract specifies, so this crate
 //! needs nothing from the AWDL crates.
+//!
+//! A newer Warlock may add properties, event types and radio states without
+//! a break (the contract's "Compatibility"). Properties a type doesn't know
+//! are ignored. An event type or radio state it doesn't know arrives as
+//! [`Event::Unknown`] or [`RadioState::Unknown`], and both enums are
+//! `#[non_exhaustive]`, so a `match` on them already has an arm for what
+//! comes later.
 
 use std::net::Ipv6Addr;
 
@@ -70,6 +77,7 @@ pub struct Radio {
 /// Where the radio is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RadioState {
     /// No adapter plugged in.
     Absent,
@@ -77,6 +85,10 @@ pub enum RadioState {
     Opening,
     /// Taking part in AWDL.
     Up,
+    /// A state from a newer Warlock than this crate knows: not `Up`.
+    /// Warlock never sends it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The cluster.
@@ -240,6 +252,7 @@ pub struct Hold {
 /// A line of `GET /v1/events`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Event {
     PeerFound {
         peer: Box<Peer>,
@@ -263,6 +276,10 @@ pub enum Event {
         service_type: String,
         instances: Vec<String>,
     },
+    /// An event type from a newer Warlock than this crate knows, to skip.
+    /// Warlock never sends it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Whether `t` is a service type the contract accepts: `_` and an RFC 6335
@@ -300,6 +317,29 @@ mod tests {
         ] {
             assert!(!is_service_type(bad), "{bad}");
         }
+    }
+
+    /// What a newer Warlock may add without a break, this crate reads.
+    #[test]
+    fn a_newer_warlocks_additions_still_parse() {
+        use serde_json::{from_value, json};
+        let info = json!({
+            "version": "0.1.9",
+            "host_name": "h",
+            "adapter": null,
+            "radio": { "state": "sleeping", "since": "2026-11-18T00:00:00Z" },
+            "awdl": { "master": null, "peers": 0, "clusters": 1 },
+            "power": "low"
+        });
+        let info: Info = from_value(info).unwrap();
+        assert_eq!(info.radio.state, RadioState::Unknown);
+        let event: Event = from_value(json!({ "event": "peer_moved", "address": "02:00:00:00:00:01" })).unwrap();
+        assert_eq!(event, Event::Unknown);
+        let event: Event =
+            from_value(json!({ "event": "peer_lost", "address": "02:00:00:00:00:01", "why": "gone" })).unwrap();
+        assert_eq!(event, Event::PeerLost { address: "02:00:00:00:00:01".into() });
+        // Known values still parse as themselves.
+        assert_eq!(from_value::<RadioState>(json!("up")).unwrap(), RadioState::Up);
     }
 
     #[test]

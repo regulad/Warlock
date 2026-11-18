@@ -65,6 +65,14 @@ info:
     ## Errors
 
     Every 4xx and 5xx response carries an `Error`.
+
+    ## Compatibility
+
+    The version is semver, and before 1.0.0 the middle number is the one
+    that changes on a break. Without a break, Warlock may add properties to
+    any object, event types to `GET /v1/events` and radio states to
+    `Radio.state`. Clients ignore properties and event types they don't know,
+    and take a radio state they don't know as not `up`.
 # No HTTP authentication: who may connect is decided by the pipe's access
 # control list (see Transport), which OpenAPI can't express.
 security: []
@@ -348,7 +356,8 @@ components:
           enum: [absent, opening, up]
           description: |
             `absent`: no adapter plugged in. `opening`: starting it (about 8
-            s). `up`: taking part in AWDL.
+            s). `up`: taking part in AWDL. Newer versions may add states;
+            take one you don't know as not `up` (see Compatibility).
         address:
           description: Warlock's AWDL address while `up`; a new random one each time it comes up.
           $ref: '#/components/schemas/MacAddress'
@@ -518,6 +527,9 @@ components:
         reason: { type: string }
         owner: { $ref: '#/components/schemas/Owner' }
     Event:
+      description: |
+        One of these, by `event`. Newer versions may add event types; skip a
+        line whose `event` you don't know (see Compatibility).
       oneOf:
         - $ref: '#/components/schemas/PeerFound'
         - $ref: '#/components/schemas/PeerLost'

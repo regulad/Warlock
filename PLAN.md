@@ -50,7 +50,10 @@ Pinned decisions:
 - **Paths stay under `/v1`** through 0.y. A break after 1.0.0 would come with 2.0.0 and `/v2`.
 - Releases are tagged `vX.Y.Z`. Only `master` and those tags may use the `release` environment, which holds the signing secrets (`.github/settings.yml`).
 - No pre-release versions: an MSI's ProductVersion takes numbers only (at most 255.255.65535).
-- **The API is what semver counts:** the control API contract and `warlock-client`'s Rust API. Clients already ignore fields they don't know, so new fields are a `z` change. A new event type or radio state is not yet: today's client fails on one it doesn't know.
+- **The API is what semver counts:** the control API contract and `warlock-client`'s Rust API.
+- **Open event types and radio states (Parker, 2026-11-18, before 0.1.0).** Without a break, Warlock may add properties, event types and radio states: a `z` change. The contract's "Compatibility" section tells clients to ignore properties and event types they don't know, and to take an unknown radio state as not `up`.
+  - In `warlock-client`, unknown event types and radio states parse as `Event::Unknown` and `RadioState::Unknown`. Both enums are `#[non_exhaustive]`, so adding a variant doesn't break Rust code either.
+  - It had to come first: a 0.1.0 client without the catch-all would have failed on any later addition.
 
 ## Warlock architecture (one process, Windows Service)
 ```
