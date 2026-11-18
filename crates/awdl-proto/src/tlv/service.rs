@@ -187,10 +187,11 @@ fn type_name(service_type: &str) -> Result<DnsName<'static>, Error> {
     DnsName::encode(&t)
 }
 
-/// An instance's owner name: its label lowercased (Apple devices lowercase
-/// owner names, as mDNSResponder's D2D keys are), under its type.
+/// An instance's owner name: its label lowercased, A–Z only, as Apple
+/// devices send owner names (mDNSResponder's D2D keys, `DomainnameToLower`),
+/// under its type.
 fn instance_name(service_type: &str, instance: &str) -> Result<DnsName<'static>, Error> {
-    let lower = instance.to_lowercase();
+    let lower = instance.to_ascii_lowercase();
     let t = type_name(service_type)?;
     let mut labels = alloc::vec![crate::dns::Label::Text(lower.as_bytes())];
     labels.extend(t.labels());
@@ -274,11 +275,30 @@ impl<'a> ServiceResponse<'a> {
     }
 }
 
+/// The SSTH member for records named `name`: the CRC-8 (polynomial 0x07,
+/// initial value 0, unreflected: CRC-8/SMBUS) of the name in DNS wire format
+/// with A–Z lowercased, root label included. `None` if the name can't be
+/// written out.
+///
+/// Fitted to our captures (`examples/svcbits.rs`): in all 14 sets from an
+/// iPhone, two Macs and an Apple TV, every member is the CRC of a carried
+/// record's owner name (SRV and TXT share one), except one more on the Macs
+/// and the Apple TV: their SRV target host's, the owner of the address
+/// record D2D advertises for AWDL, which they don't carry as a TLV. The
+/// iPhone (iOS 27) sets none for it, and neither do we.
+pub fn ssth_member(name: &DnsName<'_>) -> Option<u8> {
+    let mut wire = name.to_wire()?;
+    wire.make_ascii_lowercase();
+    Some(wire.iter().fold(0u8, |crc, &b| {
+        (0..8).fold(crc ^ b, |c, _| if c & 0x80 != 0 { (c << 1) ^ 0x07 } else { c << 1 })
+    }))
+}
+
 /// Service parameters (type 6). The SUI counter changes when the sender's
 /// service records change. The set (bitmask and values) is what iOS 27's
-/// `wifip2pd` calls the SSTH: a 256-bit table, sent compressed (the bitmask
-/// says which of its 32 bytes follow), nonzero exactly while the sender
-/// advertises records, about one bit per record.
+/// `wifip2pd` calls the SSTH: a 256-bit table of [`ssth_member`]s, sent
+/// compressed (the bitmask says which of its 32 bytes follow), empty while
+/// the sender advertises nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceParams<'a> {
     /// Three bytes at the start: `wifip2pd`'s `flags` (u8) and `dwellTime`
@@ -309,6 +329,12 @@ impl<'a> ServiceParams<'a> {
             values: Bytes::Borrowed(values),
             trailing: Bytes::Borrowed(r.rest()),
         })
+    }
+
+    /// Parameters carrying `sui` and the SSTH for `records`: one member per
+    /// distinct owner name ([`ssth_member`]), as an iOS 27 iPhone sends.
+    pub fn for_records(sui: u16, records: &[ServiceResponse<'_>]) -> ServiceParams<'static> {
+        Self::with_set(sui, records.iter().filter_map(|r| ssth_member(&r.name)))
     }
 
     /// Parameters carrying `sui` and the set of `members` (0–255), encoded
@@ -384,6 +410,22 @@ mod tests {
         assert_eq!(txt.rdata, Rdata::Txt(Bytes::Borrowed(b"\x0aflags=1019")));
         // Each converts back to the full standard names.
         assert_eq!(ptr.rdata.to_wire(&ptr.name).unwrap(), b"\x0c0123456789ab\x08_airdrop\x04_tcp\x05local\x00");
+    }
+
+    /// Members every device sets for these types' PTRs, in our captures.
+    #[test]
+    fn ssth_members_match_apple_devices() {
+        let airdrop = ServiceResponse::ptr("_airdrop._tcp", "0123456789ab").unwrap();
+        assert_eq!(ssth_member(&airdrop.name), Some(158));
+        let clink = ServiceResponse::ptr("_companion-link._tcp", "CLink-0123456789ab").unwrap();
+        assert_eq!(ssth_member(&clink.name), Some(183));
+        // SRV and TXT share their owner's member; case doesn't matter.
+        let srv = ServiceResponse::srv("_airdrop._tcp", "0123456789AB", 1, "h.local").unwrap();
+        let txt = ServiceResponse::txt("_airdrop._tcp", "0123456789ab", &["a=b"]).unwrap();
+        assert_eq!(ssth_member(&srv.name), ssth_member(&txt.name));
+        let p = ServiceParams::for_records(3, &[airdrop, srv, txt]);
+        assert_eq!(p.set_values().count(), 2);
+        assert!(p.set_values().any(|v| v == 158));
     }
 
     #[test]

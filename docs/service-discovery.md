@@ -41,15 +41,26 @@ standing query, so nothing has to be sniffed back out of Windows.
     session, a WebSocket. Nothing else about the service goes through the API.
     The type stays watched only while that connection is open.
 
-  For each named type, Warlock:
+  For each named type, Warlock (`crates/warlock/src/advertise.rs`; named
+  with `--advertise` until the API exists):
   - keeps a standing `DnsStartMulticastQuery` for the type's PTR on its
-    adapter (verified below);
+    adapter (verified below), and an AAAA query for each SRV target;
   - treats an instance as local when its SRV target resolves to the adapter's
     own address. The adapter has exactly one address, our EUI-64 link-local,
-    and no AWDL peer can share it;
-  - encodes local instances' PTR/SRV/TXT records (plus our ARPA host name)
-    into our Service Response TLVs, so passive peers see them;
+    and no AWDL peer can share it. Windows answers AAAA only for its own host
+    name (`<computer>.local`), not for a host name a registration makes up,
+    so **apps must give Windows' host name as the target**: a made-up one is
+    unresolvable for everyone, and isn't advertised;
+  - encodes local instances' PTR/SRV/TXT records as Apple devices do, with
+    the target as our ARPA host name, into every MIF, and sets the Service
+    Parameters' update counter and SSTH to match
+    (`docs/awdl-field-observations.md`);
   - withdraws an instance from the TLVs on its goodbye (TTL 0).
+
+  Verified on the adapter (2026-11-17): a registration targeting
+  `winlite.local` was advertised and withdrawn with its registration; one
+  targeting `made-up.local` was not. Not yet seen: an Apple device finding a
+  service through our TLVs alone.
 - **Browse** (decided by Parker, 2026-11-17; done the same day). Apps browse
   with Windows' own DNS-SD and need nothing from Warlock's API. Peers that
   answer mDNS are found as on any network. For peers that advertise only in

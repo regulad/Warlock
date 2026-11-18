@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 pub use datapath::{DataPathExt, DataPathState, InfraInfo, ext_flags, flags as data_path_flags};
 pub use election::{ElectionParams, ElectionParamsV2, PrivateElection};
 pub use misc::{Arpa, HtCapabilities, Ieee80211Container, SyncTree, VersionTlv, device_class};
-pub use service::{Rdata, ServiceParams, ServiceResponse, rr_type};
+pub use service::{Rdata, ServiceParams, ServiceResponse, rr_type, ssth_member};
 pub use sync::{Channel, ChannelSequence, ChannelSequenceTlv, SyncParams, encoding};
 
 use crate::wire::{Put, Reader, len_u16};

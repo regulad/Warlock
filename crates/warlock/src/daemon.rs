@@ -20,6 +20,7 @@ use tracing::{info, warn};
 use warlock_radio::{DevourerConfig, DevourerRadio, Radio};
 use warlock_tun::{Tun, addr, dll};
 
+use crate::advertise::Advertiser;
 use crate::discovery::Discovery;
 
 const ETHERTYPE_IPV6: u16 = 0x86dd;
@@ -46,6 +47,10 @@ pub struct Options {
     pub seconds: Option<u64>,
     /// Log every packet crossing the adapter (`--log-packets`), either way.
     pub log_packets: bool,
+    /// Service types whose Windows registrations on the adapter we advertise
+    /// on AWDL (`--advertise _x._tcp`, repeatable); the control API's job
+    /// later (`docs/service-discovery.md`).
+    pub advertise: Vec<String>,
 }
 
 /// One line about an IPv6 packet: addresses, protocol, UDP ports, length.
@@ -71,7 +76,8 @@ fn describe(packet: &[u8]) -> String {
 impl Options {
     /// Parses `--channel N`, `--width 20|40` and `--metric N`.
     pub fn parse(args: &[String]) -> Result<Self, Box<dyn Error>> {
-        let mut o = Self { channel: 149, width: 40, metric: 60, seconds: None, log_packets: false };
+        let mut o =
+            Self { channel: 149, width: 40, metric: 60, seconds: None, log_packets: false, advertise: Vec::new() };
         let mut it = args.iter();
         while let Some(flag) = it.next() {
             if flag == "--log-packets" {
@@ -84,6 +90,7 @@ impl Options {
                 "--width" => o.width = value.parse()?,
                 "--metric" => o.metric = value.parse()?,
                 "--seconds" => o.seconds = Some(value.parse()?),
+                "--advertise" => o.advertise.push(value.clone()),
                 _ => return Err(format!("unknown option {flag}").into()),
             }
         }
@@ -156,6 +163,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     });
 
     let mut discovery = Discovery::new(MTU as usize);
+    let mut advertiser = Advertiser::new(tun.index, tun.address, &o.advertise);
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
     let (mut to_air, mut to_windows, mut unroutable, mut announced) = (0u64, 0u64, 0u64, 0u64);
     let mut buf = vec![0u8; 65536];
@@ -225,6 +233,15 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
             }
         }
         announced += write_to_windows(&tun, discovery.refresh(Instant::now()), o.log_packets);
+        if let Some((records, host)) = advertiser.poll(Instant::now()) {
+            let instances: Vec<String> = records
+                .iter()
+                .filter(|r| matches!(r.rdata, Rdata::Srv { .. }))
+                .map(|r| r.name.to_dotted())
+                .collect();
+            info!(?instances, ?host, "advertising");
+            engine.set_services(records, host);
+        }
         if last_enforce.elapsed() >= Duration::from_secs(2) {
             last_enforce = Instant::now();
             if let Err(e) = tun.enforce_address() {

@@ -68,6 +68,20 @@ widens during transfers.
   - a frame without records doesn't mean "none": a Mac's MIFs had none under
     counters 0 and 2, then always its 3 under 5. Live, a lone empty MIF came
     between ones with records.
+- **Service Parameters (TLV 6)**, named after iOS 27's `wifip2pd`
+  (`AWDLActionFrame.ServiceParameter`): `flags` (u8), `dwellTime` (u16),
+  `serviceUpdateIndicator` (the SUI) and the `SSTH`, a 256-bit table sent
+  compressed (`ssthByteMap`, then the nonzero bytes):
+  - a member per carried record's owner name: the CRC-8/SMBUS (polynomial
+    0x07, init 0) of the name in DNS wire format, A–Z lowercased. Found by
+    fitting the captures, then checked on every frame with records (8,379);
+  - Macs (macOS 11) and the Apple TV also set their SRV target host's
+    member: the owner of the address record D2D advertises for AWDL, which
+    isn't a TLV. The iPhone (iOS 27) never does, and neither does Warlock;
+  - empty while nothing is advertised;
+  - `wifip2pd` also has an `ssthRequest`, and Service Request TLVs carry
+    `requestedOffset`, `requestedLength` and `key`: presumably a peer checks
+    the SSTH, then asks for records it lacks.
 - **What triggers advertising:** a Mac sharing a file, AirDrop discoverable
   by everyone, advertised nothing in its frames until an iPhone appeared,
   then `_airdrop._tcp`. Two iOS devices nearby advertised

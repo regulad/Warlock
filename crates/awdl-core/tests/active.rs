@@ -283,6 +283,14 @@ fn advertised_services_reach_a_listening_engine() {
         let Ok(Some(Frame::Action { action, .. })) = parse(&s.mpdu) else { panic!() };
         let n = action.tlvs().filter(|t| t.kind == kind::SERVICE_RESPONSE).count();
         assert_eq!(n, if s.kind == TxKind::Mif { 3 } else { 0 }, "{:?}", s.kind);
+        // Every frame's SSTH: one member for the type, one for the instance.
+        let Some(Ok(TlvBody::ServiceParams(sp))) = action.find(kind::SERVICE_PARAMS).map(|t| t.decode()) else {
+            panic!()
+        };
+        let want: std::collections::BTreeSet<u32> =
+            records.iter().filter_map(|r| awdl_proto::tlv::ssth_member(&r.name)).map(u32::from).collect();
+        assert_eq!(sp.set_values().collect::<std::collections::BTreeSet<_>>(), want);
+        assert_eq!(want.len(), 2);
     }
     wireshark_accepts(&sent);
 

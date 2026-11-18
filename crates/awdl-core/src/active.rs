@@ -114,11 +114,6 @@ impl TxConfig {
     }
 }
 
-/// The SSTH members for `records` (see [`ServiceParams`]). Apple devices set
-/// about one bit per record, by a hash not yet known; until it is, none.
-fn ssth(_records: &[ServiceResponse<'_>]) -> Vec<u8> {
-    Vec::new()
-}
 
 /// What the frame builder needs to know about the cluster at send time.
 #[derive(Clone, Copy)]
@@ -325,7 +320,7 @@ pub(crate) fn build(
         TlvBody::ElectionParams(election),
         TlvBody::ChannelSequence(ChannelSequenceTlv { sequence: tlv18, trailing: Bytes::Borrowed(&[0, 0, 0]) }),
         TlvBody::ElectionParamsV2(election_v2),
-        TlvBody::ServiceParams(ServiceParams::with_set(cfg.services_sui, ssth(&cfg.services))),
+        TlvBody::ServiceParams(ServiceParams::for_records(cfg.services_sui, &cfg.services)),
         TlvBody::DataPathState(data_path),
         TlvBody::HtCapabilities(ht_capabilities(cfg.ht_40mhz)),
         TlvBody::Version(VersionTlv {

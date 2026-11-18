@@ -9,6 +9,7 @@
 //!
 //! options: --channel N (149)  --width 20|40 (40)  --metric N (60)  --seconds N (run until stopped)
 //!          --log-packets (log every packet crossing the adapter)
+//!          --advertise _x._tcp (repeatable: advertise Windows' registrations of this type on AWDL)
 //! ```
 //!
 //! Either way it claims the TP-Link Archer T3U for WinUSB if Windows has its
@@ -16,6 +17,7 @@
 //! the "Warlock AWDL" network adapter (`warlock-tun`), so Windows' own tools
 //! reach AWDL peers: `ping -6 fe80::<peer's EUI-64>%<adapter index>`.
 
+mod advertise;
 mod daemon;
 mod discovery;
 mod logging;

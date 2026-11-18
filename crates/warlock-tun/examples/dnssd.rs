@@ -4,7 +4,7 @@
 //!
 //!     dnssd browse   <type, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
 //!     dnssd resolve  <instance, e.g. Foo._airplay._tcp.local> <ifindex>
-//!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60]
+//!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60] [host=warlock-test.local]
 //!     dnssd mquery   <name, e.g. _airplay._tcp.local> <ifindex> [seconds=20] [PTR|SRV|TXT|AAAA]
 //!
 //! Prints every record or instance Windows hands back. `mquery` is a
@@ -164,7 +164,7 @@ fn main() {
         }
         Some("register") if args.len() >= 6 => {
             let full = format!("{}.{}", args[1], args[2]);
-            let host = wide("warlock-test.local");
+            let host = wide(args.get(7).map_or("warlock-test.local", |s| s));
             let ip6: Ipv6Addr = args[5].parse().expect("IPv6 address");
             let ip6 = IP6_ADDRESS { IP6Byte: ip6.octets() };
             let (k, v) = (wide("note"), wide("warlock dnssd test"));
