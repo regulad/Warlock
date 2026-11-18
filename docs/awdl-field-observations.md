@@ -55,6 +55,24 @@ widens during transfers.
   - `_appsvcprepair._tcp` → SRV and TXT with the same keys plus `dnm=<device name>`.
 - **During an active AirDrop:** additionally `<12 hex>._airdrop._tcp` and
   `CLink-<12 hex>._companion-link._tcp` (Rapport).
+- **Encoding** (captures and live, 2026-11-17):
+  - every PTR's data is the instance label followed by `0xC000`, which
+    stands for the record's own name (the service type); Wireshark shows it
+    as nothing. Owner names use only codes `0xC001`, `0xC004`, `0xC007` and
+    `0xC00A`; SRV targets end in `0xC00C` (`local`);
+  - names are lowercased (`clink-…`), while the device's own mDNS uses
+    `CLink-…`;
+  - a frame with records carries the whole set: under one service-update
+    counter, every frame with records held the same ones. iPhones and Macs
+    send them in MIFs, the Apple TV in PSFs;
+  - a frame without records doesn't mean "none": a Mac's MIFs had none under
+    counters 0 and 2, then always its 3 under 5. Live, a lone empty MIF came
+    between ones with records.
+- **What triggers advertising:** a Mac sharing a file, AirDrop discoverable
+  by everyone, advertised nothing in its frames until an iPhone appeared,
+  then `_airdrop._tcp`. Two iOS devices nearby advertised
+  `_companion-link._tcp` while it shared. The Apple TV advertised nothing
+  while idle, whether it led or followed us.
 
 ## The Apple TV (iOS 8.4.4-based)
 

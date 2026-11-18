@@ -21,7 +21,7 @@ use crate::{Bytes, Error};
 ///
 /// `0xC000` is different: in record data it stands for the record's own
 /// name. Every PTR in our captures is `<instance label>` + `0xC000` under a
-/// service type's name, e.g. `crappletv` + `0xC000` under
+/// service type's name, e.g. `Living Room` + `0xC000` under
 /// `_airplay._tcp.local`. Wireshark shows it as nothing, and so does
 /// [`DnsName::to_dotted`]; [`DnsName::to_wire_in`] writes it out.
 pub const DICTIONARY: [(u16, &str); 15] = [
@@ -269,8 +269,8 @@ mod tests {
         assert_eq!(n.to_wire().unwrap(), b"\x04host\x05local\x00");
         // In record data, 0xC000 is the record's own name: a PTR's instance.
         let owner = DnsName::from_labels(&[Label::Compressed(0xC001)]).unwrap();
-        let ptr = DnsName::from_labels(&[Label::Text(b"crappletv"), Label::Compressed(0xC000)]).unwrap();
-        assert_eq!(ptr.to_wire_in(Some(&owner)).unwrap(), b"\x09crappletv\x08_airplay\x04_tcp\x05local\x00");
+        let ptr = DnsName::from_labels(&[Label::Text(b"Living Room"), Label::Compressed(0xC000)]).unwrap();
+        assert_eq!(ptr.to_wire_in(Some(&owner)).unwrap(), b"\x0bLiving Room\x08_airplay\x04_tcp\x05local\x00");
         // Anywhere else it means nothing we know.
         assert_eq!(ptr.to_wire(), None);
         // Unknown code, empty label.

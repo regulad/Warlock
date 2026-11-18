@@ -205,10 +205,18 @@ pub struct Peer {
     /// address record (Apple's D2D advertises both for AWDL), so this name's
     /// address is the peer's link-local address.
     pub arpa_name: Option<DnsName<'static>>,
-    /// Its service records (Service Response TLVs), as its latest MIF had
-    /// them. Every MIF carries the whole set: in our captures, all of a
-    /// peer's MIFs under one service-update counter held the same records.
+    /// Its service records (Service Response TLVs), as its latest frame
+    /// carrying any had them: a frame with records carries the whole set.
+    /// In our captures, every frame with records under one service-update
+    /// counter held the same set: an iPhone's and a Mac's MIFs, an Apple
+    /// TV's PSFs. A frame without records doesn't mean the set is empty,
+    /// unless it's a MIF under a new counter: a Mac sent MIFs under counters
+    /// 0 and 2 with no records, then only MIFs with its 3 records under 5;
+    /// live, a lone empty MIF came between ones with records.
     pub services: Vec<ServiceResponse<'static>>,
+    /// The service-update counter (Service Parameters TLV) that `services`
+    /// goes with.
+    pub services_sui: Option<u16>,
     /// Its AW clock on our TSF.
     pub clock: AwClock,
     /// Its latest sync claim, and what the clock made of it.
@@ -244,6 +252,7 @@ impl Peer {
             hostname: None,
             arpa_name: None,
             services: Vec::new(),
+            services_sui: None,
             clock: AwClock::new(),
             last_claim: None,
             master_channel: None,
@@ -361,7 +370,7 @@ impl Engine {
                     p.psfs += 1;
                 }
                 let (mut v1, mut v2, mut from_sync, mut from_tlv18) = (None, None, None, None);
-                let (mut services, mut arpa) = (Vec::new(), None);
+                let (mut services, mut arpa, mut sui) = (Vec::new(), None, None);
                 for t in action.tlvs() {
                     match t.decode() {
                         Ok(TlvBody::SyncParams(s)) => {
@@ -386,13 +395,23 @@ impl Engine {
                             arpa = Some(a.name.into_owned());
                         }
                         Ok(TlvBody::ServiceResponse(s)) => services.push(s.into_owned()),
+                        Ok(TlvBody::ServiceParams(s)) => sui = Some(s.sui),
                         _ => {}
                     }
                 }
                 let mut changed = false;
-                if action.is_mif() && services != p.services {
-                    p.services = services;
-                    changed = true;
+                if !services.is_empty() {
+                    p.services_sui = sui.or(p.services_sui);
+                    if services != p.services {
+                        p.services = services;
+                        changed = true;
+                    }
+                } else if action.is_mif() && sui.is_some() && sui != p.services_sui {
+                    p.services_sui = sui;
+                    if !p.services.is_empty() {
+                        p.services.clear();
+                        changed = true;
+                    }
                 }
                 if arpa.is_some() && arpa != p.arpa_name {
                     p.arpa_name = arpa;

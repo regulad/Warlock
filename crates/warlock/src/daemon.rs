@@ -182,7 +182,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
                     Event::Packet { .. } => {}
                     Event::ServicesChanged(a) => {
                         let Some(p) = engine.peer(a) else { continue };
-                        info!(peer = %a, host = ?p.hostname, instances = ?instances(p), "services");
+                        info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
                         announced += write_to_windows(&tun, discovery.update(p), o.log_packets);
                     }
                     Event::PeerLost(a) => {

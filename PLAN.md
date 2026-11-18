@@ -118,7 +118,7 @@ Pinned decisions:
   - Firewall rules: allow only what clients register. Windows' own multicast on the adapter (MLD, LLMNR, SSDP, WS-Discovery, mDNS) is carried, not filtered: nothing known about AWDL forbids it (Parker, 2026-11-17).
   - **Service discovery (critical for Koala; see `docs/service-discovery.md`):** AWDL carries records both as Service Response TLVs in action frames (Apple's D2D) and as ordinary multicast mDNS in data frames. Windows stays the registrar and Warlock doesn't sniff:
     - Advertise (Parker, 2026-11-17): clients register with Windows themselves (`DnsServiceRegister` on the adapter) and only **name the service type** through the control API. Warlock keeps a standing `DnsStartMulticastQuery` per named type on its adapter, which Windows' own responder answers. Instances whose SRV target resolves to the adapter's own address are ours; Warlock encodes their records into our TLVs and withdraws them on goodbye (TTL 0).
-    - Browse: `DnsServiceBrowse`/`Resolve` on the adapter, merged with records learned from peers' TLVs → found/lost events on the control API.
+    - Browse (Parker, 2026-11-17; done and verified the same day): apps use Windows' own DNS-SD. Warlock writes peers' TLV records onto its adapter as mDNS announcements (from the peer's link-local, TTL 120, re-announced every 60 s, goodbyes when dropped or lost), so Windows also finds peers that advertise only in frames. A Mac's `_airdrop._tcp` was found by `DnsServiceBrowse`, `DnsServiceResolve` and WinRT's watcher from Warlock's announcements alone.
     - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former.
 - **Control API** (replaces the earlier postcard named-pipe IPC plan): an HTTP/1.1 REST API served on a local socket, specified first in `api/openapi.yaml`, with the server inside the `warlock` service. Scope and open decisions: the API contract task under Milestones.
 - **`warlock-ctl`** (binary): a client of the control API, the way `docker` is of the Engine API. Status, peers, live log tail, `capture` to pcapng (`pcap-file`) for Wireshark.
@@ -196,7 +196,7 @@ Pinned decisions:
 
     When the connection closes, whether the app exits cleanly or crashes, Warlock withdraws the types and releases the holds. Nothing is created outside a session, so nothing can leak. `GetNamedPipeClientProcessId` names the owning process in logs and `warlock-ctl`.
   - Plain HTTP endpoints, for `warlock-ctl`: daemon and radio status; peers; pcapng capture; one error model.
-  - Open: browsing for peers that only advertise in TLVs. Either a session subscription, or Warlock writes those records onto its adapter as mDNS answers so apps browse with Windows' own APIs (try first; needs Windows to cache unsolicited answers).
+  - Browsing needs nothing in the API: Warlock writes peers' TLV records onto its adapter as mDNS, and apps browse with Windows' own DNS-SD (`docs/service-discovery.md`).
   - Open: how the session's messages are specified. OpenAPI 3.1 can describe the upgrade endpoint but not the message exchange; JSON Schema components in the same document, or an AsyncAPI document beside it.
   - The data plane stays the Wintun NIC; the API is control only.
   - Server stack: tokio's named-pipe server behind axum 0.8 (a custom `Listener`), with axum's WebSocket support. Still to pick: how the server is checked against the contract.

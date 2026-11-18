@@ -50,13 +50,23 @@ standing query, so nothing has to be sniffed back out of Windows.
   - encodes local instances' PTR/SRV/TXT records (plus our ARPA host name)
     into our Service Response TLVs, so passive peers see them;
   - withdraws an instance from the TLVs on its goodbye (TTL 0).
-- **Browse.** For a client's browse, Warlock:
-  - runs `DnsServiceBrowse` / `DnsServiceResolve` (or `DnsStartMulticastQuery`)
-    on its adapter;
-  - merges the results with records learned from peers' TLVs;
-  - delivers found/lost events on the control API.
+- **Browse** (decided by Parker, 2026-11-17; done the same day). Apps browse
+  with Windows' own DNS-SD and need nothing from Warlock's API. Peers that
+  answer mDNS are found as on any network. For peers that advertise only in
+  their frames, Warlock writes their Service Response TLVs onto its adapter
+  as mDNS announcements, as Apple's D2D puts them in mDNSResponder's cache
+  (`crates/warlock/src/discovery.rs`):
+  - from the peer's link-local address to `ff02::fb`;
+  - its PTR, SRV and TXT records, plus an AAAA giving its ARPA host name its
+    link-local address (the ARPA TLV is the reverse of that address record);
+  - TTL 120, D2D's own; everything is re-announced every 60 s;
+  - goodbyes (TTL 0) for records the peer drops, and for all of them when the
+    peer times out.
 
-  A TLV record is "lost" when its peer times out or its SUI changes.
+  How the TLVs are read (`docs/awdl-field-observations.md`, "Service records
+  in TLVs"): a frame with records carries the peer's whole set; a frame
+  without records keeps it, unless it's a MIF under a new service-update
+  counter.
 - **Carry mDNS.** Multicast mDNS frames move between the Warlock adapter and
   AWDL multicast slots in both directions:
   - accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb` on receive;
@@ -71,15 +81,25 @@ standing query, so nothing has to be sniffed back out of Windows.
   enumerate services registered by other processes. A standing query sees
   them, but only for a service type you already know (next section). So:
   - an app that registers with Windows but never names its type to Warlock
-    gets no TLV advertisement;
-  - an app that browses Windows directly misses TLV-only peers.
+    gets no TLV advertisement.
 - **To verify:**
   - the goodbye on Warlock's adapter (seen on Wi-Fi only so far);
   - whether a registration on all interfaces (`InterfaceIndex` 0) is answered
     on the adapter.
+- **Browsing peers that advertise only in frames (verified 2026-11-17).** A
+  Mac (macOS 11, AirDrop discoverable by everyone, sharing a file) advertised
+  `<12 hex>._airdrop._tcp` in its TLVs and had sent Windows no mDNS of
+  its own. Warlock announced it, and then:
+  - `DnsServiceBrowse` answered at once with PTR, SRV, TXT and AAAA, all with
+    TTL 71: Warlock's 120 s, 49 s after its last re-announcement. The Mac's
+    own answers, which came only later, carry TTL 4500 on PTR and TXT, and
+    NSEC records;
+  - `DnsServiceResolve` and WinRT's DNS-SD watcher gave the full instance:
+    host, port, TXT and `fe80::…%<adapter>`.
 
-  Optional fallback: Warlock synthesizes mDNS responses for TLV-learned records
-  onto its adapter.
+  Earlier runs showed Windows accepting the announcements and goodbyes, and
+  found two encoding bugs, now fixed: a PTR's `0xC000` (the record's own
+  name) and empty MIFs.
 - **Watching Windows' own registrations (verified 2026-11-17)**, with
   `warlock-tun`'s `dnssd mquery` and `dnssdwatch` examples, on Wi-Fi and on
   the Warlock adapter, against a `DnsServiceRegister` made by another process:
