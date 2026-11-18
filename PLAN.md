@@ -51,7 +51,7 @@ Pinned decisions:
 - **Paths stay under `/v1`** through 0.y. A break after 1.0.0 would come with 2.0.0 and `/v2`.
 - **Releasing:**
   1. Set the version in `Cargo.toml` and commit it.
-  2. Push an annotated tag: `git tag -a vX.Y.Z -m "<release notes>"`, then `git push origin vX.Y.Z`.
+  2. Push an annotated tag: `git tag -a vX.Y.Z -m "<release notes>"`, then `git push origin vX.Y.Z`. git drops message lines starting with `#`, so Markdown headings need `--cleanup=verbatim`.
   3. `.github/workflows/build.yml` builds, signs from the `release` environment (every signature must be valid), and packages.
   4. It writes winget's manifests for that package, and publishes a GitHub release carrying the signed MSI and the three manifests, with the tag's message as its notes. It fails if the tag isn't the package's version.
   5. Parker submits the manifests to `microsoft/winget-pkgs` (`manifests/r/Regulad/Warlock/X.Y.Z/`).
