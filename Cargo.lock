@@ -1283,6 +1283,7 @@ dependencies = [
  "serde_norway",
  "tokio",
  "tracing",
+ "warlock-client",
  "windows-sys",
 ]
 
@@ -1292,6 +1293,20 @@ version = "0.1.0"
 dependencies = [
  "pcap-file",
  "radiotap",
+]
+
+[[package]]
+name = "warlock-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1333,7 +1348,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "warlock-api",
+ "warlock-client",
 ]
 
 [[package]]

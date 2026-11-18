@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
-//! A client of the API, for `warlockctl` and the tests. Programs outside
-//! Warlock speak HTTP to the pipe themselves (`api/openapi.yaml`).
+// SPDX-License-Identifier: GPL-2.0-only OR AGPL-3.0-or-later
+//! The client, for `warlockctl`, Warlock's tests and other programs. Any
+//! HTTP client on the pipe works as well (`api/openapi.yaml`).
 //!
 //! Each call opens its own connection, as locks need: a lock lasts as long
 //! as its [`Lines`] (and so its connection) is kept. Needs a Tokio runtime.

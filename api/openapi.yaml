@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only OR AGPL-3.0-or-later
 # Dual-licensed, at your choice: GPL-2.0-only, as Warlock takes it
 # (LICENSE.md), or AGPL-3.0-or-later, as programs under the AGPL that use
-# Warlock can (AGPL-3.0.md). PLAN.md, "Repos and licensing".
+# Warlock can (LICENSE-AGPL-3.0.md). PLAN.md, "Repos and licensing".
 openapi: 3.2.0
 info:
   title: Warlock API

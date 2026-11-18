@@ -6,7 +6,7 @@
 # the API lint.
 #
 # The licence texts stay exactly as published.
-exclude: '^(LICENSE\.md|api/AGPL-3\.0\.md)$'
+exclude: '^LICENSE(-AGPL-3\.0)?\.md$'
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

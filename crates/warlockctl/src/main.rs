@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: AGPL-3.0-only
 //! warlockctl: Warlock's control API from the command line
 //! (`api/openapi.yaml`), the way `docker` is a client of Docker's.
 //!
@@ -21,7 +21,7 @@
 
 use std::process::ExitCode;
 
-use warlock_api::client::{Client, ClientError, Lines};
+use warlock_client::{Client, ClientError, Lines};
 
 const USAGE: &str =
     "usage: warlockctl [--pipe NAME] info|peers|peer ADDRESS|advertising|holds|advertise TYPE|hold REASON|events";
@@ -58,7 +58,7 @@ async fn run(client: &Client, command: &str, arg: Option<&str>) -> Result<(), Cl
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut pipe = warlock_api::PIPE.to_string();
+    let mut pipe = warlock_client::PIPE.to_string();
     if args.first().map(String::as_str) == Some("--pipe") {
         if args.len() < 2 {
             eprintln!("{USAGE}");

@@ -28,6 +28,13 @@ allow = [
     "GPL-2.0-only",
     "GPL-2.0-or-later",
 ]
+# AGPL only where it's ours to choose: warlockctl, which links nothing
+# GPL-2.0-only. Allowed globally, an AGPL dependency could reach the
+# GPL-2.0 daemon, and the two can't be combined. (warlock-client is
+# "GPL-2.0-only OR AGPL-3.0-or-later", which the GPL-2.0-only allowance covers.)
+exceptions = [
+    { crate = "warlockctl", allow = ["AGPL-3.0-only"] },
+]
 confidence-threshold = 0.93
 # The list is policy, not an inventory: allowed licences nothing uses yet are fine.
 unused-allowed-license = "allow"

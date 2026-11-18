@@ -21,11 +21,15 @@ Pinned decisions:
 ## Repos and licensing
 | Repo | License | Contents |
 |---|---|---|
-| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, control API (OpenAPI contract, itself GPL-2.0-only OR AGPL-3.0-or-later; server) |
+| `Warlock` | GPL-2.0-only (decided 2026-11-16), matching devourer (GPL-2.0-only), which is linked in-process. License text: `LICENSE.md`, from the FSF | devourer submodule + FFI shim, radio, AWDL protocol + engine, service, CLI, control API server. Except: the API contract and `warlock-client` are GPL-2.0-only OR AGPL-3.0-or-later, and `warlockctl` is AGPL-3.0-only |
 | `koala` | AGPL-3.0-or-later | Rapport, Continuity Capture control, media pipeline, app |
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
-- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. The contract is dual-licensed **GPL-2.0-only OR AGPL-3.0-or-later** (Parker, 2026-11-18; it was briefly MIT, as first planned): Warlock takes it under GPLv2, and the AGPL apps (Koala, AirDrop) under AGPLv3, since the two licences can't be combined with each other. Texts: `LICENSE.md` and `api/AGPL-3.0.md`.
+- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. Licences around the API (Parker, 2026-11-18), since GPLv2 and AGPLv3 can't be combined with each other:
+  - The contract (`api/openapi.yaml`) is **GPL-2.0-only OR AGPL-3.0-or-later** (briefly MIT, as first planned): Warlock takes it under GPLv2, the AGPL apps (Koala, AirDrop) under AGPLv3.
+  - **`warlock-client`** (its wire types and HTTP client) is dual-licensed the same way, for Warlock's server and for any other program to import.
+  - **`warlockctl`** is **AGPL-3.0-only** and links only `warlock-client` of ours. `deny.toml` allows AGPL for that crate alone, so no AGPL dependency can reach the GPL-2.0 daemon.
+  - Texts: `LICENSE.md` (GPLv2) and `LICENSE-AGPL-3.0.md`, both as the FSF publishes them.
 - Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`. **Enforced since 2026-11-18** by `deny.toml` (cargo-deny 0.20.2), which pre-commit runs whenever a manifest or the lock file changes; it also allows our own GPL-2.0 crates and bans `bincode`.
 - **`wintun.dll` (decided 2026-11-17).** It ships under WireGuard LLC's prebuilt-binaries license; its source is GPL-2.0.
   - **Decision:** Warlock loads it in-process. It is never bundled: Warlock downloads the pinned release from wintun.net at runtime, checks the zip's and the DLL's SHA-256, and keeps it in an admin-only directory (`crates/warlock-tun`).
@@ -121,7 +125,7 @@ Pinned decisions:
     - Browse (Parker, 2026-11-17; done and verified the same day): apps use Windows' own DNS-SD. Warlock writes peers' TLV records onto its adapter as mDNS announcements (from the peer's link-local, TTL 120, re-announced every 60 s, goodbyes when dropped or lost), so Windows also finds peers that advertise only in frames. A Mac's `_airdrop._tcp` was found by `DnsServiceBrowse`, `DnsServiceResolve` and WinRT's watcher from Warlock's announcements alone.
     - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former.
 - **Control API** (replaces the earlier postcard named-pipe IPC plan): an HTTP/1.1 REST API served on a local socket, specified first in `api/openapi.yaml`, with the server inside the `warlock` service. Scope and open decisions: the API contract task under Milestones.
-- **`warlockctl`** (binary, `crates/warlockctl`, 2026-11-18): a client of the control API, the way `docker` is of the Engine API. `info`, `peers`, `peer`, `advertising`, `holds` print JSON; `advertise TYPE`, `hold REASON` and `events` hold their stream until Ctrl+C. No capture command: Wireshark captures on the adapter (Parker, 2026-11-18).
+- **`warlockctl`** (binary, `crates/warlockctl`, AGPL-3.0-only, 2026-11-18): a client of the control API through `warlock-client`, the way `docker` is of the Engine API. `info`, `peers`, `peer`, `advertising`, `holds` print JSON; `advertise TYPE`, `hold REASON` and `events` hold their stream until Ctrl+C. No capture command: Wireshark captures on the adapter (Parker, 2026-11-18).
 
 ### Key external crates (Warlock zone, all GPLv2-compatible)
 `windows`/`windows-sys`, `windows-service`, `wintun-bindings`, `libusb1-sys` (vendored), `cmake`, `rtrb`, `tokio`, `hyper`/`axum` (control API), `serde`, `pcap-file`, `tracing` + `tracing-etw`, `simple-dns` (for the bridge's mDNS encoding).
@@ -199,7 +203,7 @@ Pinned decisions:
   - No capture endpoint (Parker, 2026-11-18): capture on the "Warlock AWDL" adapter with Wireshark.
   - Browsing needs nothing in the API: Warlock writes peers' TLV records onto its adapter as mDNS, and apps browse with Windows' own DNS-SD (`docs/service-discovery.md`).
   - The data plane stays the Wintun NIC; the API is control only.
-  - **Implemented 2026-11-18** in `crates/warlock-api`: the server, its wire types (one per contract schema) and a client. The daemon starts it before the radio, publishes state every 250 ms, forwards engine events, and applies the types and holds locks ask for (`Advertiser::set_types`).
+  - **Implemented 2026-11-18**: the server in `crates/warlock-api`; the wire types (one per contract schema) and a client in `crates/warlock-client`. The daemon starts the server before the radio, publishes state every 250 ms, forwards engine events, and applies the types and holds locks ask for (`Advertiser::set_types`).
     - Server stack: tokio's named-pipe server and hyper 1 directly. Not axum: it depends on `sync_wrapper`, which is Apache-2.0 only, and cargo-deny rejected it.
     - The pipe: first instance exclusive (a second Warlock fails to start), remote clients rejected, a spare instance listening, DACL for SYSTEM, Administrators and `warlock-users` when the group exists. Until the installer creates that group, only elevated clients get in.
     - Hyper notices a closed client at once: in tests a lock is released 13–23 ms after its client closes the connection, so the 2 s heartbeat is only a backstop.

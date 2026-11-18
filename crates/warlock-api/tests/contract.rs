@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use http::{Method, StatusCode};
 use jsonschema::{Draft, Registry};
 use serde_json::{Value, json};
-use warlock_api::client::{Client, ClientError, Lines};
-use warlock_api::types::*;
 use warlock_api::{Daemon, HEARTBEAT, OPERATIONS, Security, Server, State};
+use warlock_client::types::*;
+use warlock_client::{Client, ClientError, Lines};
 
 const CONTRACT: &str = "urn:warlock:openapi";
 

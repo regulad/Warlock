@@ -1,13 +1,15 @@
 [package]
 name = "warlockctl"
 version = "0.1.0"
-description = "A client of Warlock's control API, the way docker is of the Engine API"
+description = "Warlock's control API from the command line, the way docker is a client of Docker's"
 edition.workspace = true
-license.workspace = true
+# AGPL, unlike Warlock itself; it links only warlock-client, which is
+# dual-licensed for this (PLAN.md, "Repos and licensing").
+license = "AGPL-3.0-only"
 authors.workspace = true
 
 [dependencies]
-warlock-api.workspace = true
+warlock-client.workspace = true
 serde = "1.0.229"
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["rt", "macros"] }

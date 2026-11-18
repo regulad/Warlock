@@ -39,7 +39,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tracing::{debug, info, warn};
 
 use crate::pipe::{Client, PipeListener, Security};
-use crate::types::*;
+use warlock_client::types::*;
 
 /// The longest a lock stream goes without a line.
 pub const HEARTBEAT: Duration = Duration::from_secs(2);

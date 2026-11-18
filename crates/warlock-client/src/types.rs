@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only OR AGPL-3.0-or-later
 //! The API's JSON, one type per schema in `api/openapi.yaml`
 //! (`components/schemas`), with the same names. The contract is the
 //! authority: `tests/contract.rs` checks what the server sends against it.
