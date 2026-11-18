@@ -457,37 +457,42 @@ impl Run<'_> {
                     }
                 }
             }
-            let Some(now) = radio.tsf_now() else { continue };
-            // Windows → AWDL: every IPv6 packet with an AWDL address to go to
-            // (none for IPv4: the adapter has no ARP).
-            while let Some(n) = self.tun.try_recv(&mut buf) {
-                let packet = &buf[..n];
-                if o.log_packets {
-                    info!("from Windows: {}", describe(packet));
-                }
-                if o.no_mdns_to_air && is_mdns(packet) {
-                    self.mdns_held += 1;
-                    continue;
-                }
-                let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
-                    self.traffic.unroutable += 1;
-                    continue;
-                };
-                self.traffic.to_air += 1;
-                engine.send_packet(now, MacAddr(mac), ETHERTYPE_IPV6, packet.to_vec());
-            }
-            for a in engine.poll(now) {
-                match a {
-                    Action::Hop(c) => {
-                        if let Err(e) = radio.hop(c) {
-                            warn!("hop to {c}: {e}");
-                        }
+            // The engine's clock is the radio's TSF, known from received
+            // frames: until one arrives, nothing goes to the air. The rest of
+            // the loop (records, locks, the API) runs regardless.
+            let tsf = radio.tsf_now();
+            if let Some(now) = tsf {
+                // Windows → AWDL: every IPv6 packet with an AWDL address to go
+                // to (none for IPv4: the adapter has no ARP).
+                while let Some(n) = self.tun.try_recv(&mut buf) {
+                    let packet = &buf[..n];
+                    if o.log_packets {
+                        info!("from Windows: {}", describe(packet));
                     }
-                    Action::Transmit { mpdu, rate_500kbps, kind } => {
-                        if let Err(e) = radio.send(&mpdu, rate_500kbps) {
-                            warn!("sending {kind:?}: {e}");
-                        } else if kind == TxKind::AddbaResponse {
-                            info!("answered a Block Ack setup");
+                    if o.no_mdns_to_air && is_mdns(packet) {
+                        self.mdns_held += 1;
+                        continue;
+                    }
+                    let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
+                        self.traffic.unroutable += 1;
+                        continue;
+                    };
+                    self.traffic.to_air += 1;
+                    engine.send_packet(now, MacAddr(mac), ETHERTYPE_IPV6, packet.to_vec());
+                }
+                for a in engine.poll(now) {
+                    match a {
+                        Action::Hop(c) => {
+                            if let Err(e) = radio.hop(c) {
+                                warn!("hop to {c}: {e}");
+                            }
+                        }
+                        Action::Transmit { mpdu, rate_500kbps, kind } => {
+                            if let Err(e) = radio.send(&mpdu, rate_500kbps) {
+                                warn!("sending {kind:?}: {e}");
+                            } else if kind == TxKind::AddbaResponse {
+                                info!("answered a Block Ack setup");
+                            }
                         }
                     }
                 }
@@ -518,7 +523,7 @@ impl Run<'_> {
                 self.info.traffic = Some(self.traffic.clone());
                 self.control.publish(warlock_api::State {
                     info: self.info.clone(),
-                    peers: engine.peers().map(|p| api::peer(p, Some(now))).collect(),
+                    peers: engine.peers().map(|p| api::peer(p, tsf)).collect(),
                     advertised: advertised.clone(),
                 });
             }

@@ -13,10 +13,12 @@
 //! - `warlock.exe`, `warlockctl.exe` and both licence texts into
 //!   `C:\Program Files\Warlock`, which joins the system `PATH`;
 //! - the Warlock service: LocalSystem, automatic (delayed) start, its own
-//!   service SID, restarted on failure;
-//! - `warlock setup` after the files (the `warlock-users` group), and on an
-//!   uninstall that isn't an upgrade, `warlock teardown` (the adapter back to
-//!   Windows' own driver, the group removed).
+//!   service SID;
+//! - `warlock setup` once the service exists and before it starts (the
+//!   `warlock-users` group, the service's restart-on-failure actions; undone
+//!   if a fresh install rolls back), and on an uninstall that isn't an
+//!   upgrade, `warlock teardown` (the adapter back to Windows' own driver,
+//!   the group removed).
 //!
 //! A newer version replaces an older one (and a rebuild of the same version
 //! replaces itself); an older one won't install over a newer one.
@@ -24,9 +26,7 @@
 //! Tables are written as Windows Installer's own `.idt` text and imported
 //! (`MsiDatabaseImportW`). Their column definitions are copied from MSIs
 //! Windows itself installed, exported from `C:\Windows\Installer` on
-//! 2026-11-18; `MsiServiceConfigFailureActions`, which none of them had,
-//! follows Microsoft's documentation of that table. Sequence numbers are
-//! Windows Installer's suggested ones.
+//! 2026-11-18. Sequence numbers are Windows Installer's suggested ones.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -75,6 +75,8 @@ const FILE_VITAL: i32 = 512;
 const CA_EXE_AS_SYSTEM: i32 = 18 + 1024 + 2048;
 /// `msidbCustomActionTypeContinue`: the exit code doesn't fail the install.
 const CA_CONTINUE: i32 = 64;
+/// `msidbCustomActionTypeRollback`: runs only if the install rolls back.
+const CA_ROLLBACK: i32 = 256;
 /// `SERVICE_WIN32_OWN_PROCESS`.
 const OWN_PROCESS: i32 = 0x10;
 /// `SERVICE_AUTO_START`.
@@ -395,48 +397,26 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         ]);
     all.push(service_config);
 
-    let mut failure = Table::new(
-        "MsiServiceConfigFailureActions",
-        &[
-            ("MsiServiceConfigFailureActions", "s72"),
-            ("Name", "l255"),
-            ("Event", "i2"),
-            ("ResetPeriod", "I4"),
-            ("RebootMessage", "L255"),
-            ("Command", "L255"),
-            ("Actions", "S255"),
-            ("DelayActions", "S255"),
-            ("Component_", "s72"),
-        ],
-        &["MsiServiceConfigFailureActions"],
-    );
-    // Restart (SC_ACTION_RESTART) after 5 s, 10 s, then 60 s; forgiven
-    // after a day.
-    failure.row(vec![
-        s("WarlockFailureActions"),
-        s(SERVICE),
-        n(CONFIG_EVENTS),
-        n(86_400),
-        None,
-        None,
-        s("1[~]1[~]1"),
-        s("5000[~]10000[~]60000"),
-        s("Warlock"),
-    ]);
-    all.push(failure);
+    // No MsiServiceConfigFailureActions: Windows Installer fails to set
+    // restart actions ("access denied", error 1939, seen 2026-11-18), as they
+    // need the service opened with start access too. `warlock setup` sets them.
 
     let mut custom = Table::new(
         "CustomAction",
         &[("Action", "s72"), ("Type", "i2"), ("Source", "S72"), ("Target", "S255"), ("ExtendedType", "I4")],
         &["Action"],
     );
-    custom.row(vec![s("WarlockSetup"), n(CA_EXE_AS_SYSTEM), s("warlock.exe"), s("setup"), None]).row(vec![
-        s("WarlockTeardown"),
-        n(CA_EXE_AS_SYSTEM | CA_CONTINUE),
-        s("warlock.exe"),
-        s("teardown"),
-        None,
-    ]);
+    custom
+        .row(vec![s("WarlockSetup"), n(CA_EXE_AS_SYSTEM), s("warlock.exe"), s("setup"), None])
+        // If the install fails after WarlockSetup ran: its group goes again.
+        .row(vec![
+            s("WarlockSetupRollback"),
+            n(CA_EXE_AS_SYSTEM | CA_ROLLBACK | CA_CONTINUE),
+            s("warlock.exe"),
+            s("setup --undo"),
+            None,
+        ])
+        .row(vec![s("WarlockTeardown"), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s("teardown"), None]);
     all.push(custom);
 
     let mut environment = Table::new(
@@ -450,6 +430,9 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
     all.push(environment);
 
     let install = Some("NOT REMOVE~=\"ALL\"");
+    // Only a fresh install takes its group back: an upgrade's group was
+    // there before, with its members.
+    let fresh_install = Some("NOT REMOVE~=\"ALL\" AND NOT OLDERFOUND");
     let real_uninstall = Some("REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE");
     all.push(sequence(
         "InstallUISequence",
@@ -487,10 +470,13 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
             ("RemoveFolders", None, 3600),
             ("CreateFolders", None, 3700),
             ("InstallFiles", None, 4000),
-            ("WarlockSetup", install, 4100),
             ("WriteEnvironmentStrings", None, 5200),
             ("InstallServices", Some("VersionNT"), 5800),
             ("MsiConfigureServices", Some("VersionNT"), 5850),
+            // Once the service exists (for its failure actions), before it
+            // starts; a rollback action goes before the action it undoes.
+            ("WarlockSetupRollback", fresh_install, 5870),
+            ("WarlockSetup", install, 5875),
             ("StartServices", Some("VersionNT"), 5900),
             ("RegisterUser", None, 6000),
             ("RegisterProduct", None, 6100),
