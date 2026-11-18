@@ -17,7 +17,8 @@ use awdl_proto::ieee80211::Header;
 use awdl_proto::dns::DnsName;
 use awdl_proto::tlv::{
     Arpa, Channel, ChannelSequence, ChannelSequenceTlv, DataPathExt, DataPathState, ElectionParams, ElectionParamsV2,
-    HtCapabilities, InfraInfo, ServiceParams, SyncParams, SyncTree, TlvBody, VersionTlv, device_class,
+    HtCapabilities, InfraInfo, ServiceParams, ServiceResponse, SyncParams, SyncTree, TlvBody, VersionTlv,
+    device_class,
 };
 use awdl_proto::{Bytes, MacAddr};
 
@@ -78,6 +79,13 @@ pub struct TxConfig {
     /// devices' counters run from 2 to past 16,000; a master's advances
     /// about every 3 s. An experiment; 0 by default.
     pub self_counter_start: u32,
+    /// Service records we advertise: Service Response TLVs in every MIF, as
+    /// iPhones and Macs send theirs. Set through
+    /// [`crate::Engine::set_services`], which keeps `services_sui` in step.
+    pub services: Vec<ServiceResponse<'static>>,
+    /// Our service-update counter (Service Parameters TLV): changes whenever
+    /// `services` does, so peers re-read them.
+    pub services_sui: u16,
 }
 
 impl TxConfig {
@@ -100,8 +108,16 @@ impl TxConfig {
             tlv_overrides: Vec::new(),
             aw_seq_offset: 0,
             self_counter_start: 0,
+            services: Vec::new(),
+            services_sui: 0,
         }
     }
+}
+
+/// The SSTH members for `records` (see [`ServiceParams`]). Apple devices set
+/// about one bit per record, by a hash not yet known; until it is, none.
+fn ssth(_records: &[ServiceResponse<'_>]) -> Vec<u8> {
+    Vec::new()
 }
 
 /// What the frame builder needs to know about the cluster at send time.
@@ -294,24 +310,22 @@ pub(crate) fn build(
         trailing: Bytes::Borrowed(&[]),
     };
     let tlv18 = v.sequence_tlv18.unwrap_or(v.sequence_legacy).clone();
-    let arpa = match (&cfg.hostname, kind) {
-        (Some(h), awdl_proto::action::subtype::MIF) => DnsName::encode(&format!("{h}.local"))
-            .ok()
-            .map(|name| TlvBody::Arpa(Arpa { flags: 3, name })),
+    let mif = kind == awdl_proto::action::subtype::MIF;
+    let arpa = match &cfg.hostname {
+        Some(h) if mif => {
+            DnsName::encode(&format!("{h}.local")).ok().map(|name| TlvBody::Arpa(Arpa { flags: 3, name }))
+        }
         _ => None,
     };
+    let services: Vec<TlvBody<'_>> =
+        if mif { cfg.services.iter().cloned().map(TlvBody::ServiceResponse).collect() } else { Vec::new() };
+    let extra: Vec<&TlvBody<'_>> = arpa.iter().chain(services.iter()).collect();
     let bodies = [
         TlvBody::SyncParams(sync),
         TlvBody::ElectionParams(election),
         TlvBody::ChannelSequence(ChannelSequenceTlv { sequence: tlv18, trailing: Bytes::Borrowed(&[0, 0, 0]) }),
         TlvBody::ElectionParamsV2(election_v2),
-        TlvBody::ServiceParams(ServiceParams {
-            unknown: [0; 3],
-            sui: 0,
-            bitmask: 0,
-            values: Bytes::Borrowed(&[]),
-            trailing: Bytes::Borrowed(&[]),
-        }),
+        TlvBody::ServiceParams(ServiceParams::with_set(cfg.services_sui, ssth(&cfg.services))),
         TlvBody::DataPathState(data_path),
         TlvBody::HtCapabilities(ht_capabilities(cfg.ht_40mhz)),
         TlvBody::Version(VersionTlv {
@@ -323,7 +337,7 @@ pub(crate) fn build(
     ];
     let mut b = ActionFrameBuilder::new(&header, &action);
     let overridden = |kind: u8| cfg.tlv_overrides.iter().find(|(k, _)| *k == kind);
-    for t in bodies.iter().chain(arpa.iter()) {
+    for t in bodies.iter().chain(extra.iter().copied()) {
         match overridden(t.kind()) {
             None => b.tlv(t).expect("our own TLVs fit their length fields"),
             Some((k, Some(v))) => b.raw_tlv(*k, v).expect("an override fits a TLV"),
@@ -332,7 +346,7 @@ pub(crate) fn build(
     }
     for (k, v) in &cfg.tlv_overrides {
         if let Some(v) = v
-            && !bodies.iter().chain(arpa.iter()).any(|t| t.kind() == *k)
+            && !bodies.iter().chain(extra.iter().copied()).any(|t| t.kind() == *k)
         {
             b.raw_tlv(*k, v).expect("an override fits a TLV");
         }

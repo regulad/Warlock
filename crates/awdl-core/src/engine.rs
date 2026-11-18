@@ -643,6 +643,19 @@ impl Engine {
         out
     }
 
+    /// Sets the service records we advertise in our MIFs, and the host name
+    /// in our ARPA TLV (`<hostname>.local`, the name the records' SRV
+    /// targets give for our address). A change advances our service-update
+    /// counter, so peers re-read them. Without `Config::transmit`, nothing.
+    pub fn set_services(&mut self, services: Vec<ServiceResponse<'static>>, hostname: Option<String>) {
+        let Some(tx) = self.config.transmit.as_mut() else { return };
+        if tx.services != services || tx.hostname != hostname {
+            tx.services = services;
+            tx.hostname = hostname;
+            tx.services_sui = tx.services_sui.wrapping_add(1);
+        }
+    }
+
     /// Queues a packet for a peer (or a multicast group) as an AWDL data
     /// frame. [`Engine::poll`] sends it in the next transmit window where the
     /// peer's own sequence puts it on our channel; multicast goes in the next

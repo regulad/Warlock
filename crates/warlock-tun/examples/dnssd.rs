@@ -5,7 +5,7 @@
 //!     dnssd browse   <type, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
 //!     dnssd resolve  <instance, e.g. Foo._airplay._tcp.local> <ifindex>
 //!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60]
-//!     dnssd mquery   <name, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
+//!     dnssd mquery   <name, e.g. _airplay._tcp.local> <ifindex> [seconds=20] [PTR|SRV|TXT|AAAA]
 //!
 //! Prints every record or instance Windows hands back. `mquery` is a
 //! standing multicast query (`DnsStartMulticastQuery`): does it report
@@ -213,7 +213,12 @@ fn main() {
                 Version: DNS_QUERY_REQUEST_VERSION1,
                 ulRefCount: 0,
                 Query: name.as_ptr(),
-                QueryType: DNS_TYPE_PTR,
+                QueryType: match args.get(4).map(String::as_str) {
+                    Some("AAAA") => DNS_TYPE_AAAA,
+                    Some("SRV") => DNS_TYPE_SRV,
+                    Some("TXT") => DNS_TYPE_TEXT,
+                    _ => DNS_TYPE_PTR,
+                },
                 QueryOptions: 0,
                 InterfaceIndex: args[2].parse().expect("ifindex"),
                 pQueryCallback: Some(on_mquery),
@@ -226,7 +231,7 @@ fn main() {
             let mut handle: MDNS_QUERY_HANDLE = unsafe { std::mem::zeroed() };
             // SAFETY: the request, its string and the handle outlive the query.
             let rc = unsafe { DnsStartMulticastQuery(&req, &mut handle) };
-            println!("DnsStartMulticastQuery({} PTR) on interface {}: {rc}", args[1], args[2]);
+            println!("DnsStartMulticastQuery({} {}) on interface {}: {rc}", args[1], args.get(4).map_or("PTR", |s| s), args[2]);
             if rc == 0 {
                 std::thread::sleep(Duration::from_secs(args.get(3).map_or(20, |s| s.parse().unwrap())));
                 // SAFETY: the handle from the start above.

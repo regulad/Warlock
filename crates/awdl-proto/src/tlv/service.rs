@@ -179,6 +179,48 @@ pub struct ServiceResponse<'a> {
     pub trailing: Bytes<'a>,
 }
 
+/// `service_type` (`_x._tcp`, with or without `.local`) as Apple devices
+/// encode a record's owner name: lowercased, longest dictionary suffix.
+fn type_name(service_type: &str) -> Result<DnsName<'static>, Error> {
+    let t = service_type.trim_end_matches('.').to_ascii_lowercase();
+    let t = if t.ends_with(".local") { t } else { alloc::format!("{t}.local") };
+    DnsName::encode(&t)
+}
+
+/// An instance's owner name: its label lowercased (Apple devices lowercase
+/// owner names, as mDNSResponder's D2D keys are), under its type.
+fn instance_name(service_type: &str, instance: &str) -> Result<DnsName<'static>, Error> {
+    let lower = instance.to_lowercase();
+    let t = type_name(service_type)?;
+    let mut labels = alloc::vec![crate::dns::Label::Text(lower.as_bytes())];
+    labels.extend(t.labels());
+    DnsName::from_labels(&labels)
+}
+
+impl ServiceResponse<'static> {
+    /// A PTR from `service_type` to `instance` (its label), as Apple devices
+    /// send it: the data is the label, case kept, then `0xC000`, the
+    /// record's own name.
+    pub fn ptr(service_type: &str, instance: &str) -> Result<Self, Error> {
+        let data = DnsName::from_labels(&[
+            crate::dns::Label::Text(instance.as_bytes()),
+            crate::dns::Label::Compressed(0xC000),
+        ])?;
+        Ok(Self::new(type_name(service_type)?, Rdata::Ptr(data)))
+    }
+
+    /// The SRV of `instance`: `target` is a host name such as `host.local`.
+    pub fn srv(service_type: &str, instance: &str, port: u16, target: &str) -> Result<Self, Error> {
+        let rdata = Rdata::Srv { priority: 0, weight: 0, port, target: DnsName::encode(target)? };
+        Ok(Self::new(instance_name(service_type, instance)?, rdata))
+    }
+
+    /// The TXT of `instance`.
+    pub fn txt<S: AsRef<[u8]>>(service_type: &str, instance: &str, strings: &[S]) -> Result<Self, Error> {
+        Ok(Self::new(instance_name(service_type, instance)?, Rdata::txt_from_strings(strings)?))
+    }
+}
+
 impl<'a> ServiceResponse<'a> {
     /// Builds a record.
     pub fn new(name: DnsName<'a>, rdata: Rdata<'a>) -> Self {
@@ -233,10 +275,14 @@ impl<'a> ServiceResponse<'a> {
 }
 
 /// Service parameters (type 6). The SUI counter changes when the sender's
-/// service records change.
+/// service records change. The set (bitmask and values) is what iOS 27's
+/// `wifip2pd` calls the SSTH: a 256-bit table, sent compressed (the bitmask
+/// says which of its 32 bytes follow), nonzero exactly while the sender
+/// advertises records, about one bit per record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceParams<'a> {
-    /// Three unknown bytes at the start.
+    /// Three bytes at the start: `wifip2pd`'s `flags` (u8) and `dwellTime`
+    /// (u16), meanings unknown.
     pub unknown: [u8; 3],
     /// Service update indicator.
     pub sui: u16,
@@ -265,6 +311,24 @@ impl<'a> ServiceParams<'a> {
         })
     }
 
+    /// Parameters carrying `sui` and the set of `members` (0–255), encoded
+    /// as [`ServiceParams::set_values`] reads it.
+    pub fn with_set(sui: u16, members: impl IntoIterator<Item = u8>) -> ServiceParams<'static> {
+        let mut table = [0u8; 32];
+        for m in members {
+            table[m as usize / 8] |= 1 << (m % 8);
+        }
+        let bitmask = (0..32).filter(|&i| table[i] != 0).fold(0u32, |b, i| b | 1 << i);
+        let values: Vec<u8> = table.iter().copied().filter(|&v| v != 0).collect();
+        ServiceParams {
+            unknown: [0; 3],
+            sui,
+            bitmask,
+            values: Bytes::Owned(values),
+            trailing: Bytes::Borrowed(&[]),
+        }
+    }
+
     /// The encoded set: for each set bit `i` of the bitmask, the set bits `k`
     /// of its value byte give `8 * i + k`.
     pub fn set_values(&self) -> impl Iterator<Item = u32> + '_ {
@@ -286,5 +350,46 @@ impl<'a> ServiceParams<'a> {
         out.put(&self.values);
         out.put(&self.trailing);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn value(r: &ServiceResponse<'_>) -> Vec<u8> {
+        let mut v = Vec::new();
+        r.emit(&mut v).unwrap();
+        v
+    }
+
+    /// Laid out as the captured records are: a Mac's AirDrop PTR is
+    /// `c007` → `0c <12 hex> c000`, its SRV `0c <12 hex> c007` →
+    /// `0000 0000 <port> <len> <uuid> c00c`; a companion-link PTR is
+    /// `0f _companion-link c00a` → `12 CLink-<12 hex> c000`.
+    #[test]
+    fn records_are_encoded_as_apple_devices_send_them() {
+        let ptr = ServiceResponse::ptr("_airdrop._tcp", "0123456789ab").unwrap();
+        assert_eq!(value(&ptr), b"\x03\x00\xc0\x07\x0c\x0f\x00\x00\x00\x0c0123456789ab\xc0\x00");
+        let srv = ServiceResponse::srv("_airdrop._tcp.local", "0123456789AB", 8770, "host.local").unwrap();
+        assert_eq!(
+            value(&srv),
+            b"\x10\x00\x0c0123456789ab\xc0\x07\x21\x0d\x00\x00\x00\x00\x00\x00\x00\x22\x42\x04host\xc0\x0c"
+        );
+        let clink = ServiceResponse::ptr("_companion-link._tcp", "CLink-0123456789ab").unwrap();
+        assert_eq!(clink.name.as_bytes(), b"\x0f_companion-link\xc0\x0a");
+        assert_eq!(clink.rdata, Rdata::Ptr(DnsName::parse(b"\x12CLink-0123456789ab\xc0\x00").unwrap()));
+        let txt = ServiceResponse::txt("_airdrop._tcp", "0123456789AB", &["flags=1019"]).unwrap();
+        assert_eq!(txt.name, srv.name);
+        assert_eq!(txt.rdata, Rdata::Txt(Bytes::Borrowed(b"\x0aflags=1019")));
+        // Each converts back to the full standard names.
+        assert_eq!(ptr.rdata.to_wire(&ptr.name).unwrap(), b"\x0c0123456789ab\x08_airdrop\x04_tcp\x05local\x00");
+    }
+
+    #[test]
+    fn a_set_round_trips() {
+        let p = ServiceParams::with_set(5, [104, 158, 165, 7]);
+        assert_eq!(p.set_values().collect::<Vec<_>>(), [7, 104, 158, 165]);
+        assert_eq!(ServiceParams::with_set(0, []).bitmask, 0);
     }
 }

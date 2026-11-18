@@ -242,3 +242,63 @@ fn answers_block_ack_setup_addressed_to_us() {
     assert_eq!(&mpdu[4..10], &IPHONE.0);
     assert_eq!(&mpdu[24..], [3, 1, 0x86, 0, 0, 0x03, 0x10, 0, 0]);
 }
+
+/// What we advertise reaches a peer's engine as we set it: records in every
+/// MIF, none in PSFs, our ARPA name, and a new update counter on a change.
+#[test]
+fn advertised_services_reach_a_listening_engine() {
+    use awdl_proto::tlv::ServiceResponse;
+
+    let records = vec![
+        ServiceResponse::ptr("_warlocktest._tcp", "Warlock Test").unwrap(),
+        ServiceResponse::srv("_warlocktest._tcp", "Warlock Test", 5555, "winlite.local").unwrap(),
+        ServiceResponse::txt("_warlocktest._tcp", "Warlock Test", &["note=test"]).unwrap(),
+    ];
+    let mut engine = Engine::new(Config::active(TxConfig::new(US)));
+    engine.set_services(records.clone(), Some("winlite".into()));
+    let mut peer = Engine::new(Config::default());
+    let mut sent = Vec::<Sent>::new();
+    let (mut now, mut channel) = (1_000_000u64, 0u8);
+    let mut changed = 0;
+    while now < 1_000_000 + 6_000_000 {
+        for a in engine.poll(now) {
+            match a {
+                Action::Hop(c) => channel = c,
+                Action::Transmit { mpdu, kind, .. } => {
+                    for ev in peer.on_frame(RxMeta { tsf: now, channel, rssi_dbm: -40 }, &mpdu) {
+                        changed += matches!(ev, awdl_core::Event::ServicesChanged(a) if a == US) as usize;
+                    }
+                    sent.push(Sent { tsf: now, master: engine.master(), source: None, channel, kind, mpdu });
+                }
+            }
+        }
+        now = engine.next_wakeup(now).unwrap().max(now + 1);
+    }
+    let p = peer.peer(US).expect("the peer heard us");
+    assert_eq!(p.services, records);
+    assert_eq!(p.hostname.as_deref(), Some("winlite.local"));
+    assert_eq!(p.services_sui, Some(1));
+    assert_eq!(changed, 1, "records changed once, then stayed");
+    for s in &sent {
+        let Ok(Some(Frame::Action { action, .. })) = parse(&s.mpdu) else { panic!() };
+        let n = action.tlvs().filter(|t| t.kind == kind::SERVICE_RESPONSE).count();
+        assert_eq!(n, if s.kind == TxKind::Mif { 3 } else { 0 }, "{:?}", s.kind);
+    }
+    wireshark_accepts(&sent);
+
+    // Withdrawn: the counter moves on and the next MIF has no records.
+    engine.set_services(Vec::new(), Some("winlite".into()));
+    let mut mif = None;
+    while mif.is_none() {
+        for a in engine.poll(now) {
+            if let Action::Transmit { mpdu, kind: TxKind::Mif, .. } = a {
+                mif = Some(mpdu);
+            }
+        }
+        now = engine.next_wakeup(now).unwrap().max(now + 1);
+    }
+    peer.on_frame(RxMeta { tsf: now, channel, rssi_dbm: -40 }, &mif.unwrap());
+    let p = peer.peer(US).unwrap();
+    assert!(p.services.is_empty());
+    assert_eq!(p.services_sui, Some(2));
+}
