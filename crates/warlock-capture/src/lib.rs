@@ -88,13 +88,9 @@ pub fn read(path: impl AsRef<Path>) -> Result<Vec<Captured>, Error> {
         let linktype = state.interfaces().get(iface).map(|i| i.linktype);
         let frame = match linktype {
             Some(DataLink::IEEE802_11_RADIOTAP) => from_radiotap(number, data),
-            Some(DataLink::IEEE802_11) => Some(Captured {
-                number,
-                tsf: None,
-                freq_mhz: None,
-                rssi_dbm: None,
-                mpdu: data.to_vec(),
-            }),
+            Some(DataLink::IEEE802_11) => {
+                Some(Captured { number, tsf: None, freq_mhz: None, rssi_dbm: None, mpdu: data.to_vec() })
+            }
             _ => None,
         };
         out.extend(frame);
@@ -211,10 +207,8 @@ pub fn corpus_dir() -> Option<PathBuf> {
 pub fn corpus_files() -> Vec<PathBuf> {
     let Some(dir) = corpus_dir() else { return Vec::new() };
     let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
-    let mut v: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "pcapng"))
-        .collect();
+    let mut v: Vec<PathBuf> =
+        rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "pcapng")).collect();
     v.sort();
     v
 }
@@ -259,7 +253,8 @@ mod tests {
 
     #[test]
     fn channels_and_frequencies() {
-        for (ch, f) in [(1, 2412), (6, 2437), (13, 2472), (14, 2484), (36, 5180), (44, 5220), (149, 5745), (165, 5825)] {
+        for (ch, f) in [(1, 2412), (6, 2437), (13, 2472), (14, 2484), (36, 5180), (44, 5220), (149, 5745), (165, 5825)]
+        {
             assert_eq!(freq_of(ch), f);
             assert_eq!(channel_of(f), Some(ch));
         }

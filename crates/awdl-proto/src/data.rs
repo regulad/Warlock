@@ -71,12 +71,7 @@ pub struct DataFrame<'a> {
 impl<'a> DataFrame<'a> {
     /// A frame with the usual short header.
     pub fn new(seq: u16, ethertype: u16, payload: &'a [u8]) -> Self {
-        Self {
-            seq,
-            ext: Bytes::Borrowed(&SHORT_EXT),
-            ethertype,
-            payload: Bytes::Borrowed(payload),
-        }
+        Self { seq, ext: Bytes::Borrowed(&SHORT_EXT), ethertype, payload: Bytes::Borrowed(payload) }
     }
 
     /// Parses an 802.11 data body. `Ok(None)` means it isn't AWDL.
@@ -113,12 +108,7 @@ impl<'a> DataFrame<'a> {
         let ext_len = before.remaining() - r.remaining();
         let ext = &body[body.len() - before.remaining()..][..ext_len];
         let ethertype = r.u16be("EtherType")?;
-        Ok(Some(Self {
-            seq,
-            ext: Bytes::Borrowed(ext),
-            ethertype,
-            payload: Bytes::Borrowed(r.rest()),
-        }))
+        Ok(Some(Self { seq, ext: Bytes::Borrowed(ext), ethertype, payload: Bytes::Borrowed(r.rest()) }))
     }
 
     /// The long format's parts, or `None` for the short form (or an `ext`

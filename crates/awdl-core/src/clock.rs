@@ -363,10 +363,8 @@ mod tests {
         assert!(matches!(clock.observe(&odd), Observed::Outlier { .. }));
         assert!(matches!(clock.observe(&cs[51]), Observed::Accepted { residual_us: Some(_) }));
         // The peer jumps 5 TU for good.
-        let jumped: Vec<SyncClaim> = cs[52..]
-            .iter()
-            .map(|c| SyncClaim { rx_tsf: c.rx_tsf, tx_counter_tu: c.tx_counter_tu + 5, ..*c })
-            .collect();
+        let jumped: Vec<SyncClaim> =
+            cs[52..].iter().map(|c| SyncClaim { rx_tsf: c.rx_tsf, tx_counter_tu: c.tx_counter_tu + 5, ..*c }).collect();
         let results: Vec<Observed> = jumped.iter().map(|c| clock.observe(c)).collect();
         assert!(results.contains(&Observed::Reset));
     }

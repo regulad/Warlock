@@ -73,9 +73,7 @@ pub struct UsbDevice {
 
 impl UsbDevice {
     pub fn is_winusb(&self) -> bool {
-        self.service
-            .as_deref()
-            .is_some_and(|s| s.eq_ignore_ascii_case("WinUSB"))
+        self.service.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("WinUSB"))
     }
 }
 
@@ -95,10 +93,7 @@ fn from_wide(buf: &[u16]) -> String {
 }
 
 fn multi_sz(buf: &[u16]) -> Vec<String> {
-    buf.split(|&c| c == 0)
-        .take_while(|s| !s.is_empty())
-        .map(String::from_utf16_lossy)
-        .collect()
+    buf.split(|&c| c == 0).take_while(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
 }
 
 /// Owned SetupAPI device information set.
@@ -114,9 +109,7 @@ impl DevInfoSet {
     /// All present devices enumerated by the USB bus driver.
     fn present_usb() -> Result<Self> {
         let usb = wide("USB");
-        let h = unsafe {
-            SetupDiGetClassDevsW(null(), usb.as_ptr(), null_mut(), DIGCF_ALLCLASSES | DIGCF_PRESENT)
-        };
+        let h = unsafe { SetupDiGetClassDevsW(null(), usb.as_ptr(), null_mut(), DIGCF_ALLCLASSES | DIGCF_PRESENT) };
         if h as isize == -1 {
             return Err(last_error("SetupDiGetClassDevsW"));
         }
@@ -133,9 +126,7 @@ impl DevInfoSet {
 
     fn instance_id(&self, d: &SP_DEVINFO_DATA) -> Option<String> {
         let mut buf = [0u16; 512];
-        let ok = unsafe {
-            SetupDiGetDeviceInstanceIdW(self.0, d, buf.as_mut_ptr(), buf.len() as u32, null_mut())
-        };
+        let ok = unsafe { SetupDiGetDeviceInstanceIdW(self.0, d, buf.as_mut_ptr(), buf.len() as u32, null_mut()) };
         (ok != 0).then(|| from_wide(&buf))
     }
 
@@ -165,10 +156,7 @@ impl DevInfoSet {
     }
 
     fn find(&self, instance_id: &str) -> Option<SP_DEVINFO_DATA> {
-        self.devices().find(|d| {
-            self.instance_id(d)
-                .is_some_and(|id| id.eq_ignore_ascii_case(instance_id))
-        })
+        self.devices().find(|d| self.instance_id(d).is_some_and(|id| id.eq_ignore_ascii_case(instance_id)))
     }
 }
 
@@ -179,11 +167,7 @@ pub fn find(vid: u16, pid: u16) -> Result<Option<UsbDevice>> {
     let found = set
         .devices()
         .filter_map(|d| set.describe(&d))
-        .find(|dev| {
-            dev.hardware_ids
-                .iter()
-                .any(|h| h.to_ascii_uppercase().starts_with(&want))
-        });
+        .find(|dev| dev.hardware_ids.iter().any(|h| h.to_ascii_uppercase().starts_with(&want)));
     Ok(found)
 }
 
@@ -232,18 +216,13 @@ fn winusb_driver_node(set: &DevInfoSet, d: &mut SP_DEVINFO_DATA) -> Result<Optio
         detail_buf.fill(0);
         let detail = detail_buf.as_mut_ptr().cast::<SP_DRVINFO_DETAIL_DATA_W>();
         unsafe { (*detail).cbSize = size_of::<SP_DRVINFO_DETAIL_DATA_W>() as u32 };
-        let ok = unsafe {
-            SetupDiGetDriverInfoDetailW(set.0, d, &drv, detail, (detail_buf.len() * 8) as u32, null_mut())
-        };
+        let ok =
+            unsafe { SetupDiGetDriverInfoDetailW(set.0, d, &drv, detail, (detail_buf.len() * 8) as u32, null_mut()) };
         if ok == 0 {
             continue;
         }
         let hwid_ptr = unsafe {
-            detail_buf
-                .as_ptr()
-                .cast::<u8>()
-                .add(offset_of!(SP_DRVINFO_DETAIL_DATA_W, HardwareID))
-                .cast::<u16>()
+            detail_buf.as_ptr().cast::<u8>().add(offset_of!(SP_DRVINFO_DETAIL_DATA_W, HardwareID)).cast::<u16>()
         };
         let words = detail_buf.len() * 4 - offset_of!(SP_DRVINFO_DETAIL_DATA_W, HardwareID) / 2;
         let hwid = from_wide(unsafe { std::slice::from_raw_parts(hwid_ptr, words) });
@@ -256,10 +235,9 @@ fn winusb_driver_node(set: &DevInfoSet, d: &mut SP_DEVINFO_DATA) -> Result<Optio
 
 fn open(instance_id: &str) -> Result<(DevInfoSet, SP_DEVINFO_DATA)> {
     let set = DevInfoSet::present_usb()?;
-    let d = set.find(instance_id).ok_or(Error {
-        op: "locating the device",
-        code: windows_sys::Win32::Foundation::ERROR_NOT_FOUND,
-    })?;
+    let d = set
+        .find(instance_id)
+        .ok_or(Error { op: "locating the device", code: windows_sys::Win32::Foundation::ERROR_NOT_FOUND })?;
     Ok((set, d))
 }
 
@@ -274,7 +252,13 @@ pub fn bind_winusb(instance_id: &str) -> Result<Installed> {
         // USBDevice class first; SetupAPI cleans up the old software key.
         let guid = wide(USBDEVICE_CLASS_GUID);
         let ok = unsafe {
-            SetupDiSetDeviceRegistryPropertyW(set.0, &mut d, SPDRP_CLASSGUID, guid.as_ptr().cast(), (guid.len() * 2) as u32)
+            SetupDiSetDeviceRegistryPropertyW(
+                set.0,
+                &mut d,
+                SPDRP_CLASSGUID,
+                guid.as_ptr().cast(),
+                (guid.len() * 2) as u32,
+            )
         };
         if ok == 0 {
             return Err(last_error("SetupDiSetDeviceRegistryPropertyW(ClassGUID)"));

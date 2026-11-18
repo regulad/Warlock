@@ -134,13 +134,7 @@ impl<'a> ChannelSequence<'a> {
                 Channel::OpClass { number, opclass } => entries.extend_from_slice(&[number, opclass]),
             }
         }
-        Ok(ChannelSequence {
-            encoding: enc,
-            duplicate_count,
-            step_count,
-            fill_channel,
-            entries: Bytes::Owned(entries),
-        })
+        Ok(ChannelSequence { encoding: enc, duplicate_count, step_count, fill_channel, entries: Bytes::Owned(entries) })
     }
 
     /// Number of slots.
@@ -192,13 +186,7 @@ impl<'a> ChannelSequence<'a> {
         let fill_channel = r.u16le("fill channel")?;
         let width = entry_width(encoding).ok_or(Error::Invalid("channel sequence encoding"))?;
         let entries = r.bytes(count * width, "channel list")?;
-        Ok(Self {
-            encoding,
-            duplicate_count,
-            step_count,
-            fill_channel,
-            entries: Bytes::Borrowed(entries),
-        })
+        Ok(Self { encoding, duplicate_count, step_count, fill_channel, entries: Bytes::Borrowed(entries) })
     }
 
     pub(crate) fn write(&self, out: &mut Vec<u8>) -> Result<(), Error> {

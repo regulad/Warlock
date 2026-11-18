@@ -72,7 +72,11 @@ unsafe extern "system" fn on_browse(status: u32, _ctx: *const c_void, records: *
     }
 }
 
-unsafe extern "system" fn on_mquery(_ctx: *const c_void, _handle: *mut MDNS_QUERY_HANDLE, results: *mut DNS_QUERY_RESULT) {
+unsafe extern "system" fn on_mquery(
+    _ctx: *const c_void,
+    _handle: *mut MDNS_QUERY_HANDLE,
+    results: *mut DNS_QUERY_RESULT,
+) {
     // SAFETY: Windows owns the result; its records are wide-string records
     // (the API is Unicode-only), as on_browse prints them. on_browse frees
     // the list.
@@ -238,7 +242,12 @@ fn main() {
             let mut handle: MDNS_QUERY_HANDLE = unsafe { std::mem::zeroed() };
             // SAFETY: the request, its string and the handle outlive the query.
             let rc = unsafe { DnsStartMulticastQuery(&req, &mut handle) };
-            println!("DnsStartMulticastQuery({} {}) on interface {}: {rc}", args[1], args.get(4).map_or("PTR", |s| s), args[2]);
+            println!(
+                "DnsStartMulticastQuery({} {}) on interface {}: {rc}",
+                args[1],
+                args.get(4).map_or("PTR", |s| s),
+                args[2]
+            );
             if rc == 0 {
                 std::thread::sleep(Duration::from_secs(args.get(3).map_or(20, |s| s.parse().unwrap())));
                 // SAFETY: the handle from the start above.

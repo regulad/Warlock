@@ -38,7 +38,10 @@ struct Answer {
 enum Data {
     /// A PTR's target, case kept.
     Ptr(String),
-    Srv { port: u16, target: String },
+    Srv {
+        port: u16,
+        target: String,
+    },
     Txt(Vec<String>),
     Aaaa(Ipv6Addr),
 }
@@ -227,7 +230,7 @@ impl Advertiser {
         let mut host = None;
         let mut unresolved = Vec::new();
         for t in &self.types {
-            for ((name, data), _) in &self.cache {
+            for (name, data) in self.cache.keys() {
                 let Data::Ptr(instance) = data else { continue };
                 if name != t {
                     continue;
@@ -242,10 +245,8 @@ impl Advertiser {
                     _ => None,
                 });
                 let Some((port, target)) = srv else { continue };
-                let ours = self
-                    .cache
-                    .keys()
-                    .any(|(n, d)| *n == target && matches!(d, Data::Aaaa(a) if *a == self.address));
+                let ours =
+                    self.cache.keys().any(|(n, d)| *n == target && matches!(d, Data::Aaaa(a) if *a == self.address));
                 if !ours {
                     unresolved.push(target);
                     continue;

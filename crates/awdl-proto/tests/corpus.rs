@@ -81,11 +81,13 @@ fn every_captured_frame_round_trips() {
 
     eprintln!("{actions} action frames, {datas} data frames across {} captures", files.len());
     for (k, (seen, decoded)) in &per_kind {
-        eprintln!(
-            "  TLV {k:>2} {:<24} {seen:>6} seen, {decoded:>6} typed",
-            tlv::kind::name(*k).unwrap_or("?")
-        );
+        eprintln!("  TLV {k:>2} {:<24} {seen:>6} seen, {decoded:>6} typed", tlv::kind::name(*k).unwrap_or("?"));
     }
     assert!(actions > 0, "the corpus has no AWDL action frames");
-    assert!(failures.is_empty(), "{} failures, first ones:\n{}", failures.len(), failures[..failures.len().min(25)].join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures, first ones:\n{}",
+        failures.len(),
+        failures[..failures.len().min(25)].join("\n")
+    );
 }

@@ -7,8 +7,8 @@ use awdl_proto::data::{DataFrame, ETHERTYPE_IPV6};
 use awdl_proto::dns::DnsName;
 use awdl_proto::ieee80211::Header;
 use awdl_proto::tlv::{
-    Channel, ChannelSequence, DataPathState, ElectionParamsV2, InfraInfo, Rdata, ServiceResponse, SyncParams,
-    TlvBody, VersionTlv, device_class, kind,
+    Channel, ChannelSequence, DataPathState, ElectionParamsV2, InfraInfo, Rdata, ServiceResponse, SyncParams, TlvBody,
+    VersionTlv, device_class, kind,
 };
 use awdl_proto::{AWDL_BSSID, Bytes, Error, Frame, MacAddr, parse};
 

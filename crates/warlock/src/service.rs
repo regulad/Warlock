@@ -72,8 +72,10 @@ fn run_service() -> Result<(), Box<dyn Error>> {
 /// Registers the service with `options` on its command line. Needs
 /// Administrator.
 pub fn install(options: &[String]) -> Result<(), Box<dyn Error>> {
-    let manager =
-        ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
+    let manager = ServiceManager::local_computer(
+        None::<&str>,
+        ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
+    )?;
     let mut launch_arguments = vec![OsString::from("service")];
     launch_arguments.extend(options.iter().map(OsString::from));
     let info = ServiceInfo {
@@ -101,7 +103,8 @@ pub fn install(options: &[String]) -> Result<(), Box<dyn Error>> {
 /// Stops the service if it's running, and removes it. Needs Administrator.
 pub fn uninstall() -> Result<(), Box<dyn Error>> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    let service = manager.open_service(NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE)?;
+    let service =
+        manager.open_service(NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE)?;
     if service.query_status()?.current_state != ServiceState::Stopped {
         service.stop()?;
         let deadline = Instant::now() + Duration::from_secs(30);

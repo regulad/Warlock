@@ -103,11 +103,7 @@ fn main() {
         *window.lock().unwrap() = Window::default();
         let t0 = Instant::now();
         let rc = unsafe {
-            if mode == "fast" {
-                dvr_fast_retune(radio, to)
-            } else {
-                dvr_set_channel(radio, to, DVR_WIDTH_20, 0)
-            }
+            if mode == "fast" { dvr_fast_retune(radio, to) } else { dvr_set_channel(radio, to, DVR_WIDTH_20, 0) }
         };
         let t1 = Instant::now();
         if rc != DVR_OK {
@@ -117,15 +113,8 @@ fn main() {
         *window.lock().unwrap() = Window::default();
         thread::sleep(dwell);
         let w = window.lock().unwrap();
-        let first = w
-            .first
-            .map(|f| format!("{:.1} ms", (f - t1).as_secs_f64() * 1e3))
-            .unwrap_or_else(|| "none".into());
-        println!(
-            "{from:>4} {to:>4}  {:>7.2} ms  {first:>14}  {:>8}",
-            (t1 - t0).as_secs_f64() * 1e3,
-            w.frames
-        );
+        let first = w.first.map(|f| format!("{:.1} ms", (f - t1).as_secs_f64() * 1e3)).unwrap_or_else(|| "none".into());
+        println!("{from:>4} {to:>4}  {:>7.2} ms  {first:>14}  {:>8}", (t1 - t0).as_secs_f64() * 1e3, w.frames);
     }
 
     unsafe { dvr_stop_rx(radio) };

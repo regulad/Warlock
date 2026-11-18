@@ -35,24 +35,24 @@ fn aw_boundaries_are_predicted_within_a_tu() {
             if check.check(&engine, tsf, &c.mpdu).is_some() {
                 // A frame from the peer we sync to, while locked: the extras.
                 let src = engine.sync_source().unwrap();
-                if let Ok(Some(Frame::Action { action, .. })) = parse(&c.mpdu) {
-                    if let Some(Ok(TlvBody::SyncParams(s))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode()) {
-                        let claim = SyncClaim::new(tsf, &action.header, &s).unwrap();
-                        let ahead = ((claim.boundary() - claim.target_tsf()) / AW_US as f64).ceil() as usize;
-                        aws_ahead[ahead.min(4)] += 1;
-                        // The AW that starts at the claimed boundary: where
-                        // in its 4-AW slot is it?
-                        if let Some(at) = src.clock.position(claim.boundary() as u64 + AW_US / 2) {
-                            boundary_phase[(at.aw_seq % 4) as usize] += 1;
-                        }
-                        if let Some(pos) = src.clock.position(claim.target_tsf() as u64) {
-                            seq_n += 1;
-                            seq_ok += (pos.aw_seq == claim.aw_seq) as usize;
-                        }
-                        if let Some(sched) = ChannelSchedule::from_sequence(&s.channel_sequence) {
-                            slot_n += 1;
-                            slot_ok += (sched.channel_at(claim.aw_seq) == Some(channel)) as usize;
-                        }
+                if let Ok(Some(Frame::Action { action, .. })) = parse(&c.mpdu)
+                    && let Some(Ok(TlvBody::SyncParams(s))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode())
+                {
+                    let claim = SyncClaim::new(tsf, &action.header, &s).unwrap();
+                    let ahead = ((claim.boundary() - claim.target_tsf()) / AW_US as f64).ceil() as usize;
+                    aws_ahead[ahead.min(4)] += 1;
+                    // The AW that starts at the claimed boundary: where
+                    // in its 4-AW slot is it?
+                    if let Some(at) = src.clock.position(claim.boundary() as u64 + AW_US / 2) {
+                        boundary_phase[(at.aw_seq % 4) as usize] += 1;
+                    }
+                    if let Some(pos) = src.clock.position(claim.target_tsf() as u64) {
+                        seq_n += 1;
+                        seq_ok += (pos.aw_seq == claim.aw_seq) as usize;
+                    }
+                    if let Some(sched) = ChannelSchedule::from_sequence(&s.channel_sequence) {
+                        slot_n += 1;
+                        slot_ok += (sched.channel_at(claim.aw_seq) == Some(channel)) as usize;
                     }
                 }
             }
@@ -72,7 +72,9 @@ fn aw_boundaries_are_predicted_within_a_tu() {
         eprintln!("{name}");
         eprintln!("  sync source: {}", check.source);
         eprintln!("  followers:   {}", check.followers);
-        eprintln!("  AW seq agrees {seq_ok}/{seq_n}  slot model matches RX channel {slot_ok}/{slot_n}  frames naming our master {agree}/{named}");
+        eprintln!(
+            "  AW seq agrees {seq_ok}/{seq_n}  slot model matches RX channel {slot_ok}/{slot_n}  frames naming our master {agree}/{named}"
+        );
         eprintln!("  claimed boundary is 0/1/2/3/4+ AWs after the target TX time: {aws_ahead:?}");
         eprintln!("  AW starting at the claimed boundary, aw_seq mod 4 = 0/1/2/3: {boundary_phase:?}");
         if let Some(src) = engine.sync_source() {

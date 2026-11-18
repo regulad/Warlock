@@ -96,11 +96,7 @@ impl<'a> ActionFrame<'a> {
     /// `Ok(None)` means it's an action frame but not AWDL. The TLV framing is
     /// checked here, so [`ActionFrame::tlvs`] can't fail.
     pub fn parse(body: &'a [u8]) -> Result<Option<Self>, Error> {
-        if body.len() < 5
-            || body[0] != CATEGORY_VENDOR_SPECIFIC
-            || body[1..4] != APPLE_OUI
-            || body[4] != AWDL_TYPE
-        {
+        if body.len() < 5 || body[0] != CATEGORY_VENDOR_SPECIFIC || body[1..4] != APPLE_OUI || body[4] != AWDL_TYPE {
             return Ok(None);
         }
         let mut r = Reader::new(&body[5..]);
@@ -113,11 +109,7 @@ impl<'a> ActionFrame<'a> {
         };
         let region = r.rest();
         let split = tlv::validate(region)?;
-        Ok(Some(Self {
-            header,
-            tlvs: &region[..split],
-            trailer: &region[split..],
-        }))
+        Ok(Some(Self { header, tlvs: &region[..split], trailer: &region[split..] }))
     }
 
     /// True for a Periodic Synchronization Frame.

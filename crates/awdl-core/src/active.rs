@@ -10,15 +10,15 @@
 //! - the sync source's channel sequence, copied verbatim (jedbillyb reports
 //!   that copying the peer's sequence works with iOS);
 //! - no extended data-path block, whose trailing bytes we can't explain yet.
+//!
 //! See `docs/awdl-field-observations.md`.
 
 use awdl_proto::action::{ActionFrameBuilder, ActionHeader, AwdlVersion};
-use awdl_proto::ieee80211::Header;
 use awdl_proto::dns::DnsName;
+use awdl_proto::ieee80211::Header;
 use awdl_proto::tlv::{
     Arpa, Channel, ChannelSequence, ChannelSequenceTlv, DataPathExt, DataPathState, ElectionParams, ElectionParamsV2,
-    HtCapabilities, InfraInfo, ServiceParams, ServiceResponse, SyncParams, SyncTree, TlvBody, VersionTlv,
-    device_class,
+    HtCapabilities, InfraInfo, ServiceParams, ServiceResponse, SyncParams, SyncTree, TlvBody, VersionTlv, device_class,
 };
 use awdl_proto::{Bytes, MacAddr};
 
@@ -114,7 +114,6 @@ impl TxConfig {
     }
 }
 
-
 /// What the frame builder needs to know about the cluster at send time.
 #[derive(Clone, Copy)]
 pub(crate) struct FollowerView<'a> {
@@ -177,16 +176,32 @@ fn opclass_channel(primary: u8, forty: bool) -> Channel {
         0 => 0,
         1..=13 => 81,
         36..=48 if forty => {
-            if FORTY_LOWER.contains(&primary) { 116 } else { 117 }
+            if FORTY_LOWER.contains(&primary) {
+                116
+            } else {
+                117
+            }
         }
         52..=64 if forty => {
-            if FORTY_LOWER.contains(&primary) { 119 } else { 120 }
+            if FORTY_LOWER.contains(&primary) {
+                119
+            } else {
+                120
+            }
         }
         100..=144 if forty => {
-            if FORTY_LOWER.contains(&primary) { 122 } else { 123 }
+            if FORTY_LOWER.contains(&primary) {
+                122
+            } else {
+                123
+            }
         }
         149..=161 if forty => {
-            if FORTY_LOWER.contains(&primary) { 126 } else { 127 }
+            if FORTY_LOWER.contains(&primary) {
+                126
+            } else {
+                127
+            }
         }
         36..=48 => 115,
         52..=64 => 118,

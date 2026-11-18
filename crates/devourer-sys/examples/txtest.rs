@@ -123,12 +123,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let rx: &'static Mutex<Rx> = Box::leak(Box::new(Mutex::new(Rx {
-        me,
-        frames: 0,
-        probe_resp_to_me: 0,
-        responders: Default::default(),
-    })));
+    let rx: &'static Mutex<Rx> =
+        Box::leak(Box::new(Mutex::new(Rx { me, frames: 0, probe_resp_to_me: 0, responders: Default::default() })));
     let user = rx as *const Mutex<Rx> as usize;
     let rx_radio = SendPtr(radio);
     let rx_thread = thread::spawn(move || {

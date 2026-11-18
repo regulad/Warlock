@@ -210,10 +210,8 @@ fn main() {
         for item in v.split(';').filter(|s| !s.is_empty()) {
             let (kind, hex) = item.split_once('=').expect("WARLOCK_TLV=kind=hex;…");
             let hex = hex.replace('@', &own_hex);
-            let bytes: Vec<u8> = (0..hex.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("TLV hex"))
-                .collect();
+            let bytes: Vec<u8> =
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("TLV hex")).collect();
             tx.tlv_overrides.push((kind.parse().expect("TLV kind"), (!bytes.is_empty()).then_some(bytes)));
         }
     }
@@ -291,7 +289,8 @@ fn main() {
                 }
             }
             if f.mpdu.len() >= 10 && f.mpdu[4..10] == own.0 {
-                let from = if f.mpdu.len() >= 16 { MacAddr(f.mpdu[10..16].try_into().unwrap()) } else { MacAddr::default() };
+                let from =
+                    if f.mpdu.len() >= 16 { MacAddr(f.mpdu[10..16].try_into().unwrap()) } else { MacAddr::default() };
                 let kind = frame_kind(&f.mpdu);
                 let n = to_us.entry((from, kind.clone())).or_default();
                 if *n == 0 {
@@ -313,23 +312,26 @@ fn main() {
                                     p.replied.get_or_insert(f.tsf);
                                 }
                                 let rtt = pings_sent.get(&seq).map(|&s| f.tsf.saturating_sub(s) as f64 / 1000.0);
-                                println!("[{t:>8.3} s] echo reply #{seq} from {from}: {:.1} ms", rtt.unwrap_or(f64::NAN));
+                                println!(
+                                    "[{t:>8.3} s] echo reply #{seq} from {from}: {:.1} ms",
+                                    rtt.unwrap_or(f64::NAN)
+                                );
                             }
                         }
-                        if ethertype == ETHERTYPE_IPV6 {
-                            if let Some(reply) = echo_reply(&own_ll, &payload) {
-                                let pos = engine.position(f.tsf);
-                                println!(
-                                    "[{t:>8.3} s] echo request #{echoes} from {from} (to {to}) on ch {}: AW {:?} slot {:?} +{} µs",
-                                    f.channel,
-                                    pos.map(|p| p.aw_seq),
-                                    pos.map(|p| p.aw_seq / 4 % 16),
-                                    pos.map_or(0, |p| p.offset_us)
-                                );
-                                echoes += 1;
-                                pending_replies.push_back(f.tsf);
-                                engine.send_packet(f.tsf, from, ETHERTYPE_IPV6, reply);
-                            }
+                        if ethertype == ETHERTYPE_IPV6
+                            && let Some(reply) = echo_reply(&own_ll, &payload)
+                        {
+                            let pos = engine.position(f.tsf);
+                            println!(
+                                "[{t:>8.3} s] echo request #{echoes} from {from} (to {to}) on ch {}: AW {:?} slot {:?} +{} µs",
+                                f.channel,
+                                pos.map(|p| p.aw_seq),
+                                pos.map(|p| p.aw_seq / 4 % 16),
+                                pos.map_or(0, |p| p.offset_us)
+                            );
+                            echoes += 1;
+                            pending_replies.push_back(f.tsf);
+                            engine.send_packet(f.tsf, from, ETHERTYPE_IPV6, reply);
                         }
                     }
                     other => println!("[{t:>8.3} s] {other:?}"),
@@ -337,21 +339,22 @@ fn main() {
             }
         }
         let Some(now) = radio.tsf_now() else { continue };
-        if let Some(target) = ping_target {
-            if last_ping.elapsed() >= Duration::from_secs(1) && engine.master().is_some() {
-                last_ping = Instant::now();
-                if std::env::var_os("WARLOCK_MDNS_QUERY").is_some() {
-                    engine.send_packet(now, MDNS_MAC, ETHERTYPE_IPV6, mdns_airplay_query(&own_ll));
-                }
-                if let Some(port) = std::env::var("WARLOCK_TCP_PORT").ok().and_then(|p| p.parse().ok()) {
-                    let syn = tcp_syn(&own_ll, &link_local(target), 50000 + ping_seq % 1000, port);
-                    engine.send_packet(now, target, ETHERTYPE_IPV6, syn);
-                }
-                ping_seq = ping_seq.wrapping_add(1);
-                pings_sent.insert(ping_seq, now);
-                pings.insert(ping_seq, PingTx { queued: now, sent: None, replied: None });
-                engine.send_packet(now, target, ETHERTYPE_IPV6, echo_request(&own_ll, &link_local(target), ping_seq));
+        if let Some(target) = ping_target
+            && last_ping.elapsed() >= Duration::from_secs(1)
+            && engine.master().is_some()
+        {
+            last_ping = Instant::now();
+            if std::env::var_os("WARLOCK_MDNS_QUERY").is_some() {
+                engine.send_packet(now, MDNS_MAC, ETHERTYPE_IPV6, mdns_airplay_query(&own_ll));
             }
+            if let Some(port) = std::env::var("WARLOCK_TCP_PORT").ok().and_then(|p| p.parse().ok()) {
+                let syn = tcp_syn(&own_ll, &link_local(target), 50000 + ping_seq % 1000, port);
+                engine.send_packet(now, target, ETHERTYPE_IPV6, syn);
+            }
+            ping_seq = ping_seq.wrapping_add(1);
+            pings_sent.insert(ping_seq, now);
+            pings.insert(ping_seq, PingTx { queued: now, sent: None, replied: None });
+            engine.send_packet(now, target, ETHERTYPE_IPV6, echo_request(&own_ll, &link_local(target), ping_seq));
         }
         for a in engine.poll(now) {
             match a {
@@ -380,18 +383,18 @@ fn main() {
                                 ));
                             }
                         }
-                        if matches!(echo, Some((false, _))) {
-                            if let Some(rx) = pending_replies.pop_front() {
-                                let pos = engine.position(now);
-                                println!(
-                                    "             reply sent {} µs after its request: AW {:?} slot {:?} +{} µs on ch {}",
-                                    now.saturating_sub(rx),
-                                    pos.map(|p| p.aw_seq),
-                                    pos.map(|p| p.aw_seq / 4 % 16),
-                                    pos.map_or(0, |p| p.offset_us),
-                                    radio.channel()
-                                );
-                            }
+                        if matches!(echo, Some((false, _)))
+                            && let Some(rx) = pending_replies.pop_front()
+                        {
+                            let pos = engine.position(now);
+                            println!(
+                                "             reply sent {} µs after its request: AW {:?} slot {:?} +{} µs on ch {}",
+                                now.saturating_sub(rx),
+                                pos.map(|p| p.aw_seq),
+                                pos.map(|p| p.aw_seq / 4 % 16),
+                                pos.map_or(0, |p| p.offset_us),
+                                radio.channel()
+                            );
                         }
                         if kind == TxKind::AddbaResponse {
                             let to = Header::parse(&mpdu).map(|(h, _)| h.addr1).unwrap_or_default();
@@ -470,15 +473,15 @@ fn main() {
     }
     // Each peer's AW grid against the cluster's, as its own claims put it:
     // positive means its AWs start after ours.
-    if let Some(now) = radio.tsf_now() {
-        if let Some(ours) = engine.position(now) {
-            for p in engine.peers() {
-                if let Some(theirs) = p.clock.is_locked().then(|| p.clock.position(now)).flatten() {
-                    let aw = awdl_core::AW_US as i64;
-                    let d = (theirs.start_tsf as i64 - ours.start_tsf as i64).rem_euclid(aw);
-                    let d = if d > aw / 2 { d - aw } else { d };
-                    println!("  {} grid: {:+} µs from ours (its AW {}, ours {})", p.addr, d, theirs.aw_seq, ours.aw_seq);
-                }
+    if let Some(now) = radio.tsf_now()
+        && let Some(ours) = engine.position(now)
+    {
+        for p in engine.peers() {
+            if let Some(theirs) = p.clock.is_locked().then(|| p.clock.position(now)).flatten() {
+                let aw = awdl_core::AW_US as i64;
+                let d = (theirs.start_tsf as i64 - ours.start_tsf as i64).rem_euclid(aw);
+                let d = if d > aw / 2 { d - aw } else { d };
+                println!("  {} grid: {:+} µs from ours (its AW {}, ours {})", p.addr, d, theirs.aw_seq, ours.aw_seq);
             }
         }
     }
@@ -501,7 +504,11 @@ fn main() {
                 off,
                 reply.map_or("no reply".to_string(), |r| format!("reply {r:.1} ms"))
             );
-            for key in [format!("ch {ch}"), format!("AW {} of its slot", aw % 4), format!("{}–{} ms into the AW", off / 2000 * 2, off / 2000 * 2 + 2)] {
+            for key in [
+                format!("ch {ch}"),
+                format!("AW {} of its slot", aw % 4),
+                format!("{}–{} ms into the AW", off / 2000 * 2, off / 2000 * 2 + 2),
+            ] {
                 let e = by.entry(key).or_default();
                 e.0 += 1;
                 e.1 += reply.is_some() as u32;

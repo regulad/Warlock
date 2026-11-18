@@ -13,8 +13,8 @@ use awdl_proto::{Frame, MacAddr, parse};
 use crate::active::{self, FollowerView, TxConfig};
 use crate::schedule::widen;
 use crate::{
-    AW_US, AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, MasterRank, Observed, OwnClock,
-    SyncClaim, TU_US,
+    AW_US, AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, MasterRank, Observed, OwnClock, SyncClaim,
+    TU_US,
 };
 
 /// Transmit no earlier than this into an AW, µs: time for a hop to settle.
@@ -465,9 +465,8 @@ impl Engine {
     fn elect(&mut self, now: u64) -> Vec<Event> {
         let mut events = Vec::new();
         let stale = self.config.source_stale_us;
-        let followable = |p: &Peer| {
-            p.clock.is_locked() && p.last_claim.is_some_and(|(c, _)| now.saturating_sub(c.rx_tsf) <= stale)
-        };
+        let followable =
+            |p: &Peer| p.clock.is_locked() && p.last_claim.is_some_and(|(c, _)| now.saturating_sub(c.rx_tsf) <= stale);
         let own = self.config.own_addr;
         let theirs = self
             .peers
@@ -528,7 +527,7 @@ impl Engine {
             (fresh && follows).then(|| (p.addr != m, p.election.map_or(u32::MAX, |e| e.distance)))
         };
         let best = self.peers.values().filter_map(|p| rank(p).map(|r| (r, Reverse(p.last_seen), p.addr))).min();
-        let current = self.source.and_then(|s| self.peers.get(&s)).and_then(|p| rank(p));
+        let current = self.source.and_then(|s| self.peers.get(&s)).and_then(rank);
         let source = match (best, current) {
             (Some((r, _, _)), Some(cur)) if cur <= r => self.source,
             (best, _) => best.map(|(_, _, a)| a),
@@ -724,7 +723,8 @@ impl Engine {
     /// explicitly.
     fn schedule_at(&self, now: u64) -> Option<(AwPosition, u8, bool)> {
         let pos = self.position(now)?;
-        let sched = if self.is_master() { self.own_sequence.as_ref()?.schedule } else { self.sync_source()?.schedule? };
+        let sched =
+            if self.is_master() { self.own_sequence.as_ref()?.schedule } else { self.sync_source()?.schedule? };
         Some((pos, sched.channel_at(pos.aw_seq)?, sched.is_explicit(pos.aw_seq)))
     }
 

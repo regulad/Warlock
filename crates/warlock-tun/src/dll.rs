@@ -41,11 +41,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn check(what: &str, bytes: &[u8], want: &str) -> io::Result<()> {
     let got = sha256_hex(bytes);
-    if got == want {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("{what} has SHA-256 {got}, not the pinned {want}")))
-    }
+    if got == want { Ok(()) } else { Err(io::Error::other(format!("{what} has SHA-256 {got}, not the pinned {want}"))) }
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -138,8 +134,9 @@ pub fn prepare_root(path: &Path) -> io::Result<()> {
     }
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
     // SAFETY: a valid SDDL string; `sd` receives a LocalAlloc'd descriptor.
-    if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(SDDL).as_ptr(), SDDL_REVISION_1, &mut sd, null_mut()) }
-        == 0
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(wide(SDDL).as_ptr(), SDDL_REVISION_1, &mut sd, null_mut())
+    } == 0
     {
         return Err(io::Error::last_os_error());
     }

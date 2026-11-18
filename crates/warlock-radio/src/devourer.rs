@@ -30,9 +30,8 @@ const QUEUE: usize = 4096;
 /// cleared in the state mask). Best effort: older Windows lack the class.
 fn high_resolution_timers() {
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-        PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling,
-        SetProcessInformation,
+        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, SetProcessInformation,
     };
     let state = PROCESS_POWER_THROTTLING_STATE {
         Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
@@ -139,10 +138,11 @@ unsafe extern "C" fn on_frame(user: *mut c_void, f: *const dvr_rx_frame) {
     let data = unsafe { std::slice::from_raw_parts(f.data, f.len) };
     let tsf = {
         let mut t = ctx.tsf.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(prev) = t.1 {
-            if f.tsfl < prev && prev - f.tsfl > 0x8000_0000 {
-                t.0 += 1 << 32;
-            }
+        if let Some(prev) = t.1
+            && f.tsfl < prev
+            && prev - f.tsfl > 0x8000_0000
+        {
+            t.0 += 1 << 32;
         }
         t.1 = Some(f.tsfl);
         t.0 | f.tsfl as u64

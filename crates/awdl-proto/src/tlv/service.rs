@@ -240,12 +240,7 @@ impl<'a> ServiceResponse<'a> {
         let data_len = r.u16le("service data length")? as usize;
         let unknown = r.u16le("service unknown")?;
         let data = r.bytes(data_len, "service data")?;
-        Ok(Self {
-            name,
-            unknown,
-            rdata: Rdata::parse(rtype, data),
-            trailing: Bytes::Borrowed(r.rest()),
-        })
+        Ok(Self { name, unknown, rdata: Rdata::parse(rtype, data), trailing: Bytes::Borrowed(r.rest()) })
     }
 
     /// Converts to an owned record.
@@ -289,9 +284,10 @@ impl<'a> ServiceResponse<'a> {
 pub fn ssth_member(name: &DnsName<'_>) -> Option<u8> {
     let mut wire = name.to_wire()?;
     wire.make_ascii_lowercase();
-    Some(wire.iter().fold(0u8, |crc, &b| {
-        (0..8).fold(crc ^ b, |c, _| if c & 0x80 != 0 { (c << 1) ^ 0x07 } else { c << 1 })
-    }))
+    Some(
+        wire.iter()
+            .fold(0u8, |crc, &b| (0..8).fold(crc ^ b, |c, _| if c & 0x80 != 0 { (c << 1) ^ 0x07 } else { c << 1 })),
+    )
 }
 
 /// Service parameters (type 6). The SUI counter changes when the sender's
@@ -322,13 +318,7 @@ impl<'a> ServiceParams<'a> {
         let sui = r.u16le("service params SUI")?;
         let bitmask = r.u32le("service params bitmask")?;
         let values = r.bytes(bitmask.count_ones() as usize, "service params values")?;
-        Ok(Self {
-            unknown,
-            sui,
-            bitmask,
-            values: Bytes::Borrowed(values),
-            trailing: Bytes::Borrowed(r.rest()),
-        })
+        Ok(Self { unknown, sui, bitmask, values: Bytes::Borrowed(values), trailing: Bytes::Borrowed(r.rest()) })
     }
 
     /// Parameters carrying `sui` and the SSTH for `records`: one member per
@@ -346,13 +336,7 @@ impl<'a> ServiceParams<'a> {
         }
         let bitmask = (0..32).filter(|&i| table[i] != 0).fold(0u32, |b, i| b | 1 << i);
         let values: Vec<u8> = table.iter().copied().filter(|&v| v != 0).collect();
-        ServiceParams {
-            unknown: [0; 3],
-            sui,
-            bitmask,
-            values: Bytes::Owned(values),
-            trailing: Bytes::Borrowed(&[]),
-        }
+        ServiceParams { unknown: [0; 3], sui, bitmask, values: Bytes::Owned(values), trailing: Bytes::Borrowed(&[]) }
     }
 
     /// The encoded set: for each set bit `i` of the bitmask, the set bits `k`

@@ -10,8 +10,8 @@
 //!   link-local address, no router discovery, no DAD).
 //! - [`addr`] maps IPv6 destinations to AWDL addresses.
 
-pub mod addr;
 mod adapter;
+pub mod addr;
 pub mod dll;
 pub mod mdns;
 

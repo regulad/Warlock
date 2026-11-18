@@ -43,7 +43,12 @@ fn main() {
     unsafe { QueryPerformanceFrequency(&mut freq) };
     let ticks_per_us = freq as f64 / 1e6;
     let timer = unsafe {
-        CreateWaitableTimerExW(std::ptr::null(), std::ptr::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS)
+        CreateWaitableTimerExW(
+            std::ptr::null(),
+            std::ptr::null(),
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            TIMER_ALL_ACCESS,
+        )
     };
     assert!(!timer.is_null(), "CreateWaitableTimerExW failed (needs Windows 10 1803+)");
 

@@ -29,14 +29,21 @@ fn run(file: &Path) -> (Vec<Sent>, Vec<(u64, u8)>, Engine) {
     let mut engine = Engine::new(Config::active(TxConfig::new(US)));
     let (mut sent, mut hops) = (Vec::new(), Vec::new());
     let mut channel = 0u8;
-    let act = |tsf: u64, ms: (Option<MacAddr>, Option<MacAddr>), actions: Vec<Action>, channel: &mut u8, sent: &mut Vec<Sent>, hops: &mut Vec<(u64, u8)>| {
+    let act = |tsf: u64,
+               ms: (Option<MacAddr>, Option<MacAddr>),
+               actions: Vec<Action>,
+               channel: &mut u8,
+               sent: &mut Vec<Sent>,
+               hops: &mut Vec<(u64, u8)>| {
         for a in actions {
             match a {
                 Action::Hop(c) => {
                     *channel = c;
                     hops.push((tsf, c));
                 }
-                Action::Transmit { mpdu, kind, .. } => sent.push(Sent { tsf, master: ms.0, source: ms.1, channel: *channel, kind, mpdu }),
+                Action::Transmit { mpdu, kind, .. } => {
+                    sent.push(Sent { tsf, master: ms.0, source: ms.1, channel: *channel, kind, mpdu })
+                }
             }
         }
     };
@@ -89,7 +96,7 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
         psfs.len(),
         span / 1e6,
         hops.len(),
-        &hops[..hops.len().min(6)].iter().map(|h| h.1).collect::<Vec<_>>()
+        hops[..hops.len().min(6)].iter().map(|h| h.1).collect::<Vec<_>>()
     );
     // One MIF per explicit slot of the master's sequence (which changes over
     // the capture, so allow a wide margin).
@@ -117,8 +124,15 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
         // Counts to the next slot (4 AWs) start, as Apple devices do.
         assert!((1..=64).contains(&sp.tx_counter), "tx_counter {}", sp.tx_counter);
         let boundary_seq = sp.aw_seq_counter.wrapping_add(((sp.tx_counter as u64 * TU_US) / (16 * TU_US)) as u16 + 1);
-        assert!(boundary_seq % 4 == 0 || sp.tx_counter % 16 == 0, "claimed boundary isn't a slot start: seq {} counter {}", sp.aw_seq_counter, sp.tx_counter);
-        let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else { panic!() };
+        assert!(
+            boundary_seq % 4 == 0 || sp.tx_counter % 16 == 0,
+            "claimed boundary isn't a slot start: seq {} counter {}",
+            sp.aw_seq_counter,
+            sp.tx_counter
+        );
+        let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else {
+            panic!()
+        };
         if s.master == Some(US) {
             // Before anyone else was heard, we stood alone.
             assert_eq!((e.master, e.other, e.distance_to_master), (US, US, 0));
@@ -196,7 +210,8 @@ fn a_lone_engine_becomes_master_on_its_own_grid() {
     assert!(hops.iter().all(|&(_, c)| c == 6 || c == 149), "{hops:?}");
     let span = (sent.last().unwrap().tsf - sent[0].tsf) as f64;
     let slot_us = 4.0 * 16.0 * TU_US as f64;
-    let (mifs, psfs) = (sent.iter().filter(|s| s.kind == TxKind::Mif).count(), sent.iter().filter(|s| s.kind == TxKind::Psf).count());
+    let (mifs, psfs) =
+        (sent.iter().filter(|s| s.kind == TxKind::Mif).count(), sent.iter().filter(|s| s.kind == TxKind::Psf).count());
     // 4 explicit slots of 16.
     let explicit = span / slot_us * 4.0 / 16.0;
     assert!((mifs as f64 - explicit).abs() <= 2.0, "{mifs} MIFs for {explicit:.1} explicit slots");
@@ -208,7 +223,9 @@ fn a_lone_engine_becomes_master_on_its_own_grid() {
         let Ok(Some(Frame::Action { action, .. })) = parse(&s.mpdu) else { panic!("our frame doesn't parse") };
         let Some(Ok(TlvBody::SyncParams(sp))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode()) else { panic!() };
         assert_eq!((sp.master, sp.tx_channel), (US, s.channel));
-        let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else { panic!() };
+        let Some(Ok(TlvBody::ElectionParamsV2(e))) = action.find(kind::ELECTION_PARAMS_V2).map(|t| t.decode()) else {
+            panic!()
+        };
         assert_eq!((e.master, e.other, e.distance_to_master), (US, US, 0));
         // Where a receiver puts our next slot: target + tx_counter TU (it
         // receives at the PHY time). One grid, slot-aligned, in every frame.
@@ -228,8 +245,8 @@ fn a_lone_engine_becomes_master_on_its_own_grid() {
 fn answers_block_ack_setup_addressed_to_us() {
     // The iPhone's captured ADDBA request, re-addressed to us.
     let mut req: Vec<u8> = vec![
-        0xd0, 0x00, 0x30, 0x00, 0xb6, 0x01, 0x10, 0xf0, 0x98, 0x19, 0x76, 0x56, 0x82, 0x58, 0x57, 0x70, 0x00,
-        0x25, 0x00, 0xff, 0x94, 0x73, 0xf0, 0xea, 0x03, 0x00, 0x86, 0x03, 0x10, 0x90, 0xe2, 0x40, 0x84,
+        0xd0, 0x00, 0x30, 0x00, 0xb6, 0x01, 0x10, 0xf0, 0x98, 0x19, 0x76, 0x56, 0x82, 0x58, 0x57, 0x70, 0x00, 0x25,
+        0x00, 0xff, 0x94, 0x73, 0xf0, 0xea, 0x03, 0x00, 0x86, 0x03, 0x10, 0x90, 0xe2, 0x40, 0x84,
     ];
     let mut engine = Engine::new(Config::active(TxConfig::new(US)));
     // Not for us: ignored.

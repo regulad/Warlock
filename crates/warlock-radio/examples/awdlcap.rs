@@ -21,12 +21,8 @@ const AWDL_BSSID: [u8; 6] = [0x00, 0x25, 0x00, 0xff, 0x94, 0x73];
 fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("usage: awdlcap <out.pcapng> [channels] [seconds] [dwell_s]");
-    let channels: Vec<u8> = args
-        .next()
-        .unwrap_or_else(|| "44".into())
-        .split(',')
-        .map(|c| c.trim().parse().expect("channel"))
-        .collect();
+    let channels: Vec<u8> =
+        args.next().unwrap_or_else(|| "44".into()).split(',').map(|c| c.trim().parse().expect("channel")).collect();
     let seconds: u64 = args.next().map(|a| a.parse().expect("seconds")).unwrap_or(60);
     let dwell = Duration::from_secs(args.next().map(|a| a.parse().expect("dwell seconds")).unwrap_or(5).max(1));
     let width: u32 = args.next().map(|a| a.parse().expect("width 20 or 40")).unwrap_or(20);

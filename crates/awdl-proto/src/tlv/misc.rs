@@ -152,10 +152,7 @@ impl<'a> Ieee80211Container<'a> {
             }
             used += n;
         }
-        Ok(Self {
-            elements: Bytes::Borrowed(&v[..used]),
-            trailing: Bytes::Borrowed(&v[used..]),
-        })
+        Ok(Self { elements: Bytes::Borrowed(&v[..used]), trailing: Bytes::Borrowed(&v[used..]) })
     }
 
     /// Builds a container from `(element ID, contents)` pairs.
@@ -215,7 +212,7 @@ impl<'a> SyncTree<'a> {
 
     /// The addresses, in order.
     pub fn addresses(&self) -> impl Iterator<Item = MacAddr> + '_ {
-        self.addresses.chunks_exact(6).map(|c| MacAddr([c[0], c[1], c[2], c[3], c[4], c[5]]))
+        self.addresses.as_chunks::<6>().0.iter().map(|c| MacAddr(*c))
     }
 
     /// Appends the value.

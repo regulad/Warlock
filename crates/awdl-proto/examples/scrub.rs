@@ -28,8 +28,32 @@ use awdl_proto::{AWDL_BSSID, Frame, MacAddr, parse};
 
 /// TXT keys whose values identify nothing and are worth keeping.
 const KEEP_VALUES: &[&str] = &[
-    "sn", "model", "features", "flags", "srcvers", "osvers", "vv", "pin", "protovers", "rpFl", "rpVr", "rpMd", "statusFlags",
-    "acl", "ft", "sf", "cn", "da", "et", "md", "sv", "tp", "vn", "vs", "am", "ov",
+    "sn",
+    "model",
+    "features",
+    "flags",
+    "srcvers",
+    "osvers",
+    "vv",
+    "pin",
+    "protovers",
+    "rpFl",
+    "rpVr",
+    "rpMd",
+    "statusFlags",
+    "acl",
+    "ft",
+    "sf",
+    "cn",
+    "da",
+    "et",
+    "md",
+    "sv",
+    "tp",
+    "vn",
+    "vs",
+    "am",
+    "ov",
 ];
 /// Text labels that are common words, not names.
 const KEEP_LABELS: &[&str] = &["local", "tcp", "udp", "arpa", "ip6", "in-addr"];

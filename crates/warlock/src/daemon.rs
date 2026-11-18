@@ -268,11 +268,8 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         }
         announced += write_to_windows(&tun, discovery.refresh(Instant::now()), o.log_packets);
         if let Some((records, host)) = advertiser.poll(Instant::now()) {
-            let instances: Vec<String> = records
-                .iter()
-                .filter(|r| matches!(r.rdata, Rdata::Srv { .. }))
-                .map(|r| r.name.to_dotted())
-                .collect();
+            let instances: Vec<String> =
+                records.iter().filter(|r| matches!(r.rdata, Rdata::Srv { .. })).map(|r| r.name.to_dotted()).collect();
             info!(?instances, ?host, "advertising");
             engine.set_services(records, host);
         }

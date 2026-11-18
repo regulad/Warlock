@@ -50,7 +50,11 @@ impl Discovery {
             .iter()
             .filter(|s| !matches!(s.rdata, Rdata::Other { .. }))
             .filter_map(|s| {
-                Some(Record { name: s.name.to_wire()?, rtype: s.rdata.rtype().into(), rdata: s.rdata.to_wire(&s.name)? })
+                Some(Record {
+                    name: s.name.to_wire()?,
+                    rtype: s.rdata.rtype().into(),
+                    rdata: s.rdata.to_wire(&s.name)?,
+                })
             })
             .collect();
         if let Some(host) = peer.arpa_name.as_ref().and_then(|n| n.to_wire()) {
@@ -126,7 +130,9 @@ mod tests {
     /// A classic pcap of raw IP packets (link type 101).
     fn raw_ip_pcap(packets: &[Vec<u8>]) -> Vec<u8> {
         let mut f = Vec::new();
-        for v in [0xa1b2c3d4u32.to_le_bytes(), [2, 0, 4, 0], [0; 4], [0; 4], 65535u32.to_le_bytes(), 101u32.to_le_bytes()] {
+        for v in
+            [0xa1b2c3d4u32.to_le_bytes(), [2, 0, 4, 0], [0; 4], [0; 4], 65535u32.to_le_bytes(), 101u32.to_le_bytes()]
+        {
             f.extend_from_slice(&v);
         }
         for p in packets {

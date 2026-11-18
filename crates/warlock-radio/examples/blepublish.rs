@@ -26,10 +26,8 @@ fn unix_us() -> u128 {
 fn main() -> windows::core::Result<()> {
     let mut args = std::env::args().skip(1);
     let hex = args.next().expect("usage: blepublish <payload hex> [seconds] [delay_s]");
-    let payload: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("payload hex"))
-        .collect();
+    let payload: Vec<u8> =
+        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("payload hex")).collect();
     let seconds: u64 = args.next().map(|a| a.parse().expect("seconds")).unwrap_or(30);
     let delay: u64 = args.next().map(|a| a.parse().expect("delay seconds")).unwrap_or(0);
     std::thread::sleep(Duration::from_secs(delay));

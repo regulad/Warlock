@@ -113,26 +113,13 @@ impl Header {
         let seq_ctrl = r.u16le("sequence control")?;
         let ftype = (frame_control >> 2) & 3;
         let is_qos = ftype == 2 && frame_control & 0x0080 != 0;
-        let qos_ctrl = if is_qos {
-            Some(r.u16le("QoS control")?)
-        } else {
-            None
-        };
+        let qos_ctrl = if is_qos { Some(r.u16le("QoS control")?) } else { None };
         let ht_ctrl = if frame_control & frame_control::ORDER != 0 && (ftype == 0 || is_qos) {
             Some(r.u32le("HT control")?)
         } else {
             None
         };
-        let h = Self {
-            frame_control,
-            duration,
-            addr1,
-            addr2,
-            addr3,
-            seq_ctrl,
-            qos_ctrl,
-            ht_ctrl,
-        };
+        let h = Self { frame_control, duration, addr1, addr2, addr3, seq_ctrl, qos_ctrl, ht_ctrl };
         Ok((h, r.rest()))
     }
 
@@ -154,7 +141,6 @@ impl Header {
 
     /// Length of the header in bytes.
     pub const fn encoded_len(&self) -> usize {
-        24 + if self.qos_ctrl.is_some() { 2 } else { 0 }
-            + if self.ht_ctrl.is_some() { 4 } else { 0 }
+        24 + if self.qos_ctrl.is_some() { 2 } else { 0 } + if self.ht_ctrl.is_some() { 4 } else { 0 }
     }
 }

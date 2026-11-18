@@ -28,15 +28,11 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let devourer = manifest.join("../../third_party/devourer");
     if !devourer.join("CMakeLists.txt").exists() {
-        panic!(
-            "devourer checkout missing at {}; run `git submodule update --init`",
-            devourer.display()
-        );
+        panic!("devourer checkout missing at {}; run `git submodule update --init`", devourer.display());
     }
 
-    let usb_include = PathBuf::from(
-        env::var("DEP_USB_1.0_INCLUDE").expect("libusb1-sys did not export its include directory"),
-    );
+    let usb_include =
+        PathBuf::from(env::var("DEP_USB_1.0_INCLUDE").expect("libusb1-sys did not export its include directory"));
     // devourer includes <libusb.h> on MSVC and <libusb-1.0/libusb.h> elsewhere;
     // offer whichever of the two layouts libusb1-sys produced.
     let libusb_includes = [usb_include.clone(), usb_include.join("libusb-1.0")]
@@ -59,12 +55,7 @@ fn main() {
     // Multi-config generators (Visual Studio) put libraries under a
     // per-configuration directory; single-config ones (Ninja) do not.
     let build = dst.join("build");
-    for dir in [
-        build.join("Release"),
-        build.clone(),
-        build.join("devourer").join("Release"),
-        build.join("devourer"),
-    ] {
+    for dir in [build.join("Release"), build.clone(), build.join("devourer").join("Release"), build.join("devourer")] {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
     println!("cargo:rustc-link-lib=static=warlock_dvr_shim");

@@ -62,11 +62,7 @@ impl ElectionInfo {
 
     /// How the master this peer follows ranks.
     pub fn master_rank(&self) -> MasterRank {
-        MasterRank {
-            metric: self.master_metric,
-            counter: self.master_counter.unwrap_or(0),
-            addr: self.master,
-        }
+        MasterRank { metric: self.master_metric, counter: self.master_counter.unwrap_or(0), addr: self.master }
     }
 }
 

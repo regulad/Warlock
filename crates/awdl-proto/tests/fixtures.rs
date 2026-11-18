@@ -59,9 +59,9 @@ fn fixture_frames_round_trip_and_decode() {
         matches!(b, TlvBody::ChannelSequence(c) if c.sequence.encoding == encoding::OPCLASS && c.sequence.len() == 16)
     });
     assert!(opclass_16, "no 16-slot opclass channel sequence");
-    let srv_port = bodies.iter().any(|b| {
-        matches!(b, TlvBody::ServiceResponse(s) if matches!(s.rdata, Rdata::Srv { port, .. } if port != 0))
-    });
+    let srv_port = bodies
+        .iter()
+        .any(|b| matches!(b, TlvBody::ServiceResponse(s) if matches!(s.rdata, Rdata::Srv { port, .. } if port != 0)));
     assert!(srv_port, "no SRV record with a port");
     let airdrop_txt = bodies.iter().any(|b| match b {
         TlvBody::ServiceResponse(s) => s.rdata.txt_strings().any(|t| t == b"sn=com.apple.sharingd.AirDrop"),

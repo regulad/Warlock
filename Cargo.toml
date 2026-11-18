@@ -9,7 +9,3 @@ authors = ["Parker Wahle <regulad@regulad.xyz>"]
 
 [profile.release]
 debug = "line-tables-only"
-
-
-
-

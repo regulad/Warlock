@@ -135,8 +135,7 @@ impl<'a> DataPathState<'a> {
         let f = r.u16le("data path flags")?;
         let has = |bit: u16| f & bit != 0;
         let country_code = if has(flags::COUNTRY_CODE) { Some(r.array("country code")?) } else { None };
-        let social_channels =
-            if has(flags::SOCIAL_CHANNELS) { Some(r.u16le("social channels")?) } else { None };
+        let social_channels = if has(flags::SOCIAL_CHANNELS) { Some(r.u16le("social channels")?) } else { None };
         let infra = if has(flags::INFRA_BSSID_CHANNEL) {
             Some(InfraInfo { bssid: r.mac("infra BSSID")?, channel: r.u16le("infra channel")? })
         } else {

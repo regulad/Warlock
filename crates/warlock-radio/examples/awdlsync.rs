@@ -24,7 +24,8 @@ fn main() {
         let channel: u8 = args.first().map(|a| a.parse().expect("channel")).unwrap_or(44);
         let seconds: u64 = args.get(1).map(|a| a.parse().expect("seconds")).unwrap_or(60);
         println!("opening the T3U on channel {channel}; bring-up takes ~8 s");
-        let mut radio = DevourerRadio::open(&DevourerConfig { channel, ..Default::default() }).expect("opening the radio");
+        let mut radio =
+            DevourerRadio::open(&DevourerConfig { channel, ..Default::default() }).expect("opening the radio");
         println!("receiving for {seconds} s");
         let passed = run(&mut radio, Some(Duration::from_secs(seconds)));
         println!("frames dropped by the RX queue: {}", radio.dropped());
@@ -73,13 +74,23 @@ fn run(radio: &mut impl Radio, limit: Option<Duration>) -> bool {
     let passed = n >= 50 && check.source.ratio_within_tu() >= 0.99;
     println!(
         "W2 check ({n} frames from the sync source): {}",
-        if n < 50 { "not enough frames" } else if passed { "PASS" } else { "FAIL" }
+        if n < 50 {
+            "not enough frames"
+        } else if passed {
+            "PASS"
+        } else {
+            "FAIL"
+        }
     );
     passed
 }
 
 fn report(engine: &Engine, check: &SyncCheck, frames: u64, tsf: u64) {
-    println!("--- {frames} frames; master {:?}; sync source {:?}", engine.master(), engine.sync_source().map(|p| p.addr));
+    println!(
+        "--- {frames} frames; master {:?}; sync source {:?}",
+        engine.master(),
+        engine.sync_source().map(|p| p.addr)
+    );
     for p in engine.peers() {
         let e = p.election;
         println!(
