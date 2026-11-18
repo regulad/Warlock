@@ -113,11 +113,16 @@ tools.
 You need Rust (stable), Visual Studio's C++ build tools and CMake.
 
 ```text
-git clone --recursive https://github.com/regulad/Warlock
+git clone https://github.com/regulad/Warlock
 cd Warlock
+git submodule update --init
 cargo build --release
 cargo test --workspace
 ```
+
+Fetch devourer's submodule only, not recursively: its own submodules are
+reference drivers Warlock doesn't build, and one of them pins a commit its
+repository no longer has.
 
 `warlock run`, as Administrator, runs Warlock in the foreground instead of as
 a service. `cargo run -p warlock-msi` builds the MSI (see
