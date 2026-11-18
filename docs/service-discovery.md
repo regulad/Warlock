@@ -55,14 +55,35 @@ of Windows.
   in Windows. Warlock needs only a DNS wire-format codec for the TLV records.
 
 ### Limits
-- Windows has no public API to inject records into its mDNS cache, or to list
-  services registered by other processes. So:
+- Windows has no public API to inject records into its mDNS cache, or to
+  enumerate services registered by other processes. A standing query sees
+  them, but only for a service type you already know (next section). So:
   - a third-party app that registers directly with `DnsServiceRegister` on the
-    adapter gets no TLV advertisement;
+    adapter gets no TLV advertisement, unless Warlock watches that type;
   - an app that browses Windows directly misses TLV-only peers.
 
   Optional fallback: Warlock synthesizes mDNS responses for TLV-learned records
   onto its adapter.
+- **Watching Windows' own registrations (verified 2026-11-17)**, with
+  `warlock-tun`'s `dnssd mquery` and `dnssdwatch` examples, on Wi-Fi and on
+  the Warlock adapter, against a `DnsServiceRegister` made by another process:
+  - **`DnsStartMulticastQuery` (a standing PTR query) sees them.**
+    - Windows' own responder answers the query within 0.02 s, including a
+      query started 20 s after registration, once the announcements were over.
+    - It answers again at every re-query (1, 3, 7 s, ...).
+    - Deregistration arrives as a goodbye: the same records with TTL 0.
+    - Each answer is delivered twice.
+    - The answers don't say who answered: on the Warlock adapter the same
+      query also returned the Apple TV's `_airplay._tcp`. Telling local from
+      remote means checking whether the SRV target resolves to the adapter's
+      own (only) address.
+  - **Windows doesn't answer service-type enumeration**
+    (`_services._dns-sd._udp.local`) for its own registrations, so the types
+    to watch have to be known in advance.
+  - **WinRT's DNS-SD `DeviceWatcher` doesn't report them.** It found the
+    Apple TV over AWDL (instance, host, port, TXT, scoped address) but never
+    the local registration, filtered by type or not. Its "enumeration
+    complete" is a fixed 30 s timeout.
 - **Verified (2026-11-17): Windows' DNS-SD works on the Warlock adapter**,
   which is IPv6 link-local only and in the Public firewall profile. Windows'
   "mDNS (UDP-In)" rule allows Public too. Tested with `warlock-tun`'s

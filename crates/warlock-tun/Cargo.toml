@@ -18,7 +18,10 @@ wintun-bindings = "=0.7.40"
 zip = { version = "=9.2.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Checking the release against its pinned hashes (MIT OR Apache-2.0).
 sha2 = "0.11"
-windows-sys = { version = "0.61", features = [
+
+[dependencies.windows-sys]
+version = "0.61"
+features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_Dns",
     "Win32_NetworkManagement_IpHelper",
@@ -28,4 +31,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com_Urlmon",
-] }
+]
+
+[dev-dependencies]
+# WinRT's DNS-SD watcher, for the dnssdwatch example (MIT OR Apache-2.0).
+windows = { version = "0.62", features = ["Devices_Enumeration", "Foundation", "Foundation_Collections"] }
+windows-collections = "0.3"

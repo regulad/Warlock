@@ -594,6 +594,8 @@ name = "warlock-tun"
 version = "0.1.0"
 dependencies = [
  "sha2",
+ "windows",
+ "windows-collections",
  "windows-sys",
  "wintun-bindings",
  "zip",

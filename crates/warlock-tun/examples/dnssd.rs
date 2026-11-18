@@ -5,13 +5,17 @@
 //!     dnssd browse   <type, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
 //!     dnssd resolve  <instance, e.g. Foo._airplay._tcp.local> <ifindex>
 //!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60]
+//!     dnssd mquery   <name, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
 //!
-//! Prints every record or instance Windows hands back.
+//! Prints every record or instance Windows hands back. `mquery` is a
+//! standing multicast query (`DnsStartMulticastQuery`): does it report
+//! Windows' own registrations too?
 
 use std::ffi::c_void;
 use std::net::Ipv6Addr;
 use std::ptr::{null, null_mut};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::DNS_REQUEST_PENDING;
 use windows_sys::Win32::NetworkManagement::Dns::*;
@@ -31,13 +35,20 @@ unsafe fn wstr(p: *const u16) -> String {
     }
 }
 
+static START: OnceLock<Instant> = OnceLock::new();
+
+fn elapsed() -> f64 {
+    START.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
 unsafe extern "system" fn on_browse(status: u32, _ctx: *const c_void, records: *const DNS_RECORDW) {
     // SAFETY: Windows hands us a record list it owns until we free it.
     unsafe {
-        println!("[browse] status {status}");
+        println!("[{:>6.2} s] status {status}", elapsed());
         let mut r = records;
         while !r.is_null() {
             let name = wstr((*r).pName);
+            print!("  ttl {:>4} ", (*r).dwTtl);
             match (*r).wType {
                 DNS_TYPE_PTR => println!("  PTR  {name} → {}", wstr((*r).Data.PTR.pNameHost)),
                 DNS_TYPE_SRV => {
@@ -58,6 +69,19 @@ unsafe extern "system" fn on_browse(status: u32, _ctx: *const c_void, records: *
         if !records.is_null() {
             DnsFree(records as *const c_void, DnsFreeRecordList);
         }
+    }
+}
+
+unsafe extern "system" fn on_mquery(_ctx: *const c_void, _handle: *mut MDNS_QUERY_HANDLE, results: *mut DNS_QUERY_RESULT) {
+    // SAFETY: Windows owns the result; its records are wide-string records
+    // (the API is Unicode-only), as on_browse prints them. on_browse frees
+    // the list.
+    unsafe {
+        if results.is_null() {
+            println!("[mquery] no result");
+            return;
+        }
+        on_browse((*results).QueryStatus as u32, null(), (*results).pQueryRecords as *const DNS_RECORDW);
     }
 }
 
@@ -99,9 +123,10 @@ unsafe extern "system" fn on_register(status: u32, _ctx: *const c_void, i: *cons
 }
 
 fn main() {
+    elapsed();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = "usage: dnssd browse <type> <ifindex> [s] | resolve <instance> <ifindex> | \
-                 register <name> <type> <port> <ifindex> <ipv6> [s]";
+                 register <name> <type> <port> <ifindex> <ipv6> [s] | mquery <name> <ifindex> [s]";
     match args.first().map(String::as_str) {
         Some("browse") if args.len() >= 3 => {
             let name = wide(&args[1]);
@@ -180,6 +205,33 @@ fn main() {
                 println!("DnsServiceDeRegister: {rc}");
                 std::thread::sleep(Duration::from_secs(2));
                 DnsServiceFreeInstance(instance);
+            }
+        }
+        Some("mquery") if args.len() >= 3 => {
+            let name = wide(&args[1]);
+            let req = MDNS_QUERY_REQUEST {
+                Version: DNS_QUERY_REQUEST_VERSION1,
+                ulRefCount: 0,
+                Query: name.as_ptr(),
+                QueryType: DNS_TYPE_PTR,
+                QueryOptions: 0,
+                InterfaceIndex: args[2].parse().expect("ifindex"),
+                pQueryCallback: Some(on_mquery),
+                pQueryContext: null_mut(),
+                fAnswerReceived: 0,
+                ulResendCount: 0,
+            };
+            // SAFETY: plain data; Windows fills it in and it stays put
+            // until the query is stopped.
+            let mut handle: MDNS_QUERY_HANDLE = unsafe { std::mem::zeroed() };
+            // SAFETY: the request, its string and the handle outlive the query.
+            let rc = unsafe { DnsStartMulticastQuery(&req, &mut handle) };
+            println!("DnsStartMulticastQuery({} PTR) on interface {}: {rc}", args[1], args[2]);
+            if rc == 0 {
+                std::thread::sleep(Duration::from_secs(args.get(3).map_or(20, |s| s.parse().unwrap())));
+                // SAFETY: the handle from the start above.
+                let rc = unsafe { DnsStopMulticastQuery(&mut handle) };
+                println!("DnsStopMulticastQuery: {rc}");
             }
         }
         _ => eprintln!("{usage}"),
