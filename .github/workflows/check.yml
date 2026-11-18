@@ -1,0 +1,59 @@
+# Checks every pull request, Dependabot's among them, and every push to
+# master: the pre-commit hooks a commit runs (.pre-commit-config.yaml), over
+# the whole tree, then the tests. Among the hooks, cargo-deny holds every
+# dependency to the licence zone (deny.toml).
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Hooks and tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # The cargo-deny the hooks use, pinned by its release archive's
+      # SHA-256 (x86_64-pc-windows-msvc, as GitHub lists it for 0.20.2).
+      CARGO_DENY_VERSION: 0.20.2
+      CARGO_DENY_SHA256: 975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc
+      PRE_COMMIT_VERSION: 4.7.0
+    steps:
+      # The tree is LF throughout; Windows runners would check it out CRLF.
+      - name: Line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: cargo-deny
+        shell: pwsh
+        run: |
+          $name = "cargo-deny-$env:CARGO_DENY_VERSION-x86_64-pc-windows-msvc"
+          $archive = "$env:RUNNER_TEMP\$name.tar.gz"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/EmbarkStudios/cargo-deny/releases/download/$env:CARGO_DENY_VERSION/$name.tar.gz" -OutFile $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:CARGO_DENY_SHA256) { "cargo-deny has SHA-256 $hash, not the pinned $env:CARGO_DENY_SHA256"; exit 1 }
+          tar -xzf $archive -C $env:RUNNER_TEMP
+          "$env:RUNNER_TEMP\$name" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: pre-commit
+        run: python -m pip install "pre-commit==$env:PRE_COMMIT_VERSION"
+      - name: Hooks
+        run: python -m pre_commit run --all-files --show-diff-on-failure
+      - name: Tests
+        run: cargo test --workspace --locked

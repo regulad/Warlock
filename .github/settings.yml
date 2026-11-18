@@ -36,6 +36,11 @@ repository:
   archived: false
   is_template: false
 
+  # Dependabot alerts, and its pull requests that fix them
+  # (.github/dependabot.yml has the routine updates).
+  enable_vulnerability_alerts: true
+  enable_automated_security_fixes: true
+
 # Labels this repo uses. `color` is a hex string without the leading `#`.
 labels:
   - name: bug
@@ -62,6 +67,10 @@ labels:
   - name: duplicate
     color: "cfd3d7"
     description: This issue or PR already exists
+  # Dependabot's (.github/dependabot.yml).
+  - name: dependencies
+    color: "0366d6"
+    description: Pull requests that update a dependency file
 
 # No `environments` key, on purpose: the deployment environments (`release`,
 # `testing`) and their signing secrets are managed by Parker's homelab

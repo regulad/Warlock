@@ -304,6 +304,11 @@ Pinned decisions:
 
 ## Verification
 - pre-commit hooks on every commit (`.pre-commit-config.yaml`, added 2026-11-18 at Parker's request): `cargo fmt` (`rustfmt.toml`: 120 columns, the code's existing style), `cargo clippy --workspace --all-targets -D warnings`, `cargo deny check` (`deny.toml`), clang-format on the C++ shim (`crates/devourer-sys/.clang-format`, LLVM style), Redocly's lint of `api/openapi.yaml`, and whitespace, line-ending, YAML and TOML checks. `pre-commit run --all-files` runs them all.
+- **CI (2026-11-18):** `.github/workflows/check.yml` runs those hooks over the whole tree, then the tests, on every pull request and every push to `master`. It uses the same pinned cargo-deny (0.20.2, by SHA-256) and pre-commit.
+- **Dependabot (Parker, 2026-11-18):** `.github/dependabot.yml`, weekly, covering cargo, GitHub Actions, the pre-commit hooks and the devourer submodule.
+  - Every update waits until its release is two weeks old (`cooldown`), the rule for new dependencies. Security updates don't wait, so review them by hand. The submodule, Parker's own fork, has no cooldown.
+  - Its pull requests get the CI above, so cargo-deny holds them to the licence zone.
+  - Alerts and security updates are on in `.github/settings.yml`, which also lists Dependabot's `dependencies` label: the Settings app deletes labels it doesn't list.
 - Unit and fuzz tests on `awdl-proto`.
 - Deterministic `awdl-core` tests driven by captured pcapngs through `PcapReplayRadio` with a simulated TSF clock.
 - Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `awdlsync` (engine live or on a capture, with the W2 check), `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.

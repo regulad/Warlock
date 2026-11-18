@@ -1,0 +1,62 @@
+# Dependabot keeps Warlock's dependencies current, weekly, in every
+# ecosystem the repository has:
+#   * the Rust workspace (Cargo.toml, Cargo.lock);
+#   * the GitHub Actions in .github/workflows/;
+#   * the pre-commit hooks' revisions (.pre-commit-config.yaml);
+#   * the devourer submodule, which follows Parker's fork's `warlock` branch.
+#
+# An update waits until its release is two weeks old (`cooldown`), as
+# PLAN.md asks of every new dependency. Security updates don't wait: the
+# cooldown doesn't apply to them, so review those with care. The submodule
+# has no cooldown: its branch moves only when Parker moves it.
+#
+# Dependabot's pull requests run .github/workflows/check.yml: the
+# pre-commit hooks, whose cargo-deny holds them to the licence zone, and
+# the tests. Its label is in .github/settings.yml, which deletes labels it
+# doesn't list.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      # Minor and patch updates together; each major on its own.
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      pre-commit:
+        patterns: ["*"]
+
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies]
