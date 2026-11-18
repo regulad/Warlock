@@ -48,7 +48,7 @@ Pinned decisions:
 - **One version for everything**, set once in `Cargo.toml` (`[workspace.package]`). Every crate inherits it, `warlock info` reports it, and the MSI is built with it. The contract's `info.version` repeats it, and a test keeps the two equal.
 - A breaking release also raises the requirement on our own crates under `[workspace.dependencies]` (`0.1.0` → `0.2.0`). Cargo rejects a path crate whose version falls outside it.
 - **Paths stay under `/v1`** through 0.y. A break after 1.0.0 would come with 2.0.0 and `/v2`.
-- Releases are tagged `vX.Y.Z`. Only `main` and those tags may use the `release` environment, which holds the signing secrets (`.github/settings.yml`).
+- Releases are tagged `vX.Y.Z`. Only `master` and those tags may use the `release` environment, which holds the signing secrets (`.github/settings.yml`).
 - No pre-release versions: an MSI's ProductVersion takes numbers only (at most 255.255.65535).
 - **The API is what semver counts:** the control API contract and `warlock-client`'s Rust API. Clients already ignore fields they don't know, so new fields are a `z` change. A new event type or radio state is not yet: today's client fails on one it doesn't know.
 

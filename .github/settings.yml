@@ -21,7 +21,7 @@ repository:
   has_downloads: true
   has_discussions: false
 
-  default_branch: main
+  default_branch: master
 
   allow_squash_merge: true
   allow_merge_commit: false
@@ -68,14 +68,14 @@ labels:
 # account it signs with, reached through GitHub's OIDC token rather than a
 # stored password. Azure's federated credential can trust this environment
 # alone (subject `repo:regulad/Warlock:environment:release`), and only runs
-# from `main` (to try signing) or a `v*` tag (a release) may enter it.
+# from `master` (to try signing) or a `v*` tag (a release) may enter it.
 # Secrets themselves aren't settings: they're set with `gh secret set --env
 # release`.
 environments:
   - name: release
     deployment_branch_policy:
       custom_branches:
-        - name: main
+        - name: master
           type: branch
         - name: v*
           type: tag
