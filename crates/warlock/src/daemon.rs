@@ -159,7 +159,8 @@ fn instances(p: &Peer) -> Vec<String> {
 }
 
 /// A random locally administered unicast address, as Apple devices use for
-/// AWDL; a new one each start.
+/// AWDL: a new one each time the service starts, kept for that run and
+/// stored nowhere (PLAN.md, W5).
 fn random_addr() -> MacAddr {
     let b = RandomState::new().hash_one(SystemTime::now()).to_le_bytes();
     MacAddr([(b[0] & 0xfc) | 0x02, b[1], b[2], b[3], b[4], b[5]])
