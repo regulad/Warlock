@@ -105,19 +105,20 @@ impl<'a> Rdata<'a> {
         }
     }
 
-    /// The record data in standard DNS wire format: names written out
-    /// ([`DnsName::to_wire`]); TXT and other data as is, except that empty
-    /// TXT data becomes one empty string, as DNS requires. `None` if a name
-    /// can't be written out.
-    pub fn to_wire(&self) -> Option<Vec<u8>> {
+    /// The data of a record named `owner`, in standard DNS wire format:
+    /// names written out ([`DnsName::to_wire_in`], where `0xC000` stands for
+    /// `owner`); TXT and other data as is, except that empty TXT data becomes
+    /// one empty string, as DNS requires. `None` if a name can't be written
+    /// out.
+    pub fn to_wire(&self, owner: &DnsName<'_>) -> Option<Vec<u8>> {
         Some(match self {
-            Rdata::Ptr(n) => n.to_wire()?,
+            Rdata::Ptr(n) => n.to_wire_in(Some(owner))?,
             Rdata::Srv { priority, weight, port, target } => {
                 let mut out = Vec::new();
                 out.put_u16be(*priority);
                 out.put_u16be(*weight);
                 out.put_u16be(*port);
-                out.put(&target.to_wire()?);
+                out.put(&target.to_wire_in(Some(owner))?);
                 out
             }
             Rdata::Txt(b) if b.is_empty() => alloc::vec![0],

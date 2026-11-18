@@ -17,8 +17,13 @@ use core::fmt;
 
 use crate::{Bytes, Error};
 
-/// AWDL's name dictionary: code → the dotted suffix it stands for. `0xC000`
-/// stands for nothing.
+/// AWDL's name dictionary: code → the dotted suffix it stands for.
+///
+/// `0xC000` is different: in record data it stands for the record's own
+/// name. Every PTR in our captures is `<instance label>` + `0xC000` under a
+/// service type's name, e.g. `crappletv` + `0xC000` under
+/// `_airplay._tcp.local`. Wireshark shows it as nothing, and so does
+/// [`DnsName::to_dotted`]; [`DnsName::to_wire_in`] writes it out.
 pub const DICTIONARY: [(u16, &str); 15] = [
     (0xC000, ""),
     (0xC001, "_airplay._tcp.local"),
@@ -144,9 +149,17 @@ impl<'a> DnsName<'a> {
 
     /// The name in standard DNS wire format: dictionary codes written out as
     /// labels, no compression, ending with the root label. `None` if it
-    /// can't be: an unknown dictionary code (we'd be guessing what it stands
-    /// for), an empty text label, or more than 255 bytes.
+    /// can't be: a dictionary code we don't know (we'd be guessing what it
+    /// stands for), including `0xC000`, which only has a meaning in record
+    /// data ([`DnsName::to_wire_in`]); an empty text label; or more than 255
+    /// bytes.
     pub fn to_wire(&self) -> Option<Vec<u8>> {
+        self.to_wire_in(None)
+    }
+
+    /// As [`DnsName::to_wire`], for a name in the data of a record whose own
+    /// name is `owner`: `0xC000` stands for `owner`.
+    pub fn to_wire_in(&self, owner: Option<&DnsName<'_>>) -> Option<Vec<u8>> {
         let mut out = Vec::new();
         for l in self.labels() {
             match l {
@@ -154,6 +167,10 @@ impl<'a> DnsName<'a> {
                 Label::Text(t) => {
                     out.push(t.len() as u8);
                     out.extend_from_slice(t);
+                }
+                Label::Compressed(0xC000) => {
+                    let o = owner?.to_wire()?;
+                    out.extend_from_slice(&o[..o.len() - 1]);
                 }
                 Label::Compressed(c) => {
                     for part in dictionary_entry(c)?.split('.').filter(|p| !p.is_empty()) {
@@ -250,9 +267,12 @@ mod tests {
         assert_eq!(n.to_wire().unwrap(), b"\x0fLiving Room 2.0\x08_airplay\x04_tcp\x05local\x00");
         let n = DnsName::encode("host.local").unwrap();
         assert_eq!(n.to_wire().unwrap(), b"\x04host\x05local\x00");
-        // 0xC000 stands for nothing.
-        let n = DnsName::from_labels(&[Label::Text(b"a"), Label::Compressed(0xC000)]).unwrap();
-        assert_eq!(n.to_wire().unwrap(), b"\x01a\x00");
+        // In record data, 0xC000 is the record's own name: a PTR's instance.
+        let owner = DnsName::from_labels(&[Label::Compressed(0xC001)]).unwrap();
+        let ptr = DnsName::from_labels(&[Label::Text(b"crappletv"), Label::Compressed(0xC000)]).unwrap();
+        assert_eq!(ptr.to_wire_in(Some(&owner)).unwrap(), b"\x09crappletv\x08_airplay\x04_tcp\x05local\x00");
+        // Anywhere else it means nothing we know.
+        assert_eq!(ptr.to_wire(), None);
         // Unknown code, empty label.
         assert_eq!(DnsName::from_labels(&[Label::Compressed(0xC0FF)]).unwrap().to_wire(), None);
         assert_eq!(DnsName::parse(b"\x00\x01a").unwrap().to_wire(), None);

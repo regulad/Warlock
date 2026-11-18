@@ -50,7 +50,7 @@ impl Discovery {
             .iter()
             .filter(|s| !matches!(s.rdata, Rdata::Other { .. }))
             .filter_map(|s| {
-                Some(Record { name: s.name.to_wire()?, rtype: s.rdata.rtype().into(), rdata: s.rdata.to_wire()? })
+                Some(Record { name: s.name.to_wire()?, rtype: s.rdata.rtype().into(), rdata: s.rdata.to_wire(&s.name)? })
             })
             .collect();
         if let Some(host) = peer.arpa_name.as_ref().and_then(|n| n.to_wire()) {
@@ -159,7 +159,11 @@ mod tests {
             let rs = Discovery::records(p);
             let aaaa = rs.iter().filter(|r| r.rtype == rr_type::AAAA).count();
             assert_eq!(aaaa, p.arpa_name.is_some() as usize);
-            assert!(rs.len() - aaaa <= known && !(known > 0 && rs.len() == aaaa), "peer {}", p.addr);
+            assert_eq!(rs.len() - aaaa, known, "peer {}: a record didn't convert", p.addr);
+            // A PTR names an instance under its own service type.
+            for r in rs.iter().filter(|r| r.rtype == rr_type::PTR) {
+                assert!(r.rdata.len() > r.name.len() && r.rdata.ends_with(&r.name), "peer {}: PTR {r:?}", p.addr);
+            }
         }
         // Unchanged records aren't announced again outside a refresh.
         for p in engine.peers() {
