@@ -105,6 +105,38 @@ impl<'a> Rdata<'a> {
         }
     }
 
+    /// The record data in standard DNS wire format: names written out
+    /// ([`DnsName::to_wire`]); TXT and other data as is, except that empty
+    /// TXT data becomes one empty string, as DNS requires. `None` if a name
+    /// can't be written out.
+    pub fn to_wire(&self) -> Option<Vec<u8>> {
+        Some(match self {
+            Rdata::Ptr(n) => n.to_wire()?,
+            Rdata::Srv { priority, weight, port, target } => {
+                let mut out = Vec::new();
+                out.put_u16be(*priority);
+                out.put_u16be(*weight);
+                out.put_u16be(*port);
+                out.put(&target.to_wire()?);
+                out
+            }
+            Rdata::Txt(b) if b.is_empty() => alloc::vec![0],
+            Rdata::Txt(b) | Rdata::Other { data: b, .. } => b.to_vec(),
+        })
+    }
+
+    /// Converts to owned data.
+    pub fn into_owned(self) -> Rdata<'static> {
+        match self {
+            Rdata::Ptr(n) => Rdata::Ptr(n.into_owned()),
+            Rdata::Srv { priority, weight, port, target } => {
+                Rdata::Srv { priority, weight, port, target: target.into_owned() }
+            }
+            Rdata::Txt(b) => Rdata::Txt(Bytes::Owned(b.into_owned())),
+            Rdata::Other { rtype, data } => Rdata::Other { rtype, data: Bytes::Owned(data.into_owned()) },
+        }
+    }
+
     /// For TXT data: the strings, in order. A string that would run past the
     /// end is cut short.
     pub fn txt_strings(&self) -> impl Iterator<Item = &[u8]> {
@@ -170,6 +202,16 @@ impl<'a> ServiceResponse<'a> {
             rdata: Rdata::parse(rtype, data),
             trailing: Bytes::Borrowed(r.rest()),
         })
+    }
+
+    /// Converts to an owned record.
+    pub fn into_owned(self) -> ServiceResponse<'static> {
+        ServiceResponse {
+            name: self.name.into_owned(),
+            unknown: self.unknown,
+            rdata: self.rdata.into_owned(),
+            trailing: Bytes::Owned(self.trailing.into_owned()),
+        }
     }
 
     /// Appends the value.

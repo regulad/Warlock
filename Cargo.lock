@@ -561,6 +561,7 @@ dependencies = [
  "awdl-proto",
  "tracing",
  "tracing-subscriber",
+ "warlock-capture",
  "warlock-radio",
  "warlock-tun",
  "warlock-usb",

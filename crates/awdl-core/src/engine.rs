@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use awdl_proto::action::{AwdlVersion, subtype};
 use awdl_proto::blockack::AddbaRequest;
-use awdl_proto::tlv::{ChannelSequence, TlvBody};
+use awdl_proto::dns::DnsName;
+use awdl_proto::tlv::{ChannelSequence, ServiceResponse, TlvBody};
 use awdl_proto::{Frame, MacAddr, parse};
 
 use crate::active::{self, FollowerView, TxConfig};
@@ -168,6 +169,9 @@ pub enum Event {
     MasterChanged(Option<MacAddr>),
     /// The peer we sync to changed.
     SyncSourceChanged(Option<MacAddr>),
+    /// A peer's service records or ARPA host name changed: see
+    /// [`Peer::services`] and [`Peer::arpa_name`].
+    ServicesChanged(MacAddr),
 }
 
 /// What we know about one peer.
@@ -197,6 +201,14 @@ pub struct Peer {
     pub schedule: Option<ChannelSchedule>,
     /// Its host name (ARPA TLV).
     pub hostname: Option<String>,
+    /// The same, as encoded. The ARPA TLV is the reverse of the peer's
+    /// address record (Apple's D2D advertises both for AWDL), so this name's
+    /// address is the peer's link-local address.
+    pub arpa_name: Option<DnsName<'static>>,
+    /// Its service records (Service Response TLVs), as its latest MIF had
+    /// them. Every MIF carries the whole set: in our captures, all of a
+    /// peer's MIFs under one service-update counter held the same records.
+    pub services: Vec<ServiceResponse<'static>>,
     /// Its AW clock on our TSF.
     pub clock: AwClock,
     /// Its latest sync claim, and what the clock made of it.
@@ -230,6 +242,8 @@ impl Peer {
             election: None,
             schedule: None,
             hostname: None,
+            arpa_name: None,
+            services: Vec::new(),
             clock: AwClock::new(),
             last_claim: None,
             master_channel: None,
@@ -347,6 +361,7 @@ impl Engine {
                     p.psfs += 1;
                 }
                 let (mut v1, mut v2, mut from_sync, mut from_tlv18) = (None, None, None, None);
+                let (mut services, mut arpa) = (Vec::new(), None);
                 for t in action.tlvs() {
                     match t.decode() {
                         Ok(TlvBody::SyncParams(s)) => {
@@ -366,9 +381,25 @@ impl Engine {
                         Ok(TlvBody::ElectionParamsV2(e)) => v2 = Some(ElectionInfo::from_v2(&e)),
                         Ok(TlvBody::ElectionParams(e)) => v1 = Some(ElectionInfo::from_v1(&e)),
                         Ok(TlvBody::Version(v)) => p.version = Some((v.version, v.device_class)),
-                        Ok(TlvBody::Arpa(a)) => p.hostname = Some(a.name.to_dotted()),
+                        Ok(TlvBody::Arpa(a)) => {
+                            p.hostname = Some(a.name.to_dotted());
+                            arpa = Some(a.name.into_owned());
+                        }
+                        Ok(TlvBody::ServiceResponse(s)) => services.push(s.into_owned()),
                         _ => {}
                     }
+                }
+                let mut changed = false;
+                if action.is_mif() && services != p.services {
+                    p.services = services;
+                    changed = true;
+                }
+                if arpa.is_some() && arpa != p.arpa_name {
+                    p.arpa_name = arpa;
+                    changed = true;
+                }
+                if changed {
+                    events.push(Event::ServicesChanged(src));
                 }
                 p.election = v2.or(v1).or(p.election);
                 p.schedule = from_tlv18.or(from_sync).or(p.schedule);

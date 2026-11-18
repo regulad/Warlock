@@ -13,5 +13,6 @@
 pub mod addr;
 mod adapter;
 pub mod dll;
+pub mod mdns;
 
 pub use adapter::Tun;

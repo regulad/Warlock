@@ -13,11 +13,14 @@ use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use awdl_core::{Action, Config, Engine, Event, RxMeta, TxConfig, TxKind};
+use awdl_core::{Action, Config, Engine, Event, Peer, RxMeta, TxConfig, TxKind};
 use awdl_proto::MacAddr;
+use awdl_proto::tlv::Rdata;
 use tracing::{info, warn};
 use warlock_radio::{DevourerConfig, DevourerRadio, Radio};
 use warlock_tun::{Tun, addr, dll};
+
+use crate::discovery::Discovery;
 
 const ETHERTYPE_IPV6: u16 = 0x86dd;
 /// The adapter's fixed identity (the last group spells "WARLOC").
@@ -91,6 +94,26 @@ impl Options {
     }
 }
 
+/// Writes packets onto the adapter, towards Windows; how many went.
+fn write_to_windows(tun: &Tun, packets: Vec<Vec<u8>>, log_packets: bool) -> u64 {
+    let mut sent = 0;
+    for p in packets {
+        if log_packets {
+            info!("to Windows from Warlock: {}", describe(&p));
+        }
+        match tun.send(&p) {
+            Ok(()) => sent += 1,
+            Err(e) => warn!("to Windows: {e}"),
+        }
+    }
+    sent
+}
+
+/// The service instances a peer advertises, for logs.
+fn instances(p: &Peer) -> Vec<String> {
+    p.services.iter().filter(|s| matches!(s.rdata, Rdata::Srv { .. })).map(|s| s.name.to_dotted()).collect()
+}
+
 /// A random locally administered unicast address, as Apple devices use for
 /// AWDL; a new one each start.
 fn random_addr() -> MacAddr {
@@ -132,8 +155,9 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         ..Config::active(tx)
     });
 
+    let mut discovery = Discovery::new(MTU as usize);
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
-    let (mut to_air, mut to_windows, mut unroutable) = (0u64, 0u64, 0u64);
+    let (mut to_air, mut to_windows, mut unroutable, mut announced) = (0u64, 0u64, 0u64, 0u64);
     let mut buf = vec![0u8; 65536];
     let until = o.seconds.map(|s| Instant::now() + Duration::from_secs(s));
     while !stop.load(Ordering::Relaxed) && until.is_none_or(|u| Instant::now() < u) {
@@ -156,6 +180,15 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
                         }
                     }
                     Event::Packet { .. } => {}
+                    Event::ServicesChanged(a) => {
+                        let Some(p) = engine.peer(a) else { continue };
+                        info!(peer = %a, host = ?p.hostname, instances = ?instances(p), "services");
+                        announced += write_to_windows(&tun, discovery.update(p), o.log_packets);
+                    }
+                    Event::PeerLost(a) => {
+                        info!("PeerLost({a})");
+                        announced += write_to_windows(&tun, discovery.lost(a), o.log_packets);
+                    }
                     other => info!("{other:?}"),
                 }
             }
@@ -191,6 +224,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        announced += write_to_windows(&tun, discovery.refresh(Instant::now()), o.log_packets);
         if last_enforce.elapsed() >= Duration::from_secs(2) {
             last_enforce = Instant::now();
             if let Err(e) = tun.enforce_address() {
@@ -199,17 +233,22 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         }
         if last_report.elapsed() >= Duration::from_secs(60) {
             last_report = Instant::now();
+            let (advertisers, records) = discovery.counts();
             info!(
                 master = ?engine.master(),
                 peers = engine.peers().count(),
                 to_air,
                 to_windows,
                 unroutable,
+                advertisers,
+                records,
+                announced,
                 "status"
             );
         }
     }
     info!("stopping");
+    write_to_windows(&tun, discovery.stop(), o.log_packets);
     // The adapter goes first, then the radio, which clears the ACK responder
     // as it closes.
     drop(tun);

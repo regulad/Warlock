@@ -142,6 +142,31 @@ impl<'a> DnsName<'a> {
         s
     }
 
+    /// The name in standard DNS wire format: dictionary codes written out as
+    /// labels, no compression, ending with the root label. `None` if it
+    /// can't be: an unknown dictionary code (we'd be guessing what it stands
+    /// for), an empty text label, or more than 255 bytes.
+    pub fn to_wire(&self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        for l in self.labels() {
+            match l {
+                Label::Text([]) => return None,
+                Label::Text(t) => {
+                    out.push(t.len() as u8);
+                    out.extend_from_slice(t);
+                }
+                Label::Compressed(c) => {
+                    for part in dictionary_entry(c)?.split('.').filter(|p| !p.is_empty()) {
+                        out.push(part.len() as u8);
+                        out.extend_from_slice(part.as_bytes());
+                    }
+                }
+            }
+        }
+        out.push(0);
+        (out.len() <= 255).then_some(out)
+    }
+
     /// Converts to an owned name.
     pub fn into_owned(self) -> DnsName<'static> {
         DnsName { raw: Bytes::Owned(self.raw.into_owned()) }
@@ -216,6 +241,21 @@ mod tests {
 
         let n = DnsName::encode("example.com").unwrap();
         assert_eq!(n.as_bytes(), b"\x07example\x03com");
+    }
+
+    #[test]
+    fn to_wire_writes_out_dictionary_codes() {
+        // A dotted instance name stays one label.
+        let n = DnsName::from_labels(&[Label::Text(b"Living Room 2.0"), Label::Compressed(0xC001)]).unwrap();
+        assert_eq!(n.to_wire().unwrap(), b"\x0fLiving Room 2.0\x08_airplay\x04_tcp\x05local\x00");
+        let n = DnsName::encode("host.local").unwrap();
+        assert_eq!(n.to_wire().unwrap(), b"\x04host\x05local\x00");
+        // 0xC000 stands for nothing.
+        let n = DnsName::from_labels(&[Label::Text(b"a"), Label::Compressed(0xC000)]).unwrap();
+        assert_eq!(n.to_wire().unwrap(), b"\x01a\x00");
+        // Unknown code, empty label.
+        assert_eq!(DnsName::from_labels(&[Label::Compressed(0xC0FF)]).unwrap().to_wire(), None);
+        assert_eq!(DnsName::parse(b"\x00\x01a").unwrap().to_wire(), None);
     }
 
     #[test]

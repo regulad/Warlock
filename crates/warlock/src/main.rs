@@ -17,6 +17,7 @@
 //! reach AWDL peers: `ping -6 fe80::<peer's EUI-64>%<adapter index>`.
 
 mod daemon;
+mod discovery;
 mod logging;
 mod service;
 
