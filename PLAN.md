@@ -200,7 +200,9 @@ Pinned decisions:
   - Open: how the session's messages are specified. OpenAPI 3.1 can describe the upgrade endpoint but not the message exchange; JSON Schema components in the same document, or an AsyncAPI document beside it.
   - The data plane stays the Wintun NIC; the API is control only.
   - Server stack: tokio's named-pipe server behind axum 0.8 (a custom `Listener`), with axum's WebSocket support. Still to pick: how the server is checked against the contract.
-- **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`).
+- **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`). **Exit criterion met 2026-11-18** (`docs/service-discovery.md`):
+  - Browse: a Mac's in-frame-only `_airdrop._tcp` showed up in Windows' own DNS-SD (2026-11-17).
+  - Advertise: a Windows registration named with `--advertise` reached a Mac (macOS 11.7) through our TLVs alone, with Windows' mDNS held back. The Mac browsed, resolved and got our address. Until the control API exists, types are named on the command line.
 - **W5 Service-grade:** control API + ctl, survives sleep/resume and dongle hot-unplug, clears the ACK responder on every exit path, ETW logging.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
 - **K2 (moment of truth):** the iPhone scans our QR and completes guest pair-setup with Koala over Warlock.

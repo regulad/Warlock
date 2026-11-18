@@ -10,6 +10,7 @@
 //! options: --channel N (149)  --width 20|40 (40)  --metric N (60)  --seconds N (run until stopped)
 //!          --log-packets (log every packet crossing the adapter)
 //!          --advertise _x._tcp (repeatable: advertise Windows' registrations of this type on AWDL)
+//!          --no-mdns-to-air (testing: peers learn our services only from our frames)
 //! ```
 //!
 //! Either way it claims the TP-Link Archer T3U for WinUSB if Windows has its

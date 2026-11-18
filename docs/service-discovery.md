@@ -18,6 +18,23 @@ Two mechanisms run side by side on Apple devices. The captures in
    - The AWDL layer (today `wifip2pd`) carries these as Service Response TLVs
      in PSF/MIF action frames.
    - Source: `mDNSMacOSX/D2D.c`, last published in mDNSResponder-1310.140.1.
+   - **Receiving, on macOS 11** (the IO80211Family kext, AirPortFamily-1852.4,
+     which has symbols): `IO80211AWDLPeer::processServiceResponseTLV` queues
+     each record a peer's frame carries, and
+     `IO80211ServiceRequestDescriptor::buildmDNSFrame` turns it into an mDNS
+     response fed into `awdl0`'s receive path, which is how mDNSResponder
+     sees it:
+     - from the peer's MAC and its EUI-64 link-local to
+       `33:33:00:00:00:fb` / `ff02::fb`, UDP 5353, hop limit 255, flags
+       `0x8400`, one record per packet;
+     - an SRV gets a second answer: the AAAA of its target, the peer's
+       link-local address. The ARPA TLV becomes the reverse PTR
+       (`<link-local>.ip6.arpa` → host name);
+     - cache-flush on everything but PTRs to services;
+     - a peer's records are processed at most 4 times per 90 s (seen live:
+       4 bursts, then one every 90 s).
+
+     Warlock's browse does the same for Windows (below).
 2. **Ordinary mDNS** (UDP 5353, `ff02::fb`) in AWDL multicast data frames:
    queries, answers, probing and announcements. Devices that are actively
    browsing or connecting use it, and peers answer it.
@@ -59,8 +76,27 @@ standing query, so nothing has to be sniffed back out of Windows.
 
   Verified on the adapter (2026-11-17): a registration targeting
   `winlite.local` was advertised and withdrawn with its registration; one
-  targeting `made-up.local` was not. Not yet seen: an Apple device finding a
-  service through our TLVs alone.
+  targeting `made-up.local` was not.
+
+  **Verified over the air (2026-11-18): a Mac finds the service through our
+  TLVs alone.** Warlock ran with `--advertise _warlocktest._tcp
+  --no-mdns-to-air`, so none of Windows' own mDNS (63 packets) went on the
+  air. On a Mac (macOS 11.7), with its cache flushed:
+  - `dns-sd -includeAWDL -B _warlocktest._tcp` listed `WarlockTest` on
+    `awdl0` 0.7 s after Warlock began advertising;
+  - `-L` resolved it at once (host, port 5555, TXT), and `-G v6` gave the
+    host our adapter's address on `awdl0`;
+  - every packet from our address on the Mac's `awdl0` (16) was one of the
+    driver's synthesized answers above: the reverse PTR, PTR, SRV + AAAA and
+    TXT, sizes Windows never sent.
+
+  How to repeat it, and two ways that don't work:
+  - Hold Windows' mDNS back at Warlock (`--no-mdns-to-air`). Windows still
+    answers its own standing queries, because it loops them back to itself.
+  - A Windows Firewall rule blocking outbound mDNS on the adapter also
+    blocks that loopback, so `--advertise` sees nothing.
+  - A `pf` rule on the Mac dropping inbound mDNS on `awdl0` also drops the
+    driver's synthesized answers, so nothing is found that way either.
 - **Browse** (decided by Parker, 2026-11-17; done the same day). Apps browse
   with Windows' own DNS-SD and need nothing from Warlock's API. Peers that
   answer mDNS are found as on any network. For peers that advertise only in

@@ -5,7 +5,7 @@
 //!
 //!     svcbits <capture>...
 //!
-//! `<mac> sui=<n> set=<a,b,...> | <type> <name hex> <rdata hex> | ...`
+//! `<mac> sui=<n> head=<flags, dwellTime hex> tlvs=<types in order> set=<a,b,...> | <type> <name hex> <rdata hex> | ...`
 
 use std::collections::BTreeMap;
 
@@ -28,11 +28,13 @@ fn main() {
         };
         for c in captured {
             let Ok(Some(Frame::Action { header, action })) = parse(&c.mpdu) else { continue };
-            let (mut set, mut sui, mut records) = (None, None, Vec::new());
+            let (mut set, mut sui, mut head, mut records) = (None, None, String::new(), Vec::new());
+            let kinds: Vec<String> = action.tlvs().map(|t| t.kind.to_string()).collect();
             for t in action.tlvs() {
                 match t.decode() {
                     Ok(TlvBody::ServiceParams(s)) => {
                         sui = Some(s.sui);
+                        head = hex(&s.unknown);
                         set = Some(s.set_values().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
                     }
                     Ok(TlvBody::ServiceResponse(s)) => {
@@ -50,7 +52,8 @@ fn main() {
                 continue;
             }
             let key = format!("{} sui={sui}", header.source());
-            seen.entry(key).or_insert_with(|| format!("set={set} | {}", records.join(" | ")));
+            let line = format!("head={head} tlvs={} set={set} | {}", kinds.join(","), records.join(" | "));
+            seen.entry(key).or_insert(line);
         }
     }
     for (k, v) in seen {

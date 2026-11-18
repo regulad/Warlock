@@ -51,6 +51,20 @@ pub struct Options {
     /// on AWDL (`--advertise _x._tcp`, repeatable); the control API's job
     /// later (`docs/service-discovery.md`).
     pub advertise: Vec<String>,
+    /// Don't carry Windows' own mDNS to AWDL (`--no-mdns-to-air`), so peers
+    /// learn about our services only from our frames. For testing that path
+    /// (`docs/service-discovery.md`): Windows still answers its own queries,
+    /// which it loops back to itself, so `--advertise` keeps working.
+    pub no_mdns_to_air: bool,
+}
+
+/// Whether an IPv6 packet is mDNS: UDP to or from port 5353, with no
+/// extension headers (Windows sends none on mDNS).
+fn is_mdns(packet: &[u8]) -> bool {
+    packet.len() >= 48
+        && packet[0] >> 4 == 6
+        && packet[6] == 17
+        && (packet[40..42] == 5353u16.to_be_bytes() || packet[42..44] == 5353u16.to_be_bytes())
 }
 
 /// One line about an IPv6 packet: addresses, protocol, UDP ports, length.
@@ -76,12 +90,23 @@ fn describe(packet: &[u8]) -> String {
 impl Options {
     /// Parses `--channel N`, `--width 20|40` and `--metric N`.
     pub fn parse(args: &[String]) -> Result<Self, Box<dyn Error>> {
-        let mut o =
-            Self { channel: 149, width: 40, metric: 60, seconds: None, log_packets: false, advertise: Vec::new() };
+        let mut o = Self {
+            channel: 149,
+            width: 40,
+            metric: 60,
+            seconds: None,
+            log_packets: false,
+            advertise: Vec::new(),
+            no_mdns_to_air: false,
+        };
         let mut it = args.iter();
         while let Some(flag) = it.next() {
             if flag == "--log-packets" {
                 o.log_packets = true;
+                continue;
+            }
+            if flag == "--no-mdns-to-air" {
+                o.no_mdns_to_air = true;
                 continue;
             }
             let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -165,7 +190,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     let mut discovery = Discovery::new(MTU as usize);
     let mut advertiser = Advertiser::new(tun.index, tun.address, &o.advertise);
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
-    let (mut to_air, mut to_windows, mut unroutable, mut announced) = (0u64, 0u64, 0u64, 0u64);
+    let (mut to_air, mut to_windows, mut unroutable, mut announced, mut mdns_held) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut buf = vec![0u8; 65536];
     let until = o.seconds.map(|s| Instant::now() + Duration::from_secs(s));
     while !stop.load(Ordering::Relaxed) && until.is_none_or(|u| Instant::now() < u) {
@@ -208,6 +233,10 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
             let packet = &buf[..n];
             if o.log_packets {
                 info!("from Windows: {}", describe(packet));
+            }
+            if o.no_mdns_to_air && is_mdns(packet) {
+                mdns_held += 1;
+                continue;
             }
             let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
                 unroutable += 1;
@@ -260,6 +289,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
                 advertisers,
                 records,
                 announced,
+                mdns_held,
                 "status"
             );
         }

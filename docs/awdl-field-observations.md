@@ -79,9 +79,21 @@ widens during transfers.
     member: the owner of the address record D2D advertises for AWDL, which
     isn't a TLV. The iPhone (iOS 27) never does, and neither does Warlock;
   - empty while nothing is advertised;
+  - `flags` and `dwellTime` were 0 from every device in our captures
+    (`examples/svcbits.rs` prints them). In the macOS 11 kext, a flag in
+    `flags` marks a MIF too full to carry all the records;
+  - the name matches Wi-Fi Direct's "supported service type hash", a
+    256-bit table of hashed Bonjour service types (wpa_supplicant's
+    `README-P2P`);
   - `wifip2pd` also has an `ssthRequest`, and Service Request TLVs carry
     `requestedOffset`, `requestedLength` and `key`: presumably a peer checks
-    the SSTH, then asks for records it lacks.
+    the SSTH, then asks for records it lacks. No frame in our captures
+    carries TLV 0 or 1, and a Mac took our records straight from our MIFs
+    without asking (`docs/service-discovery.md`).
+- **TLV order** in a Mac's MIF: 4, 5, 18, 24, 12, 7, 20, 17, 16, 21, 6, then
+  the records (2). An iPhone's puts 18 before 5 and 33 after 17; the Apple
+  TV's PSFs go 4, 5, 6, 12, 7, then the records. A Mac accepted records from
+  Warlock's order (4, 5, 18, 24, 6, 12, 7, 21, 20, 16, then 2).
 - **What triggers advertising:** a Mac sharing a file, AirDrop discoverable
   by everyone, advertised nothing in its frames until an iPhone appeared,
   then `_airdrop._tcp`. Two iOS devices nearby advertised
