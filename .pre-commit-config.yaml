@@ -47,7 +47,7 @@ repos:
       # advisory database, so it needs the network.
       - id: cargo-deny
         name: cargo deny
-        entry: cargo deny check
+        entry: cargo deny check -A unused-wrapper
         language: system
         files: '(^|/)Cargo\.(toml|lock)$|^deny\.toml$'
         pass_filenames: false

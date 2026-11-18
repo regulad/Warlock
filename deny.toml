@@ -42,8 +42,23 @@ unused-allowed-license = "allow"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Our GPL-2.0-only crates may be depended on only by our GPL-2.0-only crates
+# (`wrappers`): so warlockctl (AGPL-3.0-only) and warlock-client (GPL-2.0-only
+# OR AGPL-3.0-or-later) can't link one, directly or through anything else,
+# and stay usable under the AGPL. The licence check alone can't see this: it
+# allows GPL-2.0-only across the whole workspace. A new GPL-2.0-only crate
+# goes in every list, and gets an entry of its own. Every list names them
+# all, so most pairs never occur: the hook runs with `-A unused-wrapper`.
 deny = [
     { crate = "bincode", reason = "its 3.0 release is a tombstone; use postcard (PLAN.md)" },
+    { crate = "awdl-core", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "awdl-proto", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "devourer-sys", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-api", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-capture", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-radio", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-tun", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-usb", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
 ]
 
 [sources]
