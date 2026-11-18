@@ -209,7 +209,13 @@ Pinned decisions:
     - The pipe: first instance exclusive (a second Warlock fails to start), remote clients rejected, a spare instance listening, DACL for SYSTEM, Administrators and `warlock-users` when the group exists. Until the installer creates that group, only elevated clients get in.
     - Hyper notices a closed client at once: in tests a lock is released 13–23 ms after its client closes the connection, so the 2 s heartbeat is only a backstop.
   - Checking the server against the contract: the YAML is authoritative; `crates/warlock-api/tests/contract.rs` validates every response, and every line of every stream, against the contract's schemas (jsonschema), checks that every documented operation is served, and that the checks fail on a body that breaks the contract.
-  - Not yet run: the live test against the daemon with the radio up (`warlock run`, then `warlockctl`, both elevated).
+  - **Live (2026-11-18)**, radio up, `warlock run` and `warlockctl` both elevated:
+    - `info` reported `opening`, adapter null, then `up` with the adapter, our address and the master;
+    - an advertising lock picked up a Windows registration (`warlockctl advertising` listed the instance and its owner's PID and path);
+    - its client force-killed, Warlock's log shows the lock released 1 ms later and the instance withdrawn from our frames;
+    - `events` streamed radio, peer, service, master and advertising changes; `peers` listed an iPhone with its records;
+    - a second Warlock was refused at the pipe before touching the dongle; a bad type got a 400.
+    - Not exercised live: a hold (the test script mangled its argument). It's the same lock mechanism, and the contract tests cover it.
   - Linted by Redocly CLI's recommended rules on every commit that touches it (`.pre-commit-config.yaml`, `redocly.yaml`).
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`). **Exit criterion met 2026-11-18** (`docs/service-discovery.md`):
   - Browse: a Mac's in-frame-only `_airdrop._tcp` showed up in Windows' own DNS-SD (2026-11-17).
