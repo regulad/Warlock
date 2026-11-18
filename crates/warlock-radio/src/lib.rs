@@ -19,7 +19,9 @@ pub use rxclock::RxClock;
 pub struct RxFrame {
     /// When the host got it from the radio.
     pub host: Instant,
-    /// The receiver's hardware TSF at reception, µs, extended to 64 bits.
+    /// When it was received, µs, on the radio's clock ([`Radio::tsf_now`]):
+    /// the hardware TSF that stamped it, extended to 64 bits. For the T3U,
+    /// shifted by a constant fixed at the first frame (see [`RxClock`]).
     pub tsf: u64,
     /// The channel the radio was on.
     pub channel: u8,
@@ -60,8 +62,9 @@ pub trait Radio {
     /// Has the radio ACK unicast frames to `addr` in hardware.
     fn set_ack_responder(&mut self, addr: [u8; 6]) -> Result<(), Error>;
 
-    /// Our hardware TSF now, µs, on the timebase that stamps received frames
-    /// (see [`RxClock`]). `None` before the first frame.
+    /// The radio's clock now, µs, on the timebase of [`RxFrame::tsf`]. The
+    /// T3U's runs from the moment it opens (see [`RxClock`]); `None` only
+    /// from a replay that hasn't reached its first frame.
     fn tsf_now(&mut self) -> Option<u64>;
 }
 

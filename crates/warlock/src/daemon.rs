@@ -393,6 +393,8 @@ impl Run<'_> {
         let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
         let mut buf = vec![0u8; 65536];
         let mut ended = Ok(());
+        // A radio that stays deaf long after opening is worth knowing about.
+        let (opened, mut heard) = (Instant::now(), false);
         while !self.stopping() {
             // A USB device came or went: is ours still there?
             if watch.changes() != seen_devices {
@@ -415,51 +417,60 @@ impl Run<'_> {
                     break;
                 }
             };
-            if let Some(f) = frame {
-                for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
-                    match ev {
-                        Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
-                            if o.log_packets {
-                                info!("to Windows from {from} (to {to}): {}", describe(&payload));
-                            }
-                            match self.tun.send(&payload) {
-                                Ok(()) => self.traffic.to_windows += 1,
-                                Err(e) => warn!("to Windows: {e}"),
-                            }
-                        }
-                        Event::Packet { .. } => {}
-                        Event::ServicesChanged(a) => {
-                            let Some(p) = engine.peer(a) else { continue };
-                            info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
-                            self.traffic.announced += write_to_windows(&self.tun, discovery.update(p), o.log_packets);
-                            self.control.event(wire::Event::ServicesChanged {
-                                address: a.to_string(),
-                                services: api::services(p),
-                            });
-                        }
-                        Event::PeerLost(a) => {
-                            info!("PeerLost({a})");
-                            self.traffic.announced += write_to_windows(&self.tun, discovery.lost(a), o.log_packets);
-                            self.control.event(wire::Event::PeerLost { address: a.to_string() });
-                        }
-                        Event::PeerFound(a) => {
-                            info!("PeerFound({a})");
-                            if let Some(p) = engine.peer(a) {
-                                self.control
-                                    .event(wire::Event::PeerFound { peer: Box::new(api::peer(p, Some(f.tsf))) });
-                            }
-                        }
-                        Event::MasterChanged(m) => {
-                            info!("MasterChanged({m:?})");
-                            self.control.event(wire::Event::MasterChanged { master: m.map(|a| a.to_string()) });
-                        }
-                        other => info!("{other:?}"),
+            // A frame or, failing one, the time: silent peers expire and
+            // elections report either way. (Without ticks, becoming master
+            // alone went unreported until the first frame.)
+            let (events, at) = match frame {
+                Some(f) => {
+                    if !std::mem::replace(&mut heard, true) {
+                        info!(after = ?opened.elapsed(), channel = f.channel, master = ?engine.master(), "first frame heard");
                     }
+                    let meta = RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm };
+                    (engine.on_frame(meta, &f.mpdu), Some(f.tsf))
+                }
+                None => radio.tsf_now().map_or((Vec::new(), None), |now| (engine.on_tick(now), Some(now))),
+            };
+            for ev in events {
+                match ev {
+                    Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
+                        if o.log_packets {
+                            info!("to Windows from {from} (to {to}): {}", describe(&payload));
+                        }
+                        match self.tun.send(&payload) {
+                            Ok(()) => self.traffic.to_windows += 1,
+                            Err(e) => warn!("to Windows: {e}"),
+                        }
+                    }
+                    Event::Packet { .. } => {}
+                    Event::ServicesChanged(a) => {
+                        let Some(p) = engine.peer(a) else { continue };
+                        info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
+                        self.traffic.announced += write_to_windows(&self.tun, discovery.update(p), o.log_packets);
+                        self.control
+                            .event(wire::Event::ServicesChanged { address: a.to_string(), services: api::services(p) });
+                    }
+                    Event::PeerLost(a) => {
+                        info!("PeerLost({a})");
+                        self.traffic.announced += write_to_windows(&self.tun, discovery.lost(a), o.log_packets);
+                        self.control.event(wire::Event::PeerLost { address: a.to_string() });
+                    }
+                    Event::PeerFound(a) => {
+                        info!("PeerFound({a})");
+                        if let Some(p) = engine.peer(a) {
+                            self.control.event(wire::Event::PeerFound { peer: Box::new(api::peer(p, at)) });
+                        }
+                    }
+                    Event::MasterChanged(m) => {
+                        info!("MasterChanged({m:?})");
+                        self.control.event(wire::Event::MasterChanged { master: m.map(|a| a.to_string()) });
+                    }
+                    other => info!("{other:?}"),
                 }
             }
-            // The engine's clock is the radio's TSF, known from received
-            // frames: until one arrives, nothing goes to the air. The rest of
-            // the loop (records, locks, the API) runs regardless.
+            // The engine's clock is the radio's, which runs from the moment
+            // it opens, heard anything or not: alone, after listening, we
+            // lead a cluster of our own. (A radio without a clock would hold
+            // back only the engine; records, locks and the API run anyway.)
             let tsf = radio.tsf_now();
             if let Some(now) = tsf {
                 // Windows → AWDL: every IPv6 packet with an AWDL address to go

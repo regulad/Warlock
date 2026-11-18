@@ -109,7 +109,9 @@ For development, `sudo warlock-usb bind` (Windows `sudo`, inline mode) works.
   against AWs on the register value put every frame we sent about 7 ms off
   the AW grid. `warlock-radio`'s `RxClock` estimates "now" on the RX timebase
   instead: each frame is paired with the host instant it arrived, and the
-  pairing with the least delay over the last 2 s wins.
+  pairing with the least delay over the last 2 s wins. Before the first frame
+  it keeps host time, and the first frame shifts the RX TSF onto that (see
+  its module docs).
 - **libusb message during RX:** a long live run prints
   `libusb: error [windows_submit_transfer] program assertion failed - transfer HANDLE is NULL after transfer was submitted`
   every so often. Receiving carried on with no frames lost (60 s on channel

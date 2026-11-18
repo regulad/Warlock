@@ -265,8 +265,8 @@ impl DevourerRadio {
 impl Radio for DevourerRadio {
     fn recv(&mut self, timeout: Duration) -> Result<Option<RxFrame>, Error> {
         match self.rx.recv_timeout(timeout) {
-            Ok(f) => {
-                self.rx_clock.observe(f.host, f.tsf);
+            Ok(mut f) => {
+                f.tsf = self.rx_clock.observe(f.host, f.tsf);
                 Ok(Some(f))
             }
             Err(RecvTimeoutError::Timeout) => Ok(None),
@@ -315,7 +315,8 @@ impl Radio for DevourerRadio {
 
     fn tsf_now(&mut self) -> Option<u64> {
         // Not dvr_read_tsf: that counter isn't the one stamping RX frames.
-        self.rx_clock.tsf_at(Instant::now())
+        // Always known: before the first frame, it's host time (RxClock).
+        Some(self.rx_clock.tsf_at(Instant::now()))
     }
 }
 
