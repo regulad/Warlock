@@ -48,7 +48,7 @@ Pinned decisions:
 - **One version for everything**, set once in `Cargo.toml` (`[workspace.package]`). Every crate inherits it, `warlock info` reports it, and the MSI is built with it. The contract's `info.version` repeats it, and a test keeps the two equal.
 - A breaking release also raises the requirement on our own crates under `[workspace.dependencies]` (`0.1.0` → `0.2.0`). Cargo rejects a path crate whose version falls outside it.
 - **Paths stay under `/v1`** through 0.y. A break after 1.0.0 would come with 2.0.0 and `/v2`.
-- Releases are tagged `vX.Y.Z`. Only `master` and those tags may use the `release` environment, which holds the signing secrets (`.github/settings.yml`).
+- Releases are tagged `vX.Y.Z`. `.github/workflows/build.yml` signs a tag's build from the `release` environment, and a run started by hand from `testing` (a test certificate). Parker's homelab configuration manages both environments and their secrets. `.github/settings.yml` deliberately has no `environments` key: with one, the Settings app would delete every environment it doesn't list.
 - No pre-release versions: an MSI's ProductVersion takes numbers only (at most 255.255.65535).
 - **The API is what semver counts:** the control API contract and `warlock-client`'s Rust API.
 - **Open event types and radio states (Parker, 2026-11-18, before 0.1.0).** Without a break, Warlock may add properties, event types and radio states: a `z` change. The contract's "Compatibility" section tells clients to ignore properties and event types they don't know, and to take an unknown radio state as not `up`.

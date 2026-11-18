@@ -64,32 +64,11 @@ labels:
     color: "cfd3d7"
     description: This issue or PR already exists
 
-# Where the signing workflow's secrets live: the Azure Artifact Signing
-# account it signs with, reached through GitHub's OIDC token rather than a
-# stored password. Azure's federated credentials trust these environments
-# (subject `repo:regulad/Warlock:environment:<name>`), which decide which
-# refs may use them. Both hold the same secrets, set with `gh secret set
-# --env <name>`: secrets aren't settings.
-#
-# Every environment the repository has must be listed: the Settings app
-# deletes any that isn't, and its secrets with it.
-environments:
-  # Releases: `v*` tags (and `master`).
-  - name: release
-    deployment_branch_policy:
-      custom_branches:
-        - name: master
-          type: branch
-        - name: v*
-          type: tag
-  # Signing anything else, to try the pipeline: runs started by hand.
-  - name: testing
-    deployment_branch_policy:
-      custom_branches:
-        - name: master
-          type: branch
-        - name: testing
-          type: branch
+# No `environments` key, on purpose: the deployment environments (`release`,
+# `testing`) and their signing secrets are managed by Parker's homelab
+# configuration, not here. Don't add one: the Settings app would then
+# delete every environment it doesn't list, secrets and all. Without the
+# key it never touches them.
 
 # No branch-protection rules — solo-maintainer repo, direct pushes to the
 # default branch are expected. Add rules here if that changes.

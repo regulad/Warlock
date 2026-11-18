@@ -9,7 +9,8 @@
 # signed.
 #
 # A `v*` tag signs from the `release` environment, anything else (a run
-# started by hand) from `testing` (.github/settings.yml).
+# started by hand) from `testing`, which signs with a test certificate.
+# Parker's homelab configuration manages both and their secrets.
 name: Build and sign
 
 on:
@@ -71,14 +72,21 @@ jobs:
           certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
           files-folder: binaries
           files-folder-filter: exe
+      # `testing` signs with a test certificate, whose root Windows doesn't
+      # trust: there a signature may fail on that and nothing else. A
+      # release must be valid. (Tampering would show as HashMismatch.)
       - name: Check the signatures
         shell: pwsh
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           $bad = 0
           foreach ($f in Get-ChildItem binaries -Filter *.exe) {
             $s = Get-AuthenticodeSignature $f.FullName
-            "$($f.Name): $($s.Status), $($s.SignerCertificate.Subject), timestamped: $($null -ne $s.TimeStamperCertificate)"
-            if ($s.Status -ne 'Valid') { $bad++ }
+            $untrustedRoot = $s.Status -eq 'UnknownError' -and $s.StatusMessage -match 'root certificate which is not trusted'
+            $ok = $s.Status -eq 'Valid' -or ($env:RELEASE -ne 'true' -and $untrustedRoot)
+            "$($f.Name): $($s.Status) ($($s.StatusMessage)) signer: $($s.SignerCertificate.Subject); issuer: $($s.SignerCertificate.Issuer); timestamped: $($null -ne $s.TimeStamperCertificate)"
+            if (-not $ok) { $bad++ }
           }
           exit $bad
       - uses: actions/upload-artifact@v7
@@ -141,9 +149,11 @@ jobs:
           files-folder: package
           files-folder-filter: msi
       # The package, and the binaries inside it, unpacked by an
-      # administrative install.
+      # administrative install; judged as in "Sign the binaries".
       - name: Check the signatures
         shell: pwsh
+        env:
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           $msi = Get-ChildItem package -Filter *.msi | Select-Object -First 1
           $p = Start-Process msiexec -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$env:RUNNER_TEMP\unpacked`"" -Wait -PassThru
@@ -152,8 +162,10 @@ jobs:
           $bad = 0
           foreach ($f in $files) {
             $s = Get-AuthenticodeSignature $f.FullName
-            "$($f.Name): $($s.Status), $($s.SignerCertificate.Subject), timestamped: $($null -ne $s.TimeStamperCertificate)"
-            if ($s.Status -ne 'Valid') { $bad++ }
+            $untrustedRoot = $s.Status -eq 'UnknownError' -and $s.StatusMessage -match 'root certificate which is not trusted'
+            $ok = $s.Status -eq 'Valid' -or ($env:RELEASE -ne 'true' -and $untrustedRoot)
+            "$($f.Name): $($s.Status) ($($s.StatusMessage)) signer: $($s.SignerCertificate.Subject); issuer: $($s.SignerCertificate.Issuer); timestamped: $($null -ne $s.TimeStamperCertificate)"
+            if (-not $ok) { $bad++ }
           }
           if ($files.Count -lt 3) { "expected the package and two binaries, found $($files.Count) files"; $bad++ }
           exit $bad
