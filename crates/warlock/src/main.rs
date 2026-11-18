@@ -7,7 +7,8 @@
 //! warlock uninstall            stops and removes the service
 //! warlock service [options]    what the service manager runs
 //!
-//! options: --channel N (149)  --width 20|40 (40)  --metric N (60)
+//! options: --channel N (149)  --width 20|40 (40)  --metric N (60)  --seconds N (run until stopped)
+//!          --log-packets (log every packet crossing the adapter)
 //! ```
 //!
 //! Either way it claims the TP-Link Archer T3U for WinUSB if Windows has its

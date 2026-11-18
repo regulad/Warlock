@@ -63,8 +63,22 @@ of Windows.
 
   Optional fallback: Warlock synthesizes mDNS responses for TLV-learned records
   onto its adapter.
-- **To verify (W4):** that Windows' DNS-SD behaves on a Wintun adapter (IPv6
-  link-local only, no IPv4, Public firewall profile).
+- **Verified (2026-11-17): Windows' DNS-SD works on the Warlock adapter**,
+  which is IPv6 link-local only and in the Public firewall profile. Windows'
+  "mDNS (UDP-In)" rule allows Public too. Tested with `warlock-tun`'s
+  `dnssd` example and `warlock run --log-packets`:
+  - **Register:** `DnsServiceRegister` on the adapter's interface index. A
+    Mac (macOS 11) browsing over AWDL (`dns-sd -includeAWDL -B`) found the
+    service within 0.5 s.
+  - **Browse and resolve:** `DnsServiceBrowse` found a Mac's AWDL-registered
+    test service, with SRV, TXT and the AAAA of its AWDL link-local. It also
+    found an Apple TV's `_airplay._tcp`: the TV answered Windows' multicast
+    query within 0.5 s by **unicast** mDNS to our link-local, which Windows
+    accepts.
+  - One early browse found nothing. It was most likely run before the TV,
+    just woken, had joined our cluster. Two later browses found it.
+  - Not yet tried: an iPhone's services, and TLV-only peers, which mDNS
+    can't show by design.
 
 ## Rejected alternatives
 

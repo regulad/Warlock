@@ -38,19 +38,49 @@ pub struct Options {
     /// Our election metric. Apple devices use ~65 idle and ~510–540 active;
     /// at 60 we follow any of them and lead only when alone.
     pub metric: u32,
+    /// Stop after this long (`--seconds`): for a foreground run nothing can
+    /// send Ctrl+C to, such as an elevated one started from a script.
+    pub seconds: Option<u64>,
+    /// Log every packet crossing the adapter (`--log-packets`), either way.
+    pub log_packets: bool,
+}
+
+/// One line about an IPv6 packet: addresses, protocol, UDP ports, length.
+fn describe(packet: &[u8]) -> String {
+    if packet.len() < 40 || packet[0] >> 4 != 6 {
+        return format!("non-IPv6, {} bytes", packet.len());
+    }
+    let src = std::net::Ipv6Addr::from(<[u8; 16]>::try_from(&packet[8..24]).unwrap());
+    let dst = std::net::Ipv6Addr::from(<[u8; 16]>::try_from(&packet[24..40]).unwrap());
+    let what = match packet[6] {
+        17 if packet.len() >= 48 => format!(
+            "UDP {}→{}",
+            u16::from_be_bytes([packet[40], packet[41]]),
+            u16::from_be_bytes([packet[42], packet[43]])
+        ),
+        58 if packet.len() > 40 => format!("ICMPv6 type {}", packet[40]),
+        6 => "TCP".into(),
+        n => format!("next header {n}"),
+    };
+    format!("{src} → {dst} {what}, {} bytes", packet.len())
 }
 
 impl Options {
     /// Parses `--channel N`, `--width 20|40` and `--metric N`.
     pub fn parse(args: &[String]) -> Result<Self, Box<dyn Error>> {
-        let mut o = Self { channel: 149, width: 40, metric: 60 };
+        let mut o = Self { channel: 149, width: 40, metric: 60, seconds: None, log_packets: false };
         let mut it = args.iter();
         while let Some(flag) = it.next() {
+            if flag == "--log-packets" {
+                o.log_packets = true;
+                continue;
+            }
             let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
             match flag.as_str() {
                 "--channel" => o.channel = value.parse()?,
                 "--width" => o.width = value.parse()?,
                 "--metric" => o.metric = value.parse()?,
+                "--seconds" => o.seconds = Some(value.parse()?),
                 _ => return Err(format!("unknown option {flag}").into()),
             }
         }
@@ -105,7 +135,8 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
     let (mut to_air, mut to_windows, mut unroutable) = (0u64, 0u64, 0u64);
     let mut buf = vec![0u8; 65536];
-    while !stop.load(Ordering::Relaxed) {
+    let until = o.seconds.map(|s| Instant::now() + Duration::from_secs(s));
+    while !stop.load(Ordering::Relaxed) && until.is_none_or(|u| Instant::now() < u) {
         let now = radio.tsf_now();
         let wait = match (now, now.and_then(|n| engine.next_wakeup(n))) {
             (Some(n), Some(w)) => Duration::from_micros(w.saturating_sub(n)).min(SLICE),
@@ -115,10 +146,15 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         if let Some(f) = radio.recv(wait)? {
             for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
                 match ev {
-                    Event::Packet { ethertype: ETHERTYPE_IPV6, payload, .. } => match tun.send(&payload) {
-                        Ok(()) => to_windows += 1,
-                        Err(e) => warn!("to Windows: {e}"),
-                    },
+                    Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
+                        if o.log_packets {
+                            info!("to Windows from {from} (to {to}): {}", describe(&payload));
+                        }
+                        match tun.send(&payload) {
+                            Ok(()) => to_windows += 1,
+                            Err(e) => warn!("to Windows: {e}"),
+                        }
+                    }
                     Event::Packet { .. } => {}
                     other => info!("{other:?}"),
                 }
@@ -129,6 +165,9 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         // (none for IPv4: the adapter has no ARP).
         while let Some(n) = tun.try_recv(&mut buf) {
             let packet = &buf[..n];
+            if o.log_packets {
+                info!("from Windows: {}", describe(packet));
+            }
             let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
                 unroutable += 1;
                 continue;
