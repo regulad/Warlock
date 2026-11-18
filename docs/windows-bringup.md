@@ -140,7 +140,8 @@ On the safe radio (`warlock-radio`):
 - The service binary, `warlock` (`crates/warlock`, Administrator):
   `warlock run [--channel N] [--width 20|40] [--metric N]` in the
   foreground, or `warlock install …` / `sc start Warlock` / `sc stop Warlock`
-  / `warlock uninstall` as a service (logs: `%ProgramData%\Warlock\warlock.log`).
+  / `warlock uninstall` as a service (logs: the Event Log's
+  `Regulad-Warlock/Operational`).
   It takes part in AWDL and bridges it to a Wintun adapter, "Warlock AWDL",
   so Windows' own tools reach AWDL peers:
   `ping -6 fe80::<a peer's EUI-64>%<adapter index>`.

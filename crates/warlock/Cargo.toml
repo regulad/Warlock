@@ -18,7 +18,7 @@ windows-service = "=0.8.1"
 # Logs (MIT).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_Dns", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_NetworkManagement_NetManagement"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_Dns", "Win32_System_Console", "Win32_System_Diagnostics_Etw", "Win32_System_SystemInformation", "Win32_NetworkManagement_NetManagement"] }
 
 [dev-dependencies]
 warlock-capture.workspace = true

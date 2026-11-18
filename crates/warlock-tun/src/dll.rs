@@ -116,7 +116,7 @@ fn download(url: &str, to: &Path) -> io::Result<()> {
 /// Creates Warlock's directory (`root`) writable only by SYSTEM and
 /// Administrators (Users may read and execute), inheriting nothing from
 /// `%ProgramData%`, whose default lets any user create files. Whatever goes
-/// in it (Wintun, the service's log) should come after this. An existing
+/// in it (Wintun) should come after this. An existing
 /// directory is left as it is; the hash check before loading still holds.
 pub fn prepare_root(path: &Path) -> io::Result<()> {
     use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, LocalFree};

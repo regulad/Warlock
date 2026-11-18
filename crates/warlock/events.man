@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: GPL-2.0-only
+  Warlock's events: an ETW provider whose information, warnings and errors
+  also go to an Event Log channel, Regulad-Warlock/Operational (Event
+  Viewer: Applications and Services Logs > Regulad > Warlock > Operational),
+  which Windows caps in size. Verbose events go to ETW only.
+
+  build.rs compiles this with the Windows SDK's mc.exe and rc.exe into a
+  resource of warlock.exe, and generates the event descriptors Rust uses
+  from mc's header. `warlock setup` registers it (wevtutil im) and
+  `warlock teardown` unregisters it.
+
+  The provider GUID never changes. It was generated once with PowerShell's
+  [guid]::NewGuid() on 2026-11-18, while writing this manifest.
+-->
+<instrumentationManifest
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <instrumentation>
+    <events>
+      <provider name="Regulad-Warlock" guid="{4CBEB3F6-269D-4F15-B03C-23DD46BB1AC7}" symbol="PROVIDER"
+          resourceFileName="warlock.exe" messageFileName="warlock.exe">
+        <channels>
+          <channel name="Regulad-Warlock/Operational" chid="Operational" symbol="CHANNEL_OPERATIONAL"
+              type="Operational" enabled="true">
+            <logging>
+              <maxSize>16777216</maxSize>
+            </logging>
+          </channel>
+        </channels>
+        <templates>
+          <template tid="Message">
+            <data name="Message" inType="win:UnicodeString" outType="xs:string"/>
+          </template>
+        </templates>
+        <events>
+          <event value="1" symbol="EVENT_ERROR" level="win:Error" channel="Operational" template="Message"
+              message="$(string.Message)"/>
+          <event value="2" symbol="EVENT_WARNING" level="win:Warning" channel="Operational" template="Message"
+              message="$(string.Message)"/>
+          <event value="3" symbol="EVENT_INFORMATION" level="win:Informational" channel="Operational"
+              template="Message" message="$(string.Message)"/>
+          <event value="4" symbol="EVENT_VERBOSE" level="win:Verbose" template="Message" message="$(string.Message)"/>
+        </events>
+      </provider>
+    </events>
+  </instrumentation>
+  <localization>
+    <resources culture="en-US">
+      <stringTable>
+        <string id="Message" value="%1"/>
+      </stringTable>
+    </resources>
+  </localization>
+</instrumentationManifest>

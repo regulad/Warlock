@@ -6,9 +6,11 @@
 //! warlock install [options]    registers the Warlock service (manual start) with these options
 //! warlock uninstall            stops and removes the service
 //! warlock service [options]    what the service manager runs
-//! warlock setup [--undo]       what the MSI runs before starting the service: creates the warlock-users
-//!                              group, sets the service's failure actions (--undo: removes the group)
-//! warlock teardown             what the MSI runs on uninstall: gives the adapter back to Windows, removes the group
+//! warlock setup [--undo]       what the MSI runs before starting the service: registers Warlock's events,
+//!                              creates the warlock-users group, sets the service's failure actions
+//!                              (--undo: removes the group and the events' registration)
+//! warlock teardown             what the MSI runs on uninstall: gives the adapter back to Windows, removes the
+//!                              group, unregisters the events
 //!
 //! options: --channel N (149)  --width 20|40 (40)  --metric N (60)  --seconds N (run until stopped)
 //!          --log-packets (log every packet crossing the adapter)
@@ -25,6 +27,7 @@ mod advertise;
 mod api;
 mod daemon;
 mod discovery;
+mod events;
 mod logging;
 mod service;
 mod setup;
@@ -52,13 +55,13 @@ fn main() -> ExitCode {
         "install" => daemon::Options::parse(&options).and_then(|_| service::install(&options)),
         "uninstall" => service::uninstall(),
         "service" => service::dispatch(),
-        // Run by msiexec as SYSTEM, with no console: they log to the file.
+        // Run by msiexec as SYSTEM, with no console: they log to the events.
         "setup" => {
-            logging::file();
+            logging::events();
             setup::setup(&options)
         }
         "teardown" => {
-            logging::file();
+            logging::events();
             setup::teardown()
         }
         _ => {

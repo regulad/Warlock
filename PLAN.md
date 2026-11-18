@@ -203,7 +203,7 @@ Pinned decisions:
       - Commands: `run` (foreground, Ctrl+C), `install`/`uninstall` (LocalSystem, manual start, options kept on its command line) and `service` (the service-manager entry).
       - At start it claims the T3U for WinUSB if needed, fetches Wintun, opens the radio and the adapter.
       - It runs one thread (the radio is `!Send`), waiting on the radio in 2 ms slices and polling the adapter between them.
-      - It stops cleanly on Stop/Shutdown, logging to `%ProgramData%\Warlock\warlock.log`.
+      - It stops cleanly on Stop/Shutdown, logging to `%ProgramData%\Warlock\warlock.log` (until 2026-11-18; now the Event Log, under W5).
       - Still ahead: the event-driven engine thread, device arrival, the control API, ETW (W5).
 - **Task: API contract (added 2026-11-17; drafted 2026-11-18 as `api/openapi.yaml`).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlockctl`), as an **OpenAPI 3.2** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - **Transport:** HTTP/1.1 on a named pipe `\\.\pipe\warlock`, as Docker on Windows serves `\\.\pipe\docker_engine`. Version in the path (`/v1/…`). The pipe:
@@ -261,6 +261,13 @@ Pinned decisions:
       - The uninstall removed the service, group, `PATH` entry and files, and gave the stick back to Windows' Realtek driver.
     - Windows Installer can't set restart failure actions from `MsiServiceConfigFailureActions` (error 1939: they need the service opened with start access too), so `warlock setup` sets them, after `MsiConfigureServices` and before `StartServices`. A rollback action (`warlock setup --undo`) removes the group if a fresh install fails after it; the first, failed attempt had shown a rollback otherwise leaves it.
     - **Privileges (2026-11-18):** the service keeps one of LocalSystem's 28 privileges, `SeChangeNotifyPrivilege`, set by the MSI as its required-privileges list (`MsiServiceConfig`, `SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO`); the service manager strips the rest from its token. Found by trial on this PC: each start began with the stick on Windows' Realtek driver, and the token was read back from the running process. With a list of `SeChangeNotifyPrivilege` alone, as with the full set, it rebound the stick to WinUSB, created and addressed the Wintun adapter, opened the radio and followed the cluster. In Windows Sandbox (a fresh Windows), the installed service with that token also downloaded Wintun and installed its driver into an empty driver store before creating the adapter. Here that path couldn't be tried: Tailscale's adapter uses the Wintun driver already installed. It stays LocalSystem, the account allowed to rebind drivers and create adapters.
+    - **Logging: the Event Log, through ETW (Parker, 2026-11-18).** It replaces `%ProgramData%\Warlock\warlock.log`, which only ever grew.
+      - Warlock's events are a manifest-based ETW provider, `Regulad-Warlock` (`crates/warlock/events.man`).
+      - Information, warnings and errors also go to the Event Log channel `Regulad-Warlock/Operational`, which Windows caps at 16 MB. Verbose events would go to ETW sessions only.
+      - `build.rs` compiles the manifest with the Windows SDK's `mc.exe` and `rc.exe` into a resource of `warlock.exe`, and generates the provider GUID and event descriptors from `mc.exe`'s header.
+      - `warlock setup` registers the manifest (`wevtutil im`, pointing at the installed `warlock.exe`), and `teardown` and `setup --undo` unregister it.
+      - The `tracing` output is unchanged except for leaving out the time and level, which the Event Log records itself.
+      - This completes W5's ETW item.
     - Found on a fresh Windows (Windows Sandbox, 2026-11-18):
       - **The Visual C++ runtime.** `warlock.exe` imports `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and `MSVCP140.dll` (devourer's C++). A fresh Windows 11 has none of them, so `warlock setup` failed to start (`0xC0000135`), and the install failed (1721, then 1603) and rolled back cleanly.
         - *Decided (Parker, 2026-11-18):* a winget dependency on the runtime's package, `Microsoft.VCRedist.2015+.x64`, rather than linking it in, so Microsoft's runtime isn't ours to ship (as with `wintun.dll`).

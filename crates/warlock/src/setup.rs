@@ -16,7 +16,7 @@ use windows_service::service::{
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_sys::Win32::NetworkManagement::NetManagement::{LOCALGROUP_INFO_1, NetLocalGroupAdd, NetLocalGroupDel};
 
-use crate::service;
+use crate::{events, service};
 
 /// `ERROR_ALIAS_EXISTS` and `NERR_GroupExists`.
 const GROUP_EXISTS: [u32; 2] = [1379, 2223];
@@ -27,17 +27,24 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-/// After the service is installed and before it starts: creates the local
-/// group allowed to use the control API ([`USERS_GROUP`]), if it isn't there,
-/// and sets the service's failure actions. With `--undo` (the MSI's rollback
-/// of a fresh install), removes the group instead.
+/// After the service is installed and before it starts: registers Warlock's
+/// events, so the service's land in the Event Log, creates the local group
+/// allowed to use the control API ([`USERS_GROUP`]), if it isn't there, and
+/// sets the service's failure actions. With `--undo` (the MSI's rollback of a
+/// fresh install), removes the group and the events' registration instead.
 pub fn setup(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args {
         [] => {
+            events::install()?;
+            info!("events registered");
             create_group()?;
             failure_actions()
         }
-        [undo] if undo == "--undo" => remove_group(),
+        [undo] if undo == "--undo" => {
+            let group = remove_group();
+            let _ = events::uninstall();
+            group
+        }
         _ => Err("usage: warlock setup [--undo]".into()),
     }
 }
@@ -76,8 +83,9 @@ fn create_group() -> Result<(), Box<dyn Error>> {
 }
 
 /// Before the files go, on an uninstall that isn't an upgrade: gives the
-/// adapter back to Windows' own driver, if Warlock had it, and removes the
-/// group. Either may fail without stopping the uninstall.
+/// adapter back to Windows' own driver, if Warlock had it, removes the
+/// group, and last, unregisters the events. Any may fail without stopping
+/// the uninstall.
 pub fn teardown() -> Result<(), Box<dyn Error>> {
     let mut problems = Vec::new();
     match warlock_usb::find_supported() {
@@ -90,6 +98,12 @@ pub fn teardown() -> Result<(), Box<dyn Error>> {
     }
     if let Err(e) = remove_group() {
         problems.push(e.to_string());
+    }
+    for p in &problems {
+        tracing::warn!("{p}");
+    }
+    if let Err(e) = events::uninstall() {
+        problems.push(format!("unregistering the events: {e}"));
     }
     if problems.is_empty() { Ok(()) } else { Err(problems.join("; ").into()) }
 }

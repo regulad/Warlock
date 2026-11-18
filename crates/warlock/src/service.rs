@@ -17,7 +17,7 @@ use windows_service::service_control_handler::{self, ServiceControlHandlerResult
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
-use crate::{STOP, daemon, logging};
+use crate::{STOP, daemon, events, logging};
 
 /// The service's name.
 pub const NAME: &str = "Warlock";
@@ -31,7 +31,7 @@ pub fn dispatch() -> Result<(), Box<dyn Error>> {
 }
 
 fn service_main(_start_args: Vec<OsString>) {
-    logging::file();
+    logging::events();
     if let Err(e) = run_service() {
         tracing::error!("{e}");
     }
@@ -94,9 +94,10 @@ pub fn install(options: &[String]) -> Result<(), Box<dyn Error>> {
     service.set_description(
         "Apple Wireless Direct Link on a USB Wi-Fi adapter, with a network adapter that carries it for Windows",
     )?;
+    events::install()?;
     let command: Vec<String> = info.launch_arguments.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     println!("installed {NAME}, running {} {}", info.executable_path.display(), command.join(" "));
-    println!("start it with `sc start {NAME}`; it logs to %ProgramData%\\Warlock\\warlock.log");
+    println!("start it with `sc start {NAME}`; it logs to the event log Regulad-Warlock/Operational");
     Ok(())
 }
 
@@ -113,6 +114,7 @@ pub fn uninstall() -> Result<(), Box<dyn Error>> {
         }
     }
     service.delete()?;
+    events::uninstall()?;
     println!("removed {NAME}");
     Ok(())
 }

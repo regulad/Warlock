@@ -85,7 +85,11 @@ Programs control Warlock the same way, through a local HTTP API on the named
 pipe `\\.\pipe\warlock`. Its contract is [`api/openapi.yaml`](api/openapi.yaml);
 [`crates/warlock-client`](crates/warlock-client) is a Rust client for it.
 
-Warlock logs to `%ProgramData%\Warlock\warlock.log`.
+Warlock logs to the Windows Event Log: in Event Viewer, *Applications and
+Services Logs → Regulad → Warlock → Operational*; from a shell,
+`Get-WinEvent -LogName Regulad-Warlock/Operational`. Windows caps the log at
+16 MB. The same events are an ETW provider, `Regulad-Warlock`, for tracing
+tools.
 
 ## Privacy
 
