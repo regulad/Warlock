@@ -90,9 +90,18 @@ Warlock logs to `%ProgramData%\Warlock\warlock.log`.
 ## Privacy
 
 - Warlock's AWDL address is random, and new each time the service starts.
-- Its AWDL host name, which it sends to every nearby Apple device, is
-  currently **this PC's Windows computer name**. Apple devices use a random
-  name instead. Warlock should too, and will.
+- **Its AWDL host name is this PC's Windows computer name**, and every nearby
+  Apple device can read it. Apple devices use a random name instead.
+
+  This is a known limitation of Windows' mDNS stack: it answers address
+  queries for the computer name only, even for a service that registers
+  another host name with an address. So that is the name services on the
+  Warlock adapter can be reached by, and Windows announces it there itself,
+  as on any network it joins.
+
+  Windows' default computer names (`DESKTOP-` and random letters) say nothing
+  about you. If you've renamed your PC to something that does, consider
+  renaming it back (Settings → System → About → Rename this PC).
 
 ## Build
 
