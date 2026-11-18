@@ -94,6 +94,8 @@ const DELAYED_AUTO_START: i32 = 3;
 const FAILURE_ACTIONS_FLAG: i32 = 4;
 /// … `SERVICE_CONFIG_SERVICE_SID_INFO`.
 const SERVICE_SID: i32 = 5;
+/// … `SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO`.
+const REQUIRED_PRIVILEGES: i32 = 6;
 /// `msidbUpgradeAttributesMigrateFeatures`.
 const MIGRATE_FEATURES: i32 = 1;
 /// `msidbUpgradeAttributesOnlyDetect`.
@@ -336,7 +338,8 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         ],
         &["ServiceInstall"],
     );
-    // No StartName: LocalSystem. Its privileges are trimmed separately.
+    // No StartName: LocalSystem, the account that may rebind drivers and
+    // create adapters. Its privileges are trimmed in MsiServiceConfig.
     service_install.row(vec![
         s("WarlockService"),
         s(SERVICE),
@@ -387,12 +390,18 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         // SERVICE_SID_TYPE_UNRESTRICTED: NT SERVICE\Warlock, for ACLs.
         .row(vec![s("WarlockServiceSid"), s(SERVICE), n(CONFIG_EVENTS), n(SERVICE_SID), s("1"), s("Warlock")])
         // Restarted when it stops with an error too, not only on a crash.
+        .row(vec![s("WarlockFailureFlag"), s(SERVICE), n(CONFIG_EVENTS), n(FAILURE_ACTIONS_FLAG), s("1"), s("Warlock")])
+        // The service manager removes every other privilege from its token,
+        // 27 of LocalSystem's 28. Rebinding the stick to WinUSB, fetching
+        // Wintun, installing its driver on a fresh Windows and creating the
+        // adapter all worked without them (PLAN.md, W5, tried 2026-11-18).
+        // More entries would be separated by `[~]`.
         .row(vec![
-            s("WarlockFailureFlag"),
+            s("WarlockPrivileges"),
             s(SERVICE),
             n(CONFIG_EVENTS),
-            n(FAILURE_ACTIONS_FLAG),
-            s("1"),
+            n(REQUIRED_PRIVILEGES),
+            s("SeChangeNotifyPrivilege"),
             s("Warlock"),
         ]);
     all.push(service_config);
