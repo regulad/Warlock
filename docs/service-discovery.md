@@ -28,16 +28,27 @@ open but nobody nearby looking) shows up **only** through the TLVs.
 ## Warlock's design
 
 Warlock relies on Windows' built-in DNS-SD (`dnsapi.dll`, the DNS Client
-service) for real mDNS, and adds only the AWDL-specific parts. It is the
-registrar for services on the AWDL link, so nothing has to be sniffed back out
-of Windows.
+service) for real mDNS, and adds only the AWDL-specific parts. Windows stays
+the registrar; Warlock watches the service types it is told about with a
+standing query, so nothing has to be sniffed back out of Windows.
 
-- **Advertise.** A client (Koala, the AirDrop app) registers a service through
-  Warlock's control API. Warlock:
-  - calls `DnsServiceRegister` with `InterfaceIndex` set to its own adapter,
-    so Windows answers real mDNS queries and handles probing;
-  - encodes the same PTR/SRV/TXT records (plus our ARPA host name) into our
-    Service Response TLVs, so passive peers see them.
+- **Advertise** (decided by Parker, 2026-11-17). A client (Koala, the AirDrop
+  app):
+  - registers its service with Windows itself: `DnsServiceRegister` on the
+    Warlock adapter's interface index. Windows answers real mDNS queries and
+    handles probing;
+  - names the service **type** (e.g. `_rdlink._tcp`) through Warlock's control
+    API. Nothing else about the service goes through the API.
+
+  For each named type, Warlock:
+  - keeps a standing `DnsStartMulticastQuery` for the type's PTR on its
+    adapter (verified below);
+  - treats an instance as local when its SRV target resolves to the adapter's
+    own address. The adapter has exactly one address, our EUI-64 link-local,
+    and no AWDL peer can share it;
+  - encodes local instances' PTR/SRV/TXT records (plus our ARPA host name)
+    into our Service Response TLVs, so passive peers see them;
+  - withdraws an instance from the TLVs on its goodbye (TTL 0).
 - **Browse.** For a client's browse, Warlock:
   - runs `DnsServiceBrowse` / `DnsServiceResolve` (or `DnsStartMulticastQuery`)
     on its adapter;
@@ -58,9 +69,13 @@ of Windows.
 - Windows has no public API to inject records into its mDNS cache, or to
   enumerate services registered by other processes. A standing query sees
   them, but only for a service type you already know (next section). So:
-  - a third-party app that registers directly with `DnsServiceRegister` on the
-    adapter gets no TLV advertisement, unless Warlock watches that type;
+  - an app that registers with Windows but never names its type to Warlock
+    gets no TLV advertisement;
   - an app that browses Windows directly misses TLV-only peers.
+- **To verify:**
+  - the goodbye on Warlock's adapter (seen on Wi-Fi only so far);
+  - whether a registration on all interfaces (`InterfaceIndex` 0) is answered
+    on the adapter.
 
   Optional fallback: Warlock synthesizes mDNS responses for TLV-learned records
   onto its adapter.
@@ -105,7 +120,10 @@ of Windows.
 
 | Alternative | Why not |
 |---|---|
-| Snoop Windows' announcements on the adapter and re-encode them | Windows announces a few times and stops, while TLVs must persist; Warlock already knows what it registered |
+| Snoop Windows' announcements on the adapter and re-encode them | Windows announces a few times and stops, while TLVs must persist. A standing query gets the same records on demand |
+| Clients push whole registrations through the control API, and Warlock registers them with Windows | Makes Warlock a second registrar and apps use a Warlock-only API for what Windows already does. Naming the type is enough (Parker, 2026-11-17) |
+| Discover the types to watch automatically | Windows doesn't answer service-type enumeration (`_services._dns-sd._udp.local`) for its own registrations |
+| WinRT's DNS-SD `DeviceWatcher` to watch local registrations | It never reports them (verified 2026-11-17) |
 | TLVs only, no mDNS | Wrong: iOS browses and answers with real mDNS, including for `_companion-link._tcp` |
 | Bonjour for Windows (mDNSResponder) | Optional third-party install, and on the test PC it bound only IPv4 while AWDL is IPv6-only |
 | A hand-written mDNS stack | Unnecessary given the above |

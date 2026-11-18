@@ -116,8 +116,8 @@ Pinned decisions:
   - Drain the Wintun read event until empty (auto-reset lost-wakeup bug).
   - Coalesce TCP segments to cut Windows' ACK chatter.
   - Firewall rules: allow only what clients register. Windows' own multicast on the adapter (MLD, LLMNR, SSDP, WS-Discovery, mDNS) is carried, not filtered: nothing known about AWDL forbids it (Parker, 2026-11-17).
-  - **Service discovery (critical for Koala; see `docs/service-discovery.md`):** AWDL carries records both as Service Response TLVs in action frames (Apple's D2D) and as ordinary multicast mDNS in data frames. Warlock is the registrar and doesn't sniff:
-    - Advertise: clients register through the control API → Warlock calls `DnsServiceRegister` on its adapter (Windows' built-in DNS-SD answers real mDNS) **and** encodes the records into our TLVs.
+  - **Service discovery (critical for Koala; see `docs/service-discovery.md`):** AWDL carries records both as Service Response TLVs in action frames (Apple's D2D) and as ordinary multicast mDNS in data frames. Windows stays the registrar and Warlock doesn't sniff:
+    - Advertise (Parker, 2026-11-17): clients register with Windows themselves (`DnsServiceRegister` on the adapter) and only **name the service type** through the control API. Warlock keeps a standing `DnsStartMulticastQuery` per named type on its adapter, which Windows' own responder answers. Instances whose SRV target resolves to the adapter's own address are ours; Warlock encodes their records into our TLVs and withdraws them on goodbye (TTL 0).
     - Browse: `DnsServiceBrowse`/`Resolve` on the adapter, merged with records learned from peers' TLVs → found/lost events on the control API.
     - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former.
 - **Control API** (replaces the earlier postcard named-pipe IPC plan): an HTTP/1.1 REST API served on a local socket, specified first in `api/openapi.yaml`, with the server inside the `warlock` service. Scope and open decisions: the API contract task under Milestones.
@@ -185,7 +185,7 @@ Pinned decisions:
       - Still ahead: the event-driven engine thread, device arrival, the control API, ETW (W5).
 - **Task: API contract (added 2026-11-17; due before W4, its first consumer).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.1** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - Decide the transport. Options: a named pipe `\\.\pipe\warlock` (Docker on Windows serves `\\.\pipe\docker_engine`) or an AF_UNIX socket. Access is controlled by the socket's security descriptor (e.g. a `warlock-users` group, like `docker-users`). Version in the path (`/v1/…`).
-  - Resources to cover: daemon and radio status and control; peers; holding AWDL active and channel preference; service registration and browsing (the registrar design in `docs/service-discovery.md`); an event stream (Docker-style streamed JSON on `GET /events`); pcapng capture; one error model.
+  - Resources to cover: daemon and radio status and control; peers; holding AWDL active and channel preference; service types to advertise (clients name a type; registration itself stays with Windows; decide whether a named type lasts for the client's connection or until withdrawn) and browsing (`docs/service-discovery.md`); an event stream (Docker-style streamed JSON on `GET /events`); pcapng capture; one error model.
   - The data plane stays the Wintun NIC; the API is control only.
   - Pick the Rust server stack (hyper/axum over the chosen socket) and how the server is checked against the contract.
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`).
