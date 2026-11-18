@@ -8,6 +8,7 @@
 //! most ~2 ms, against AWDL's own waits of tens to hundreds of ms for a
 //! peer's slot. An event-driven engine thread is PLAN.md's later step.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,10 +18,13 @@ use awdl_core::{Action, Config, Engine, Event, Peer, RxMeta, TxConfig, TxKind};
 use awdl_proto::MacAddr;
 use awdl_proto::tlv::Rdata;
 use tracing::{info, warn};
+use warlock_api::types::{self as wire, RadioState};
+use warlock_api::{Security, Server};
 use warlock_radio::{DevourerConfig, DevourerRadio, Radio};
 use warlock_tun::{Tun, addr, dll};
 
 use crate::advertise::Advertiser;
+use crate::api;
 use crate::discovery::Discovery;
 
 const ETHERTYPE_IPV6: u16 = 0x86dd;
@@ -31,6 +35,8 @@ const ADAPTER_NAME: &str = "Warlock AWDL";
 const MTU: u32 = 1450;
 /// How long the loop waits on the radio at most: the adapter's latency.
 const SLICE: Duration = Duration::from_millis(2);
+/// How often the control API's view of the state is refreshed.
+const PUBLISH: Duration = Duration::from_millis(250);
 
 /// What a run is told.
 #[derive(Clone, Debug)]
@@ -47,9 +53,10 @@ pub struct Options {
     pub seconds: Option<u64>,
     /// Log every packet crossing the adapter (`--log-packets`), either way.
     pub log_packets: bool,
-    /// Service types whose Windows registrations on the adapter we advertise
-    /// on AWDL (`--advertise _x._tcp`, repeatable); the control API's job
-    /// later (`docs/service-discovery.md`).
+    /// Service types whose Windows registrations on the adapter we always
+    /// advertise on AWDL (`--advertise _x._tcp`, repeatable), besides those
+    /// programs hold locks on through the control API
+    /// (`docs/service-discovery.md`).
     pub advertise: Vec<String>,
     /// Don't carry Windows' own mDNS to AWDL (`--no-mdns-to-air`), so peers
     /// learn about our services only from our frames. For testing that path
@@ -171,8 +178,35 @@ fn claim_dongle() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// The radio's part of the control API's info.
+fn radio_info(state: RadioState, own: Option<MacAddr>, o: &Options) -> wire::Radio {
+    let up = state == RadioState::Up;
+    wire::Radio {
+        state,
+        address: own.filter(|_| up).map(|a| a.to_string()),
+        channel: up.then_some(o.channel),
+        width_mhz: up.then_some(o.width),
+    }
+}
+
 /// Runs until `stop` is set or something fails.
 pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
+    // The control API first: programs can watch the radio come up, and a
+    // second Warlock stops here, its pipe taken.
+    let mut info = wire::Info {
+        version: env!("CARGO_PKG_VERSION").into(),
+        host_name: api::host_name(),
+        adapter: None,
+        radio: radio_info(RadioState::Opening, None, o),
+        awdl: wire::Awdl { master: None, peers: 0 },
+        traffic: None,
+    };
+    let initial = warlock_api::State { info: info.clone(), peers: Vec::new(), advertised: BTreeMap::new() };
+    let (_server, mut control) = Server::start(warlock_api::PIPE, Security::Service, initial).map_err(|e| {
+        format!("can't serve the control API on {} (is Warlock running already?): {e}", warlock_api::PIPE)
+    })?;
+    info!(pipe = warlock_api::PIPE, "control API up");
+
     claim_dongle()?;
     let wintun = dll::load(&dll::ensure(&dll::default_root())?)?;
     let own = random_addr();
@@ -183,6 +217,10 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     radio.set_ack_responder(own.0)?;
     let tun = Tun::open(&wintun, ADAPTER_NAME, ADAPTER_GUID, own.0, MTU)?;
     info!(adapter = ADAPTER_NAME, index = tun.index, address = %tun.address, mtu = tun.mtu, "up");
+    info.adapter =
+        Some(wire::Adapter { name: ADAPTER_NAME.into(), index: tun.index, address: tun.address, mtu: tun.mtu });
+    info.radio = radio_info(RadioState::Up, Some(own), o);
+    control.event(wire::Event::RadioChanged { radio: info.radio.clone() });
 
     let mut tx = TxConfig::new(own);
     tx.self_metric = o.metric;
@@ -194,6 +232,9 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
 
     let mut discovery = Discovery::new(MTU as usize);
     let mut advertiser = Advertiser::new(tun.index, tun.address, &o.advertise);
+    // What the control API reports as advertised, by type.
+    let mut advertised: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut last_publish = Instant::now() - PUBLISH;
     let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
     let (mut to_air, mut to_windows, mut unroutable, mut announced, mut mdns_held) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut buf = vec![0u8; 65536];
@@ -222,10 +263,23 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
                         let Some(p) = engine.peer(a) else { continue };
                         info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
                         announced += write_to_windows(&tun, discovery.update(p), o.log_packets);
+                        control
+                            .event(wire::Event::ServicesChanged { address: a.to_string(), services: api::services(p) });
                     }
                     Event::PeerLost(a) => {
                         info!("PeerLost({a})");
                         announced += write_to_windows(&tun, discovery.lost(a), o.log_packets);
+                        control.event(wire::Event::PeerLost { address: a.to_string() });
+                    }
+                    Event::PeerFound(a) => {
+                        info!("PeerFound({a})");
+                        if let Some(p) = engine.peer(a) {
+                            control.event(wire::Event::PeerFound { peer: Box::new(api::peer(p, Some(f.tsf))) });
+                        }
+                    }
+                    Event::MasterChanged(m) => {
+                        info!("MasterChanged({m:?})");
+                        control.event(wire::Event::MasterChanged { master: m.map(|a| a.to_string()) });
                     }
                     other => info!("{other:?}"),
                 }
@@ -267,11 +321,36 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
             }
         }
         announced += write_to_windows(&tun, discovery.refresh(Instant::now()), o.log_packets);
-        if let Some((records, host)) = advertiser.poll(Instant::now()) {
-            let instances: Vec<String> =
-                records.iter().filter(|r| matches!(r.rdata, Rdata::Srv { .. })).map(|r| r.name.to_dotted()).collect();
-            info!(?instances, ?host, "advertising");
-            engine.set_services(records, host);
+        // Locks programs hold: the types to watch are ours plus theirs.
+        if let Some(wants) = control.wants() {
+            info!(types = ?wants.types, holds = wants.holds, "locks");
+            let types: Vec<String> = o.advertise.iter().cloned().chain(wants.types).collect();
+            advertiser.set_types(&types);
+        }
+        if let Some(a) = advertiser.poll(Instant::now()) {
+            info!(instances = ?a.instances, host = ?a.host, "advertising");
+            let types: BTreeSet<&String> = advertised.keys().chain(a.instances.keys()).collect();
+            for t in types {
+                let (before, after) = (advertised.get(t), a.instances.get(t));
+                if before != after {
+                    control.event(wire::Event::AdvertisingChanged {
+                        service_type: t.clone(),
+                        instances: after.cloned().unwrap_or_default(),
+                    });
+                }
+            }
+            advertised = a.instances;
+            engine.set_services(a.records, a.host);
+        }
+        if last_publish.elapsed() >= PUBLISH {
+            last_publish = Instant::now();
+            info.awdl = wire::Awdl { master: engine.master().map(|m| m.to_string()), peers: engine.peers().count() };
+            info.traffic = Some(wire::Traffic { to_air, to_windows, announced, unroutable });
+            control.publish(warlock_api::State {
+                info: info.clone(),
+                peers: engine.peers().map(|p| api::peer(p, Some(now))).collect(),
+                advertised: advertised.clone(),
+            });
         }
         if last_enforce.elapsed() >= Duration::from_secs(2) {
             last_enforce = Instant::now();

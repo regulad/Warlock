@@ -1,15 +1,17 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: MIT
+# MIT, unlike the rest of Warlock, so that anyone can generate a client from
+# it (PLAN.md, "Repos and licensing").
 openapi: 3.2.0
 info:
   title: Warlock API
   version: 1.0.0-draft
   license:
-    name: GPL-2.0-only
-    identifier: GPL-2.0-only
+    name: MIT
+    identifier: MIT
   summary: Control of Warlock, the AWDL service for Windows.
   description: |
     The control API of Warlock, for programs that use AWDL (Koala, an
-    AirDrop app, `warlock-ctl`). It is control only: data goes through the
+    AirDrop app, `warlockctl`). It is control only: data goes through the
     "Warlock AWDL" network adapter as ordinary IPv6.
 
     ## Transport
@@ -77,7 +79,7 @@ tags:
     description: Locks that keep Warlock taking part in AWDL while a program uses the link.
   - name: events
     summary: What happens, as it happens
-    description: A stream of changes, for monitoring and `warlock-ctl`.
+    description: A stream of changes, for monitoring and `warlockctl`.
 servers:
   - url: http://warlock
     description: The named pipe `\\.\pipe\warlock`; the host is ignored.
@@ -262,7 +264,7 @@ components:
           description: Its process ID (`GetNamedPipeClientProcessId`).
         image:
           type: string
-          description: Its executable's path.
+          description: Its executable's path; empty if Windows won't say.
         since:
           type: string
           format: date-time
@@ -282,22 +284,10 @@ components:
             AWDL.
           examples: ['winlite']
         adapter:
-          type: object
-          description: The "Warlock AWDL" network adapter.
-          required: [name, index, address, mtu]
-          properties:
-            name:
-              type: string
-              examples: ['Warlock AWDL']
-            index:
-              type: integer
-              description: Its interface index, for `DnsServiceRegister` and scoped addresses.
-            address:
-              description: Its only address, derived from `radio.address`.
-              $ref: '#/components/schemas/LinkLocal'
-            mtu:
-              type: integer
-              examples: [1450]
+          description: The network adapter; null until it's up.
+          oneOf:
+            - $ref: '#/components/schemas/Adapter'
+            - type: 'null'
         radio:
           $ref: '#/components/schemas/Radio'
         awdl:
@@ -328,6 +318,23 @@ components:
             unroutable:
               type: integer
               description: From Windows with no AWDL destination (e.g. IPv4), dropped.
+    Adapter:
+      type: object
+      description: The "Warlock AWDL" network adapter.
+      required: [name, index, address, mtu]
+      properties:
+        name:
+          type: string
+          examples: ['Warlock AWDL']
+        index:
+          type: integer
+          description: Its interface index, for `DnsServiceRegister` and scoped addresses.
+        address:
+          description: Its only address, derived from `radio.address`.
+          $ref: '#/components/schemas/LinkLocal'
+        mtu:
+          type: integer
+          examples: [1450]
     Radio:
       type: object
       required: [state]

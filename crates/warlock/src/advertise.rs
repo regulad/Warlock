@@ -3,8 +3,8 @@
 //! (`docs/service-discovery.md`).
 //!
 //! Apps register their services with Windows (`DnsServiceRegister` on the
-//! Warlock adapter) and name the service types to Warlock: `--advertise`
-//! today, the control API later. For each type, Warlock keeps a standing
+//! Warlock adapter) and name the service types to Warlock: with the control
+//! API's `POST /v1/advertising`, or `--advertise`. For each type, Warlock keeps a standing
 //! mDNS query on the adapter, which Windows' own responder answers. An
 //! instance is ours when its SRV target resolves to the adapter's address:
 //! Windows answers AAAA only for its own host name, with the adapter's one
@@ -141,6 +141,18 @@ unsafe extern "system" fn on_answer(context: *const c_void, _: *mut MDNS_QUERY_H
     }
 }
 
+/// What we advertise.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Advertised {
+    /// Our records, for our MIFs.
+    pub records: Vec<ServiceResponse<'static>>,
+    /// Our ARPA host name, without `.local`.
+    pub host: Option<String>,
+    /// The instances' names (case kept), by service type (`_x._tcp`): what
+    /// the control API reports.
+    pub instances: BTreeMap<String, Vec<String>>,
+}
+
 /// What's advertised for the named types.
 pub struct Advertiser {
     interface: u32,
@@ -153,7 +165,9 @@ pub struct Advertiser {
     /// Live answers and when each expires.
     cache: BTreeMap<(String, Data), Instant>,
     /// What we advertise now.
-    current: (Vec<ServiceResponse<'static>>, Option<String>),
+    current: Advertised,
+    /// The types changed since we last derived what to advertise.
+    dirty: bool,
 }
 
 /// A service type as a query name: `_x._tcp.local`, lowercased.
@@ -170,17 +184,36 @@ impl Advertiser {
         let mut a = Self {
             interface,
             address,
-            types: types.iter().map(|t| type_name(t)).collect(),
+            types: Vec::new(),
             queries: BTreeMap::new(),
             answers,
             sender,
             cache: BTreeMap::new(),
-            current: (Vec::new(), None),
+            current: Advertised::default(),
+            dirty: false,
         };
-        for t in a.types.clone() {
-            a.watch(&t, DNS_TYPE_PTR);
-        }
+        a.set_types(types);
         a
+    }
+
+    /// Watches exactly `types` from now on: new ones get a standing query,
+    /// dropped ones lose theirs and leave our frames at the next
+    /// [`Advertiser::poll`].
+    pub fn set_types(&mut self, types: &[String]) {
+        let mut next: Vec<String> = types.iter().map(|t| type_name(t)).collect();
+        next.sort();
+        next.dedup();
+        if next == self.types {
+            return;
+        }
+        for gone in self.types.iter().filter(|t| !next.contains(t)) {
+            self.queries.remove(&(gone.clone(), DNS_TYPE_PTR));
+        }
+        for t in &next {
+            self.watch(t, DNS_TYPE_PTR);
+        }
+        self.types = next;
+        self.dirty = true;
     }
 
     fn watch(&mut self, name: &str, rtype: u16) {
@@ -196,9 +229,8 @@ impl Advertiser {
         }
     }
 
-    /// Takes in Windows' answers; if what we should advertise changed, the
-    /// records and our ARPA host name (without `.local`).
-    pub fn poll(&mut self, now: Instant) -> Option<(Vec<ServiceResponse<'static>>, Option<String>)> {
+    /// Takes in Windows' answers; what we should advertise, if it changed.
+    pub fn poll(&mut self, now: Instant) -> Option<Advertised> {
         let mut fresh = false;
         while let Ok(answers) = self.answers.try_recv() {
             for a in answers {
@@ -213,9 +245,10 @@ impl Advertiser {
         let before = self.cache.len();
         self.cache.retain(|_, expires| *expires > now);
         fresh |= self.cache.len() != before;
-        if !fresh {
+        if !fresh && !self.dirty {
             return None;
         }
+        self.dirty = false;
         let next = self.derive();
         (next != self.current).then(|| {
             self.current = next.clone();
@@ -225,9 +258,10 @@ impl Advertiser {
 
     /// Our instances from the cache, as records; AAAA queries for targets
     /// not yet resolved.
-    fn derive(&mut self) -> (Vec<ServiceResponse<'static>>, Option<String>) {
+    fn derive(&mut self) -> Advertised {
         let mut records = Vec::new();
         let mut host = None;
+        let mut instances: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut unresolved = Vec::new();
         for t in &self.types {
             for (name, data) in self.cache.keys() {
@@ -266,7 +300,10 @@ impl Advertiser {
                     ServiceResponse::txt(service_type, label, &txt),
                 ];
                 match built.into_iter().collect::<Result<Vec<_>, _>>() {
-                    Ok(r) => records.extend(r),
+                    Ok(r) => {
+                        records.extend(r);
+                        instances.entry(service_type.to_string()).or_default().push(instance.clone());
+                    }
                     Err(e) => warn!(instance, "can't encode for AWDL: {e}"),
                 }
                 let h = target.trim_end_matches('.').strip_suffix(".local").unwrap_or(&target).to_string();
@@ -282,6 +319,6 @@ impl Advertiser {
         for target in unresolved {
             self.watch(&target, DNS_TYPE_AAAA);
         }
-        (records, host)
+        Advertised { records, host, instances }
     }
 }

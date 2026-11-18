@@ -25,7 +25,7 @@ Pinned decisions:
 | `koala` | AGPL-3.0-or-later | Rapport, Continuity Capture control, media pipeline, app |
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
-- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. License the contract MIT (planned) so anyone, including the AGPL apps, can generate a client from it.
+- Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. The contract is MIT (since 2026-11-18) so anyone, including the AGPL apps, can generate a client from it.
 - Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`. **Enforced since 2026-11-18** by `deny.toml` (cargo-deny 0.20.2), which pre-commit runs whenever a manifest or the lock file changes; it also allows our own GPL-2.0 crates and bans `bincode`.
 - **`wintun.dll` (decided 2026-11-17).** It ships under WireGuard LLC's prebuilt-binaries license; its source is GPL-2.0.
   - **Decision:** Warlock loads it in-process. It is never bundled: Warlock downloads the pinned release from wintun.net at runtime, checks the zip's and the DLL's SHA-256, and keeps it in an admin-only directory (`crates/warlock-tun`).
@@ -101,7 +101,7 @@ Pinned decisions:
 - **`warlock-usb`** (done in W0): claims the adapter for WinUSB with Windows' own Microsoft-signed `winusb.inf`, the way Device Manager's "Have Disk" does: a class driver list from that one INF, its generic `USB\MS_COMP_WINUSB` node, `DiInstallDevice`, after moving the device from the Net to the USBDevice setup class. No generated catalog and no certificate. `release` reinstalls the best store driver (`netrtwlanu.inf`).
 - **`warlock`** (service binary; first version done 2026-11-17, see W3's progress notes)
   - Service host via `windows-service`; stop event for clean shutdown.
-  - Claims the T3U at start and on device arrival (`CM_Register_Notification`) through `warlock-usb`; gives it back to Windows on uninstall or `warlock-ctl release`.
+  - Claims the T3U at start and on device arrival (`CM_Register_Notification`) through `warlock-usb`; gives it back to Windows on uninstall or `warlockctl release`.
   - Engine thread with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` + QPC, deadline-based periodic timers, and MMCSS priority.
   - Wintun adapter via `wintun-bindings`, configured as follows:
     - fixed GUID;
@@ -121,7 +121,7 @@ Pinned decisions:
     - Browse (Parker, 2026-11-17; done and verified the same day): apps use Windows' own DNS-SD. Warlock writes peers' TLV records onto its adapter as mDNS announcements (from the peer's link-local, TTL 120, re-announced every 60 s, goodbyes when dropped or lost), so Windows also finds peers that advertise only in frames. A Mac's `_airdrop._tcp` was found by `DnsServiceBrowse`, `DnsServiceResolve` and WinRT's watcher from Warlock's announcements alone.
     - Carry mDNS frames between the adapter and AWDL multicast slots. Accept `33:33:00:00:00:fb` and `33:33:80:00:00:fb`; transmit the former.
 - **Control API** (replaces the earlier postcard named-pipe IPC plan): an HTTP/1.1 REST API served on a local socket, specified first in `api/openapi.yaml`, with the server inside the `warlock` service. Scope and open decisions: the API contract task under Milestones.
-- **`warlock-ctl`** (binary): a client of the control API, the way `docker` is of the Engine API. Status, peers, advertising and holds, live events. No capture command: Wireshark captures on the adapter (Parker, 2026-11-18).
+- **`warlockctl`** (binary, `crates/warlockctl`, 2026-11-18): a client of the control API, the way `docker` is of the Engine API. `info`, `peers`, `peer`, `advertising`, `holds` print JSON; `advertise TYPE`, `hold REASON` and `events` hold their stream until Ctrl+C. No capture command: Wireshark captures on the adapter (Parker, 2026-11-18).
 
 ### Key external crates (Warlock zone, all GPLv2-compatible)
 `windows`/`windows-sys`, `windows-service`, `wintun-bindings`, `libusb1-sys` (vendored), `cmake`, `rtrb`, `tokio`, `hyper`/`axum` (control API), `serde`, `pcap-file`, `tracing` + `tracing-etw`, `simple-dns` (for the bridge's mDNS encoding).
@@ -183,7 +183,7 @@ Pinned decisions:
       - It runs one thread (the radio is `!Send`), waiting on the radio in 2 ms slices and polling the adapter between them.
       - It stops cleanly on Stop/Shutdown, logging to `%ProgramData%\Warlock\warlock.log`.
       - Still ahead: the event-driven engine thread, device arrival, the control API, ETW (W5).
-- **Task: API contract (added 2026-11-17; drafted 2026-11-18 as `api/openapi.yaml`).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlock-ctl`), as an **OpenAPI 3.2** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
+- **Task: API contract (added 2026-11-17; drafted 2026-11-18 as `api/openapi.yaml`).** Write down the API Warlock exposes to programs that drive AWDL directly (Koala, AirDrop, `warlockctl`), as an **OpenAPI 3.2** document `api/openapi.yaml` for an HTTP REST API on a local socket, modelled on Docker's Engine API.
   - **Transport:** HTTP/1.1 on a named pipe `\\.\pipe\warlock`, as Docker on Windows serves `\\.\pipe\docker_engine`. Version in the path (`/v1/…`). The pipe:
     - rejects remote clients (`PIPE_REJECT_REMOTE_CLIENTS`; named pipes are otherwise reachable over SMB);
     - is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so nothing can squat the name before the service starts;
@@ -193,14 +193,18 @@ Pinned decisions:
     - `POST /v1/advertising {type}`: the service type is advertised in our frames (registration itself stays with Windows; `docs/service-discovery.md`);
     - `POST /v1/holds {reason}`: an activity hold ("I'm using AWDL now": the link kept active).
 
-    The response streams the lock's state as JSON Lines (OpenAPI 3.2 `itemSchema`), on every change and at least every 2 s. That heartbeat is how a vanished client is noticed: a write to a closed pipe fails at once. When the connection closes, whether the app exits cleanly or crashes, the lock is released, so nothing can leak. Precedent: systemd's inhibitor locks are a file descriptor whose closing releases them. `GetNamedPipeClientProcessId` names the owning process in logs and `warlock-ctl`.
+    The response streams the lock's state as JSON Lines (OpenAPI 3.2 `itemSchema`), on every change and at least every 2 s. That heartbeat is how a vanished client is noticed: a write to a closed pipe fails at once. When the connection closes, whether the app exits cleanly or crashes, the lock is released, so nothing can leak. Precedent: systemd's inhibitor locks are a file descriptor whose closing releases them. `GetNamedPipeClientProcessId` names the owning process in logs and `warlockctl`.
   - Why not a WebSocket: with only locks to hold, a session protocol was more machinery than needed. Each lock as its own request needs no message protocol, needs only HTTP over a named pipe from clients (what Docker clients already do), and fits in one OpenAPI document.
-  - Plain HTTP endpoints, mostly for `warlock-ctl`: `GET /v1/info`, `/v1/peers`, `/v1/advertising`, `/v1/holds`; `GET /v1/events` streams events for as long as it's open, holding nothing. One error model (Docker's `{"message"}`).
+  - Plain HTTP endpoints, mostly for `warlockctl`: `GET /v1/info`, `/v1/peers`, `/v1/advertising`, `/v1/holds`; `GET /v1/events` streams events for as long as it's open, holding nothing. One error model (Docker's `{"message"}`).
   - No capture endpoint (Parker, 2026-11-18): capture on the "Warlock AWDL" adapter with Wireshark.
   - Browsing needs nothing in the API: Warlock writes peers' TLV records onto its adapter as mDNS, and apps browse with Windows' own DNS-SD (`docs/service-discovery.md`).
   - The data plane stays the Wintun NIC; the API is control only.
-  - Server stack: tokio's named-pipe server behind axum 0.8 (a custom `Listener`). To check: whether hyper notices a closed connection during a streaming response before the next heartbeat.
-  - Checking the server against the contract (proposed): the YAML is authoritative; tests validate every response, and every line of every stream, against its schemas.
+  - **Implemented 2026-11-18** in `crates/warlock-api`: the server, its wire types (one per contract schema) and a client. The daemon starts it before the radio, publishes state every 250 ms, forwards engine events, and applies the types and holds locks ask for (`Advertiser::set_types`).
+    - Server stack: tokio's named-pipe server and hyper 1 directly. Not axum: it depends on `sync_wrapper`, which is Apache-2.0 only, and cargo-deny rejected it.
+    - The pipe: first instance exclusive (a second Warlock fails to start), remote clients rejected, a spare instance listening, DACL for SYSTEM, Administrators and `warlock-users` when the group exists. Until the installer creates that group, only elevated clients get in.
+    - Hyper notices a closed client at once: in tests a lock is released 13–23 ms after its client closes the connection, so the 2 s heartbeat is only a backstop.
+  - Checking the server against the contract: the YAML is authoritative; `crates/warlock-api/tests/contract.rs` validates every response, and every line of every stream, against the contract's schemas (jsonschema), checks that every documented operation is served, and that the checks fail on a body that breaks the contract.
+  - Not yet run: the live test against the daemon with the radio up (`warlock run`, then `warlockctl`, both elevated).
   - Linted by Redocly CLI's recommended rules on every commit that touches it (`.pre-commit-config.yaml`, `redocly.yaml`).
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`). **Exit criterion met 2026-11-18** (`docs/service-discovery.md`):
   - Browse: a Mac's in-frame-only `_airdrop._tcp` showed up in Windows' own DNS-SD (2026-11-17).

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-capture", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
+members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
 
 [workspace.package]
 edition = "2024"
@@ -13,6 +13,7 @@ authors = ["Parker Wahle <regulad@regulad.xyz>"]
 awdl-core = { path = "crates/awdl-core", version = "0.1.0" }
 awdl-proto = { path = "crates/awdl-proto", version = "0.1.0" }
 devourer-sys = { path = "crates/devourer-sys", version = "0.1.0" }
+warlock-api = { path = "crates/warlock-api", version = "0.1.0" }
 warlock-capture = { path = "crates/warlock-capture", version = "0.1.0" }
 warlock-radio = { path = "crates/warlock-radio", version = "0.1.0" }
 warlock-tun = { path = "crates/warlock-tun", version = "0.1.0" }
