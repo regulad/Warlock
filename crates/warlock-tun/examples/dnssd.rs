@@ -4,7 +4,7 @@
 //!
 //!     dnssd browse   <type, e.g. _airplay._tcp.local> <ifindex> [seconds=20]
 //!     dnssd resolve  <instance, e.g. Foo._airplay._tcp.local> <ifindex>
-//!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60] [host=warlock-test.local]
+//!     dnssd register <instance name> <type> <port> <ifindex> <our IPv6> [seconds=60] [host=warlock-test.local] [key=value...]
 //!     dnssd mquery   <name, e.g. _airplay._tcp.local> <ifindex> [seconds=20] [PTR|SRV|TXT|AAAA]
 //!
 //! Prints every record or instance Windows hands back. `mquery` is a
@@ -167,9 +167,16 @@ fn main() {
             let host = wide(args.get(7).map_or("warlock-test.local", |s| s));
             let ip6: Ipv6Addr = args[5].parse().expect("IPv6 address");
             let ip6 = IP6_ADDRESS { IP6Byte: ip6.octets() };
-            let (k, v) = (wide("note"), wide("warlock dnssd test"));
-            let mut keys = [k.as_ptr()];
-            let mut values = [v.as_ptr()];
+            let pairs: Vec<(Vec<u16>, Vec<u16>)> = match args.get(8..).filter(|t| !t.is_empty()) {
+                Some(txt) => txt
+                    .iter()
+                    .map(|kv| kv.split_once('=').expect("TXT entries are key=value"))
+                    .map(|(k, v)| (wide(k), wide(v)))
+                    .collect(),
+                None => vec![(wide("note"), wide("warlock dnssd test"))],
+            };
+            let mut keys: Vec<*const u16> = pairs.iter().map(|(k, _)| k.as_ptr()).collect();
+            let mut values: Vec<*const u16> = pairs.iter().map(|(_, v)| v.as_ptr()).collect();
             // SAFETY: valid strings and address; the instance is freed below.
             let instance = unsafe {
                 DnsServiceConstructInstance(
@@ -180,7 +187,7 @@ fn main() {
                     args[3].parse().expect("port"),
                     0,
                     0,
-                    1,
+                    keys.len() as u32,
                     keys.as_mut_ptr(),
                     values.as_mut_ptr(),
                 )

@@ -90,6 +90,16 @@ standing query, so nothing has to be sniffed back out of Windows.
     driver's synthesized answers above: the reverse PTR, PTR, SRV + AAAA and
     TXT, sizes Windows never sent.
 
+  **And an iPhone (iOS 27), the same day.** Its AirDrop share sheet was
+  open, so it browsed `_airdrop._tcp`. We registered a test receiver: a
+  12-hex instance, TXT `flags=1019` (a Mac's), port 8770, target
+  `winlite.local`. Warlock advertised it with `--advertise _airdrop._tcp
+  --no-mdns-to-air` (72 packets of Windows' mDNS held):
+  - 0.67 s after we began advertising, the iPhone sent a TCP SYN to our
+    adapter's address on port 8770, both learned only from our frames;
+  - its first mDNS query came 0.4 s after that SYN;
+  - nothing listened, so it retried: 30 SYNs over 7 connections.
+
   How to repeat it, and two ways that don't work:
   - Hold Windows' mDNS back at Warlock (`--no-mdns-to-air`). Windows still
     answers its own standing queries, because it loops them back to itself.

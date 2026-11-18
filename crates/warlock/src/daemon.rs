@@ -81,7 +81,12 @@ fn describe(packet: &[u8]) -> String {
             u16::from_be_bytes([packet[42], packet[43]])
         ),
         58 if packet.len() > 40 => format!("ICMPv6 type {}", packet[40]),
-        6 => "TCP".into(),
+        6 if packet.len() >= 54 => format!(
+            "TCP {}→{} flags {:#04x}",
+            u16::from_be_bytes([packet[40], packet[41]]),
+            u16::from_be_bytes([packet[42], packet[43]]),
+            packet[53]
+        ),
         n => format!("next header {n}"),
     };
     format!("{src} → {dst} {what}, {} bytes", packet.len())
