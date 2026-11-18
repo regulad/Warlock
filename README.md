@@ -136,7 +136,9 @@ Warlock is free software:
 Warlock doesn't include [Wintun](https://www.wintun.net), the driver behind its
 network adapter. It downloads the release it was built against from
 wintun.net on first start, checks it against pinned hashes, and loads it,
-under WireGuard LLC's own licence for it.
+under WireGuard LLC's own licence for it. Warlock's own code permits that
+combination with an exception to its GPL
+([`LICENSE-WINTUN-EXCEPTION.md`](LICENSE-WINTUN-EXCEPTION.md)).
 
 Warlock is not affiliated with Apple. AWDL, AirDrop, AirPlay and Continuity
 are Apple's.

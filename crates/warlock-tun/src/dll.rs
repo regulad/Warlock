@@ -8,7 +8,8 @@
 //!
 //! [`ensure`] downloads and unpacks it once, into a directory only SYSTEM
 //! and Administrators can write. [`load`] checks the DLL's hash again just
-//! before loading it.
+//! before loading it. Warlock's own GPL code permits the combination
+//! (`LICENSE-WINTUN-EXCEPTION.md`).
 
 use std::io::{self, Cursor, Read, Seek};
 use std::os::windows::ffi::OsStrExt;

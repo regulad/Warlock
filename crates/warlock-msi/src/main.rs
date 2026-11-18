@@ -14,7 +14,8 @@
 //! the Visual C++ runtime the binaries link to is there, at least as new as
 //! the toolset that linked them (read from their headers): a fresh Windows
 //! has none (PLAN.md, W5). It then installs:
-//! - `warlock.exe`, `warlockctl.exe` and both licence texts into
+//! - `warlock.exe`, `warlockctl.exe`, both licence texts and the Wintun
+//!   exception into
 //!   `C:\Program Files\Warlock`, which joins the system `PATH`;
 //! - the Warlock service: LocalSystem, automatic (delayed) start, its own
 //!   service SID;
@@ -73,7 +74,9 @@ const UPGRADE_CODE: &str = "{13F9A3A8-EA0D-4025-8C66-70946C436AE5}";
 const COMPONENT_WARLOCK: &str = "{10DE44B3-190C-48DD-AF42-3E24BA15F241}";
 /// Key file `warlockctl.exe`; the `PATH` entry hangs off it.
 const COMPONENT_WARLOCKCTL: &str = "{34A10DA0-A780-4C21-8E81-FE0E0DDED176}";
-/// Key file `LICENSE.md`; with `LICENSE-AGPL-3.0.md`.
+/// Key file `LICENSE.md`; with `LICENSE-AGPL-3.0.md` and
+/// `LICENSE-WINTUN-EXCEPTION.md` (added before the first release, so no
+/// installed version had the component without it).
 const COMPONENT_LICENSES: &str = "{017BEEEC-3CC4-4536-BC22-1F8363621EB7}";
 
 /// As the winget package's publisher.
@@ -759,6 +762,13 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
             component: "Licenses",
             name: "AGPL3.MD|LICENSE-AGPL-3.0.md",
             source: root.join("LICENSE-AGPL-3.0.md"),
+            vital: false,
+        },
+        Payload {
+            key: "LICENSE_WINTUN.md",
+            component: "Licenses",
+            name: "WINTUNEX.MD|LICENSE-WINTUN-EXCEPTION.md",
+            source: root.join("LICENSE-WINTUN-EXCEPTION.md"),
             vital: false,
         },
     ];
