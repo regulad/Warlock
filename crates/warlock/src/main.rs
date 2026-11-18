@@ -6,6 +6,8 @@
 //! warlock install [options]    registers the Warlock service (manual start) with these options
 //! warlock uninstall            stops and removes the service
 //! warlock service [options]    what the service manager runs
+//! warlock setup                what the MSI runs after installing files: creates the warlock-users group
+//! warlock teardown             what the MSI runs on uninstall: gives the adapter back to Windows, removes the group
 //!
 //! options: --channel N (149)  --width 20|40 (40)  --metric N (60)  --seconds N (run until stopped)
 //!          --log-packets (log every packet crossing the adapter)
@@ -24,6 +26,7 @@ mod daemon;
 mod discovery;
 mod logging;
 mod service;
+mod setup;
 
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,7 +35,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// manager as a service.
 pub static STOP: AtomicBool = AtomicBool::new(false);
 
-const USAGE: &str = "usage: warlock run|install|uninstall|service [--channel N] [--width 20|40] [--metric N]";
+const USAGE: &str =
+    "usage: warlock run|install|uninstall|service|setup|teardown [--channel N] [--width 20|40] [--metric N]";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -47,6 +51,15 @@ fn main() -> ExitCode {
         "install" => daemon::Options::parse(&options).and_then(|_| service::install(&options)),
         "uninstall" => service::uninstall(),
         "service" => service::dispatch(),
+        // Run by msiexec as SYSTEM, with no console: they log to the file.
+        "setup" => {
+            logging::file();
+            setup::setup()
+        }
+        "teardown" => {
+            logging::file();
+            setup::teardown()
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

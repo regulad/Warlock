@@ -1310,6 +1310,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "warlock-msi"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "warlock-radio"
 version = "0.1.0"
 dependencies = [
