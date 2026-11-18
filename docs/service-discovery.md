@@ -87,6 +87,9 @@ standing query, so nothing has to be sniffed back out of Windows.
       query started 20 s after registration, once the announcements were over.
     - It answers again at every re-query (1, 3, 7 s, ...).
     - Deregistration arrives as a goodbye: the same records with TTL 0.
+      So does the registering process dying: killed with no deregistration,
+      its records went out with TTL 0 at that moment. A crashed client's
+      service can't linger in our TLVs.
     - Each answer is delivered twice.
     - The answers don't say who answered: on the Warlock adapter the same
       query also returned the Apple TV's `_airplay._tcp`. Telling local from
