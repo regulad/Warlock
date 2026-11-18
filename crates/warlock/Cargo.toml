@@ -7,11 +7,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-awdl-core = { path = "../awdl-core" }
-awdl-proto = { path = "../awdl-proto" }
-warlock-radio = { path = "../warlock-radio" }
-warlock-tun = { path = "../warlock-tun" }
-warlock-usb = { path = "../warlock-usb" }
+awdl-core.workspace = true
+awdl-proto.workspace = true
+warlock-radio.workspace = true
+warlock-tun.workspace = true
+warlock-usb.workspace = true
 # The Windows service host (MIT OR Apache-2.0).
 windows-service = "=0.8.1"
 # Logs (MIT).
@@ -20,4 +20,4 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_Dns", "Win32_System_Console"] }
 
 [dev-dependencies]
-warlock-capture = { path = "../warlock-capture" }
+warlock-capture.workspace = true

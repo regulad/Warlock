@@ -31,9 +31,9 @@ typedef struct dvr_radio dvr_radio;
 enum {
   DVR_OK = 0,
   DVR_E_ARG = -1,
-  DVR_E_USB = -2,         /* libusb failure; see dvr_last_error() */
-  DVR_E_NOT_FOUND = -3,   /* no device with that VID:PID (or not WinUSB-bound) */
-  DVR_E_BUSY = -4,        /* another process owns the adapter */
+  DVR_E_USB = -2,       /* libusb failure; see dvr_last_error() */
+  DVR_E_NOT_FOUND = -3, /* no device with that VID:PID (or not WinUSB-bound) */
+  DVR_E_BUSY = -4,      /* another process owns the adapter */
   DVR_E_UNSUPPORTED = -5, /* chip not compiled into this devourer build */
   DVR_E_FAILED = -6,      /* devourer reported failure (returned false) */
   DVR_E_EXCEPTION = -7,   /* devourer threw; see dvr_last_error() */

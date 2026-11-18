@@ -125,8 +125,8 @@ int dvr_open(uint16_t vid, uint16_t pid, const dvr_config *cfg,
     int urc = libusb_init(&r->ctx);
     if (urc < 0) {
       r->ctx = nullptr;
-      return fail(DVR_E_USB, std::string("libusb_init: ") +
-                                 libusb_error_name(urc));
+      return fail(DVR_E_USB,
+                  std::string("libusb_init: ") + libusb_error_name(urc));
     }
     libusb_set_option(r->ctx, LIBUSB_OPTION_LOG_LEVEL,
                       LIBUSB_LOG_LEVEL_WARNING);
@@ -140,8 +140,8 @@ int dvr_open(uint16_t vid, uint16_t pid, const dvr_config *cfg,
       return fail(DVR_E_NOT_FOUND, msg);
     }
 
-    urc = devourer::claim_interface_reset_reopen(
-        r->ctx, r->handle, r->logger, cfg->usb_reset != 0, r->lock);
+    urc = devourer::claim_interface_reset_reopen(r->ctx, r->handle, r->logger,
+                                                 cfg->usb_reset != 0, r->lock);
     if (urc != 0) {
       return fail(urc == LIBUSB_ERROR_BUSY ? DVR_E_BUSY : DVR_E_USB,
                   std::string("claim/reset: ") + libusb_error_name(urc));
@@ -155,8 +155,8 @@ int dvr_open(uint16_t vid, uint16_t pid, const dvr_config *cfg,
     dcfg.tuning.fastretune_fw = cfg->fastretune_fw;
     dcfg.tuning.thermal_track = cfg->thermal_track != 0;
     dcfg.debug.hop_prof = cfg->hop_prof != 0;
-    dcfg.rx.rx_mode = cfg->rx_spsc != 0 ? devourer::RxMode::SpscFat
-                                        : devourer::RxMode::Async;
+    dcfg.rx.rx_mode =
+        cfg->rx_spsc != 0 ? devourer::RxMode::SpscFat : devourer::RxMode::Async;
 
     WiFiDriver driver(r->logger);
     r->dev = driver.CreateRadio(r->handle, r->ctx, r->lock, dcfg);

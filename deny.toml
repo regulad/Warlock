@@ -1,0 +1,45 @@
+# cargo-deny (`cargo deny check`, run by pre-commit): what Warlock may depend
+# on. The shipped binary links GPL-2.0-only devourer, so every dependency must
+# be GPL-2.0-compatible (PLAN.md, "Repos and licensing").
+
+[graph]
+# Every feature, so optional dependencies are checked too.
+all-features = true
+
+[advisories]
+ignore = []
+
+[licenses]
+# Apache-2.0 is left out on purpose: it isn't compatible with GPL-2.0. A
+# crate offering "MIT OR Apache-2.0" is taken under MIT, and an Apache-only
+# crate is rejected.
+allow = [
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    # Our own crates. A GPL-2.0 dependency would be compatible too.
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+]
+confidence-threshold = 0.93
+# The list is policy, not an inventory: allowed licences nothing uses yet are fine.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    { crate = "bincode", reason = "its 3.0 release is a tombstone; use postcard (PLAN.md)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

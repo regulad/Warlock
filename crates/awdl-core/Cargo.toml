@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-awdl-proto = { path = "../awdl-proto" }
+awdl-proto.workspace = true
 
 [dev-dependencies]
-warlock-capture = { path = "../warlock-capture" }
+warlock-capture.workspace = true

@@ -7,13 +7,13 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-devourer-sys = { path = "../devourer-sys" }
-warlock-capture = { path = "../warlock-capture" }
+devourer-sys.workspace = true
+warlock-capture.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Media", "Win32_System_Threading"] }
 
 [dev-dependencies]
-awdl-core = { path = "../awdl-core" }
-awdl-proto = { path = "../awdl-proto" }
+awdl-core.workspace = true
+awdl-proto.workspace = true
 # IPv6/ICMPv6 parsing and building for awdljoin's echo responder (MIT OR Apache-2.0).
 etherparse = "0.21"# WinRT Bluetooth LE advertisement watching for blewatch (MIT OR Apache-2.0).
 windows = { version = "0.62", features = [

@@ -9,4 +9,4 @@ authors.workspace = true
 [dependencies]
 
 [dev-dependencies]
-warlock-capture = { path = "../warlock-capture" }
+warlock-capture.workspace = true

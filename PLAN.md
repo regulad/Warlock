@@ -26,7 +26,7 @@ Pinned decisions:
 | `airdrop` | AGPL-3.0-or-later | AirDrop over Warlock |
 
 - Programs control Warlock through a **local HTTP REST API, Docker-style**, defined by an OpenAPI contract (`api/openapi.yaml`, see the API contract task under Milestones). Clients speak HTTP and link no Warlock code. License the contract MIT (planned) so anyone, including the AGPL apps, can generate a client from it.
-- Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`.
+- Enforce Warlock's license zone with **cargo-deny**. Allow MIT, BSD-2/3, ISC, Zlib, Unlicense, BSL-1.0, LGPL-2.1+, MPL-2.0 and Unicode-3.0. **Leave Apache-2.0 out** of the allow list, so dual MIT/Apache crates resolve to MIT and Apache-only crates (e.g. `ring`, `cpal`) are rejected. Never use `bincode` (its 3.0 release is a tombstone); use `postcard`. **Enforced since 2026-11-18** by `deny.toml` (cargo-deny 0.20.2), which pre-commit runs whenever a manifest or the lock file changes; it also allows our own GPL-2.0 crates and bans `bincode`.
 - **`wintun.dll` (decided 2026-11-17).** It ships under WireGuard LLC's prebuilt-binaries license; its source is GPL-2.0.
   - **Decision:** Warlock loads it in-process. It is never bundled: Warlock downloads the pinned release from wintun.net at runtime, checks the zip's and the DLL's SHA-256, and keeps it in an admin-only directory (`crates/warlock-tun`).
   - **Why this works:** the GPL governs distribution. If we never distribute the DLL, the combination with GPL-2.0-only devourer exists only on the user's machine. WireGuard's license itself defines the software as the DLL "as downloaded from wintun.net/builds".
@@ -220,7 +220,7 @@ Pinned decisions:
 - wintun.dll licensing on distribution (see above).
 
 ## Verification
-- pre-commit hooks on every commit (`.pre-commit-config.yaml`, added 2026-11-18 at Parker's request): `cargo fmt` (`rustfmt.toml`: 120 columns, the code's existing style), `cargo clippy --workspace --all-targets -D warnings`, Redocly's lint of `api/openapi.yaml`, and whitespace, line-ending, YAML and TOML checks. `pre-commit run --all-files` runs them all.
+- pre-commit hooks on every commit (`.pre-commit-config.yaml`, added 2026-11-18 at Parker's request): `cargo fmt` (`rustfmt.toml`: 120 columns, the code's existing style), `cargo clippy --workspace --all-targets -D warnings`, `cargo deny check` (`deny.toml`), clang-format on the C++ shim (`crates/devourer-sys/.clang-format`, LLVM style), Redocly's lint of `api/openapi.yaml`, and whitespace, line-ending, YAML and TOML checks. `pre-commit run --all-files` runs them all.
 - Unit and fuzz tests on `awdl-proto`.
 - Deterministic `awdl-core` tests driven by captured pcapngs through `PcapReplayRadio` with a simulated TSF clock.
 - Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `awdlsync` (engine live or on a capture, with the W2 check), `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.

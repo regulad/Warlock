@@ -1,0 +1,5 @@
+# Style for Warlock's own C and C++ (the shim), checked by pre-commit. Kept
+# here rather than at the root so editors don't apply it to devourer, which
+# lives in third_party with its own style.
+BasedOnStyle: LLVM
+AllowShortCaseLabelsOnASingleLine: true
