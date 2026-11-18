@@ -11,6 +11,11 @@
 # A `v*` tag signs from the `release` environment, anything else (a run
 # started by hand) from `testing`, which signs with a test certificate.
 # Parker's homelab configuration manages both and their secrets.
+#
+# A tag is also published: winget's manifests are written for the signed
+# package, and a GitHub release carries the package and the manifests, with
+# the annotated tag's message as its notes. Again the job that can write
+# (the release) builds nothing.
 name: Build and sign
 
 on:
@@ -174,3 +179,68 @@ jobs:
           name: package
           path: package/*.msi
           if-no-files-found: error
+
+  manifests:
+    name: winget manifests
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: sign-package
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+          path: package
+      # The tag names the version the package carries: v0.1.0 for
+      # Warlock-0.1.0-x64.msi. The installer URL is where the release step
+      # puts it.
+      - name: Write the manifests
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          DOWNLOADS: ${{ github.server_url }}/${{ github.repository }}/releases/download
+        run: |
+          $name = "Warlock-$($env:TAG.Substring(1))-x64.msi"
+          if (-not (Test-Path "package/$name")) {
+            "The tag $env:TAG wants package/$name, which isn't there: does Cargo.toml's version match the tag?"
+            Get-ChildItem package
+            exit 1
+          }
+          cargo run --locked -p warlock-msi -- winget "package/$name" --installer-url "$env:DOWNLOADS/$env:TAG/$name" --out manifests
+      - uses: actions/upload-artifact@v7
+        with:
+          name: manifests
+          path: manifests/*.yaml
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+          path: assets
+      - uses: actions/download-artifact@v8
+        with:
+          name: manifests
+          path: assets
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l assets
+          gh release create "$TAG" assets/*.msi assets/*.yaml \
+            --repo "$GITHUB_REPOSITORY" --title "Warlock ${TAG#v}" --notes-from-tag --verify-tag
