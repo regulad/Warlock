@@ -1,0 +1,85 @@
+# Repository configuration, managed by the Probot Settings app
+# (https://github.com/probot/settings). Changes here are applied to the
+# repo's GitHub-side settings automatically on merge to the default branch.
+repository:
+  name: Warlock
+  description: >-
+    Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter
+  homepage: ""
+
+  # Private until it's published. winget downloads the MSI from a public
+  # release, so publishing to winget means `false` here first.
+  private: true
+
+  # Topics: comma-and-space separated string, NOT a YAML list — the
+  # Probot Settings schema takes `topics` as one string it splits itself.
+  topics: awdl, apple, wifi, windows, rust, wintun, realtek, rtl8812bu, networking, reverse-engineering
+
+  has_issues: true
+  has_projects: false
+  has_wiki: false
+  has_downloads: true
+  has_discussions: false
+
+  default_branch: main
+
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: true
+  allow_auto_merge: false
+  delete_branch_on_merge: true
+
+  allow_update_branch: true
+
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: PR_BODY
+
+  archived: false
+  is_template: false
+
+# Labels this repo uses. `color` is a hex string without the leading `#`.
+labels:
+  - name: bug
+    color: "d73a4a"
+    description: Something isn't working as expected
+  - name: enhancement
+    color: "a2eeef"
+    description: New feature or capability
+  - name: research
+    color: "5319e7"
+    description: Investigation/finding, not necessarily code
+  - name: documentation
+    color: "0075ca"
+    description: Improvements or additions to PLAN.md/README/docs
+  - name: infra
+    color: "fbca04"
+    description: Build, CI, installer, signing, or packaging work
+  - name: question
+    color: "d876e3"
+    description: Further information is requested
+  - name: wontfix
+    color: "ffffff"
+    description: This will not be worked on
+  - name: duplicate
+    color: "cfd3d7"
+    description: This issue or PR already exists
+
+# Where the release workflow's secrets live: the Azure Artifact Signing
+# account it signs with, reached through GitHub's OIDC token rather than a
+# stored password. Azure's federated credential can trust this environment
+# alone (subject `repo:regulad/Warlock:environment:release`), and only runs
+# from `main` (to try signing) or a `v*` tag (a release) may enter it.
+# Secrets themselves aren't settings: they're set with `gh secret set --env
+# release`.
+environments:
+  - name: release
+    deployment_branch_policy:
+      custom_branches:
+        - name: main
+          type: branch
+        - name: v*
+          type: tag
+
+# No branch-protection rules — solo-maintainer repo, direct pushes to the
+# default branch are expected. Add rules here if that changes.
+branches: []
