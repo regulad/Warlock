@@ -6,10 +6,14 @@
 //!
 //! ```text
 //! cargo run -p warlock-msi [-- --out PATH] [--no-build]
+//! cargo run -p warlock-msi -- winget MSI --installer-url URL [--out DIR]
 //! ```
 //!
 //! Builds `warlock` and `warlockctl` in release (unless `--no-build`) and
-//! writes `target/msi/Warlock-<version>-x64.msi`, which installs:
+//! writes `target/msi/Warlock-<version>-x64.msi`. It installs only where
+//! the Visual C++ runtime the binaries link to is there, at least as new as
+//! the toolset that linked them (read from their headers): a fresh Windows
+//! has none (PLAN.md, W5). It then installs:
 //! - `warlock.exe`, `warlockctl.exe` and both licence texts into
 //!   `C:\Program Files\Warlock`, which joins the system `PATH`;
 //! - the Warlock service: LocalSystem, automatic (delayed) start, its own
@@ -23,20 +27,32 @@
 //! A newer version replaces an older one (and a rebuild of the same version
 //! replaces itself); an older one won't install over a newer one.
 //!
+//! `winget` writes winget's three manifests for a finished package, from what
+//! the package itself records (version, product and upgrade codes, the least
+//! runtime version) and its SHA-256, so it runs on the package as published:
+//! after signing, which changes the hash. They make the runtime's winget
+//! package, `Microsoft.VCRedist.2015+.x64`, a dependency, so winget installs
+//! it first. A release builds and signs the binaries, packages them with
+//! `--no-build`, signs the package, then runs `winget` with the URL it will
+//! be downloaded from.
+//!
 //! Tables are written as Windows Installer's own `.idt` text and imported
 //! (`MsiDatabaseImportW`). Their column definitions are copied from MSIs
 //! Windows itself installed, exported from `C:\Windows\Installer` on
 //! 2026-11-18. Sequence numbers are Windows Installer's suggested ones.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use sha2::{Digest, Sha256};
 use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
-    MSIDBOPEN_CREATE, MSIHANDLE, MsiCloseHandle, MsiCreateRecord, MsiDatabaseCommit, MsiDatabaseImportW,
-    MsiDatabaseOpenViewW, MsiGetSummaryInformationW, MsiOpenDatabaseW, MsiRecordSetStreamW, MsiRecordSetStringW,
-    MsiSummaryInfoPersist, MsiSummaryInfoSetPropertyW, MsiViewClose, MsiViewExecute,
+    MSIDBOPEN_CREATE, MSIDBOPEN_READONLY, MSIHANDLE, MsiCloseHandle, MsiCreateRecord, MsiDatabaseCommit,
+    MsiDatabaseImportW, MsiDatabaseOpenViewW, MsiGetSummaryInformationW, MsiOpenDatabaseW, MsiRecordGetStringW,
+    MsiRecordSetStreamW, MsiRecordSetStringW, MsiSummaryInfoPersist, MsiSummaryInfoSetPropertyW, MsiViewClose,
+    MsiViewExecute, MsiViewFetch,
 };
 use windows_sys::Win32::System::Com::CoCreateGuid;
 use windows_sys::core::GUID;
@@ -62,9 +78,25 @@ const COMPONENT_LICENSES: &str = "{017BEEEC-3CC4-4536-BC22-1F8363621EB7}";
 
 /// As the winget package's publisher.
 const MANUFACTURER: &str = "Regulad";
+/// The winget package.
+const PACKAGE: &str = "Regulad.Warlock";
+const DESCRIPTION: &str = "Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter";
 /// The service's name, as `warlock install` and `sc` know it.
 const SERVICE: &str = "Warlock";
 const CABINET: &str = "warlock.cab";
+
+/// The Visual C++ runtime DLLs `warlock.exe` imports (`warlockctl.exe` only
+/// the first), each with the property the package's search for it sets and
+/// its `short|long` name. The short name only counts where long names don't.
+const RUNTIME_DLLS: [(&str, &str); 3] = [
+    ("VCRUNTIME140", "VCRT140.DLL|vcruntime140.dll"),
+    ("VCRUNTIME140_1", "VCRT1401.DLL|vcruntime140_1.dll"),
+    ("MSVCP140", "msvcp140.dll"),
+];
+/// The runtime's winget package: a dependency of ours.
+const RUNTIME_PACKAGE: &str = "Microsoft.VCRedist.2015+.x64";
+/// The property recording the least runtime version, for `winget`.
+const RUNTIME_MIN_PROPERTY: &str = "WarlockVcRuntimeMin";
 
 /// `msidbComponentAttributes64bit`.
 const COMPONENT_64BIT: i32 = 256;
@@ -178,12 +210,14 @@ struct Payload {
     vital: bool,
 }
 
-/// Every table, filled in.
-fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Table> {
+/// Every table, filled in. `runtime_min` is the least Visual C++ runtime
+/// version (`14.50`) the binaries need.
+fn tables(version: &str, product_code: &str, runtime_min: &str, files: &[(Payload, u64)]) -> Vec<Table> {
     let mut all = Vec::new();
 
     let mut property = Table::new("Property", &[("Property", "s72"), ("Value", "l0")], &["Property"]);
     for (k, v) in [
+        (RUNTIME_MIN_PROPERTY, runtime_min),
         ("ProductCode", product_code),
         ("UpgradeCode", UPGRADE_CODE),
         ("ProductName", "Warlock"),
@@ -313,10 +347,56 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         .row(vec![s(UPGRADE_CODE), s(version), None, None, n(ONLY_DETECT), None, s("NEWERFOUND")]);
     all.push(upgrade);
 
+    // The Visual C++ runtime, found by its DLLs in System32: each search sets
+    // its property when the file is there at `runtime_min` or later.
+    let mut app_search =
+        Table::new("AppSearch", &[("Property", "s72"), ("Signature_", "s72")], &["Property", "Signature_"]);
+    let mut signature = Table::new(
+        "Signature",
+        &[
+            ("Signature", "s72"),
+            ("FileName", "s255"),
+            ("MinVersion", "S20"),
+            ("MaxVersion", "S20"),
+            ("MinSize", "I4"),
+            ("MaxSize", "I4"),
+            ("MinDate", "I4"),
+            ("MaxDate", "I4"),
+            ("Languages", "S255"),
+        ],
+        &["Signature"],
+    );
+    let mut dr_locator = Table::new(
+        "DrLocator",
+        &[("Signature_", "s72"), ("Parent", "S72"), ("Path", "S255"), ("Depth", "I2")],
+        &["Signature_", "Parent", "Path"],
+    );
+    // Any build of that minor version or later. (The version is compared
+    // with the language only when equal, which a real build number isn't.)
+    let floor = format!("{runtime_min}.0.0");
+    for (property, file_name) in RUNTIME_DLLS {
+        let sig = format!("Sig{property}");
+        app_search.row(vec![s(property), s(&sig)]);
+        signature.row(vec![s(&sig), s(file_name), s(&floor), None, None, None, None, None, None]);
+        dr_locator.row(vec![s(&sig), None, s("[System64Folder]"), n(0)]);
+    }
+    all.push(app_search);
+    all.push(signature);
+    all.push(dr_locator);
+
+    let runtime_found = RUNTIME_DLLS.map(|(p, _)| p).join(" AND ");
     let mut launch = Table::new("LaunchCondition", &[("Condition", "s255"), ("Description", "l255")], &["Condition"]);
     launch
         .row(vec![s("VersionNT64"), s("Warlock needs 64-bit Windows.")])
-        .row(vec![s("NOT NEWERFOUND"), s("A newer version of Warlock is already installed.")]);
+        .row(vec![s("NOT NEWERFOUND"), s("A newer version of Warlock is already installed.")])
+        // Not needed to uninstall.
+        .row(vec![
+            s(&format!("Installed OR ({runtime_found})")),
+            s(&format!(
+                "Warlock needs the Microsoft Visual C++ v14 Redistributable (x64), version {runtime_min} or later: \
+                 winget install {RUNTIME_PACKAGE}"
+            )),
+        ]);
     all.push(launch);
 
     let mut service_install = Table::new(
@@ -353,7 +433,7 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         None,
         s("service"),
         s("Warlock"),
-        s("Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter"),
+        s(DESCRIPTION),
     ]);
     all.push(service_install);
 
@@ -447,6 +527,7 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         "InstallUISequence",
         &[
             ("FindRelatedProducts", None, 25),
+            ("AppSearch", None, 50),
             ("LaunchConditions", None, 100),
             ("CostInitialize", None, 800),
             ("FileCost", None, 900),
@@ -459,6 +540,7 @@ fn tables(version: &str, product_code: &str, files: &[(Payload, u64)]) -> Vec<Ta
         "InstallExecuteSequence",
         &[
             ("FindRelatedProducts", None, 25),
+            ("AppSearch", None, 50),
             ("LaunchConditions", None, 100),
             ("ValidateProductID", None, 700),
             ("CostInitialize", None, 800),
@@ -581,6 +663,39 @@ fn warlock_version(root: &Path) -> Result<String> {
     Ok(version.to_string())
 }
 
+/// The least Visual C++ runtime version the binaries need, as `14.50`: a
+/// runtime at least as new as the newest toolset that linked any of them
+/// ("C++ binary compatibility between Visual Studio versions", Microsoft
+/// Learn). The toolset is read from each one's PE header.
+fn runtime_min(exes: &[&Path]) -> Result<String> {
+    let mut newest = None;
+    for exe in exes {
+        let (major, minor) = linker_version(exe)?;
+        if major != 14 {
+            return Err(format!("{}: linker {major}.{minor} isn't an MSVC v14 toolset", exe.display()).into());
+        }
+        newest = newest.max(Some(minor));
+    }
+    Ok(format!("14.{}", newest.ok_or("no binaries to package")?))
+}
+
+/// A PE file's linker version (14.50 for Visual Studio 18's).
+fn linker_version(path: &Path) -> Result<(u8, u8)> {
+    let b = std::fs::read(path)?;
+    let bad = || format!("{} isn't a PE file", path.display());
+    let pe = b.get(0x3c..0x40).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as usize).ok_or_else(bad)?;
+    if b.get(pe..pe + 4) != Some(&b"PE\0\0"[..]) {
+        return Err(bad().into());
+    }
+    // The optional header follows the 20-byte file header: its magic, then
+    // the linker's major and minor version.
+    let optional = pe + 4 + 20;
+    match b.get(optional + 2..optional + 4) {
+        Some(&[major, minor]) => Ok((major, minor)),
+        _ => Err(bad().into()),
+    }
+}
+
 /// Packs the files into one cabinet with `makecab`, each named by its File
 /// key, in File table order.
 fn cabinet(work: &Path, files: &[(Payload, u64)]) -> Result<PathBuf> {
@@ -650,6 +765,10 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
         files.push((p, size));
     }
 
+    let exes: Vec<&Path> =
+        files.iter().filter(|(p, _)| p.key.ends_with(".exe")).map(|(p, _)| p.source.as_path()).collect();
+    let runtime_min = runtime_min(&exes)?;
+
     let work = out.with_extension("work");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(work.join("idt"))?;
@@ -662,7 +781,7 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     // SAFETY: valid paths and out-parameter.
     check("creating the database", unsafe { MsiOpenDatabaseW(wide_path(out).as_ptr(), MSIDBOPEN_CREATE, &mut db) })?;
     let db = Handle(db);
-    for t in tables(version, &product_code, &files) {
+    for t in tables(version, &product_code, &runtime_min, &files) {
         let file = format!("{}.idt", t.name);
         std::fs::write(work.join("idt").join(&file), t.idt()?)?;
         // SAFETY: valid handle and paths.
@@ -718,21 +837,165 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     check("committing the database", unsafe { MsiDatabaseCommit(db.0) })?;
     drop(db);
     std::fs::remove_dir_all(&work)?;
-    println!("{} (Warlock {version}, product code {product_code})", out.display());
+    println!(
+        "{} (Warlock {version}, product code {product_code}, Visual C++ runtime {runtime_min} or later)",
+        out.display()
+    );
     Ok(())
 }
+
+/// A record's string field.
+fn record_string(record: MSIHANDLE, field: u32) -> Result<String> {
+    use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+    let mut len = 0u32;
+    let mut buf = vec![0u16; 1];
+    // SAFETY: a buffer of the length passed; first for the length needed
+    // (without the NUL), then for the string.
+    unsafe {
+        let rc = MsiRecordGetStringW(record, field, buf.as_mut_ptr(), &mut len);
+        if rc != 0 && rc != ERROR_MORE_DATA {
+            return Err(format!("reading a field: Windows Installer error {rc}").into());
+        }
+        len += 1;
+        buf.resize(len as usize, 0);
+        check("reading a field", MsiRecordGetStringW(record, field, buf.as_mut_ptr(), &mut len))?;
+    }
+    Ok(String::from_utf16_lossy(&buf[..len as usize]))
+}
+
+/// A package's Property table.
+fn package_properties(msi: &Path) -> Result<BTreeMap<String, String>> {
+    use windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS;
+    let mut db: MSIHANDLE = 0;
+    // SAFETY: a valid path and out-parameter.
+    let rc = unsafe { MsiOpenDatabaseW(wide_path(msi).as_ptr(), MSIDBOPEN_READONLY, &mut db) };
+    check(&format!("opening {}", msi.display()), rc)?;
+    let db = Handle(db);
+    let query = wide("SELECT `Property`, `Value` FROM `Property`");
+    let mut properties = BTreeMap::new();
+    let mut view: MSIHANDLE = 0;
+    // SAFETY: valid handles and query; records are closed as they go.
+    unsafe {
+        check("reading Property", MsiDatabaseOpenViewW(db.0, query.as_ptr(), &mut view))?;
+        let view = Handle(view);
+        check("reading Property", MsiViewExecute(view.0, 0))?;
+        loop {
+            let mut record: MSIHANDLE = 0;
+            match MsiViewFetch(view.0, &mut record) {
+                0 => {}
+                ERROR_NO_MORE_ITEMS => break,
+                rc => return Err(format!("reading Property: Windows Installer error {rc}").into()),
+            }
+            let record = Handle(record);
+            properties.insert(record_string(record.0, 1)?, record_string(record.0, 2)?);
+        }
+    }
+    Ok(properties)
+}
+
+/// winget's manifest schema the manifests are written to.
+const MANIFEST_VERSION: &str = "1.10.0";
+
+/// Writes winget's three manifests (version, installer, default locale) for
+/// the package at `msi`, to be downloaded from `url`, into `out` (by default
+/// `target/msi/winget/<version>`).
+fn winget(root: &Path, msi: &Path, url: &str, out: Option<PathBuf>) -> Result<()> {
+    if !url.starts_with("https://") {
+        return Err(format!("{url}: winget downloads installers over https").into());
+    }
+    let p = package_properties(msi)?;
+    let get = |k: &str| p.get(k).map(String::as_str).ok_or_else(|| format!("{}: no {k} property", msi.display()));
+    let version = get("ProductVersion")?;
+    let product_code = get("ProductCode")?;
+    let upgrade_code = get("UpgradeCode")?;
+    let publisher = get("Manufacturer")?;
+    let runtime_min = get(RUNTIME_MIN_PROPERTY)?;
+    let sha256: String = Sha256::digest(std::fs::read(msi)?).iter().map(|b| format!("{b:02X}")).collect();
+    let file = msi.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+    // Single-quoted YAML scalars: only `'` needs escaping, as `''`.
+    let q = |v: &str| format!("'{}'", v.replace('\'', "''"));
+    let header = |kind: &str| {
+        format!(
+            "# Written by warlock-msi for {file}.\n\
+             # yaml-language-server: $schema=https://aka.ms/winget-manifest.{kind}.{MANIFEST_VERSION}.schema.json\n\n\
+             PackageIdentifier: {PACKAGE}\nPackageVersion: {}\n",
+            q(version)
+        )
+    };
+    let footer = |kind: &str| format!("ManifestType: {kind}\nManifestVersion: {MANIFEST_VERSION}\n");
+    let manifests = [
+        (format!("{PACKAGE}.yaml"), format!("{}DefaultLocale: en-US\n{}", header("version"), footer("version"))),
+        (
+            format!("{PACKAGE}.installer.yaml"),
+            format!(
+                "{}InstallerType: msi\nScope: machine\nInstallModes:\n- interactive\n- silent\n- silentWithProgress\n\
+                 UpgradeBehavior: install\n\
+                 # The Visual C++ runtime warlock.exe links to, which a fresh Windows lacks.\n\
+                 Dependencies:\n  PackageDependencies:\n  - PackageIdentifier: {RUNTIME_PACKAGE}\n    MinimumVersion: {}\n\
+                 ProductCode: {}\nAppsAndFeaturesEntries:\n- Publisher: {}\n  ProductCode: {}\n  UpgradeCode: {}\n\
+                 Installers:\n- Architecture: x64\n  InstallerUrl: {}\n  InstallerSha256: {sha256}\n{}",
+                header("installer"),
+                q(&format!("{runtime_min}.0.0")),
+                q(product_code),
+                q(publisher),
+                q(product_code),
+                q(upgrade_code),
+                q(url),
+                footer("installer")
+            ),
+        ),
+        (
+            format!("{PACKAGE}.locale.en-US.yaml"),
+            format!(
+                "{}PackageLocale: en-US\nPublisher: {}\nPackageName: Warlock\n\
+                 License: {}\nShortDescription: {}\n{}",
+                header("defaultLocale"),
+                q(publisher),
+                // warlock.exe, and warlockctl.exe.
+                q("GPL-2.0-only AND AGPL-3.0-only"),
+                q(DESCRIPTION),
+                footer("defaultLocale")
+            ),
+        ),
+    ];
+    let dir = out.unwrap_or_else(|| root.join("target").join("msi").join("winget").join(version));
+    std::fs::create_dir_all(&dir)?;
+    for (name, text) in manifests {
+        std::fs::write(dir.join(&name), text)?;
+        println!("{}", dir.join(name).display());
+    }
+    Ok(())
+}
+
+const USAGE: &str = "usage: warlock-msi [--out PATH] [--no-build]\n       \
+                     warlock-msi winget MSI --installer-url URL [--out DIR]";
 
 fn main() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
     // Without the `\\?\` prefix canonicalize adds, which makecab can't read.
     let root = PathBuf::from(root.to_string_lossy().trim_start_matches(r"\\?\"));
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|a| a == "winget") {
+        args.next();
+        let (mut msi, mut url, mut out) = (None, None, None);
+        while let Some(a) = args.next() {
+            match a.as_str() {
+                "--installer-url" => url = Some(args.next().ok_or("--installer-url needs a URL")?),
+                "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a folder")?)),
+                _ if msi.is_none() && !a.starts_with("--") => msi = Some(PathBuf::from(a)),
+                _ => return Err(format!("unknown argument {a}\n{USAGE}").into()),
+            }
+        }
+        let msi = msi.ok_or(USAGE)?;
+        let url = url.ok_or("--installer-url is needed: where winget will download the package from")?;
+        return winget(&root, &msi, &url, out);
+    }
     let (mut out, mut no_build) = (None, false);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = Some(PathBuf::from(args.next().ok_or("--out needs a path")?)),
             "--no-build" => no_build = true,
-            _ => return Err(format!("unknown argument {a}; usage: warlock-msi [--out PATH] [--no-build]").into()),
+            _ => return Err(format!("unknown argument {a}\n{USAGE}").into()),
         }
     }
     let version = warlock_version(&root)?;

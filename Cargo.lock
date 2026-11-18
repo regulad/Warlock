@@ -1313,6 +1313,7 @@ dependencies = [
 name = "warlock-msi"
 version = "0.1.0"
 dependencies = [
+ "sha2",
  "windows-sys",
 ]
 
