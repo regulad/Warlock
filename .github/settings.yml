@@ -7,9 +7,8 @@ repository:
     Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter
   homepage: ""
 
-  # Private until it's published. winget downloads the MSI from a public
-  # release, so publishing to winget means `false` here first.
-  private: true
+  # Public: winget downloads the MSI from a public release.
+  private: false
 
   # Topics: comma-and-space separated string, NOT a YAML list — the
   # Probot Settings schema takes `topics` as one string it splits itself.
