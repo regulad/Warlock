@@ -21,6 +21,10 @@
 //! Every mutating call needs administrator rights (Warlock runs as
 //! LocalSystem).
 
+mod watch;
+
+pub use watch::DeviceWatch;
+
 use std::fmt;
 use std::mem::{offset_of, size_of, zeroed};
 use std::ptr::{null, null_mut};
@@ -270,6 +274,11 @@ pub fn find_supported() -> Result<Option<(UsbDevice, Model)>> {
         .collect();
     found.sort_by_key(|(_, m)| MODELS.iter().position(|x| x == m));
     Ok(found.into_iter().next())
+}
+
+/// Whether the device `instance_id` is present.
+pub fn is_present(instance_id: &str) -> Result<bool> {
+    Ok(DevInfoSet::present_usb()?.find(instance_id).is_some())
 }
 
 /// Finds a present USB device by vendor and product ID.

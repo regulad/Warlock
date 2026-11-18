@@ -167,10 +167,10 @@ fn random_addr() -> MacAddr {
 }
 
 /// Finds a supported adapter, preferring the T3U v1, and puts it on WinUSB if
-/// Windows has its own driver on it; which model it is.
-fn claim_dongle() -> Result<warlock_usb::Model, Box<dyn Error>> {
-    let (dev, model) = warlock_usb::find_supported()?
-        .ok_or("no supported adapter is plugged in (a TP-Link Archer T3U, or another RTL8812BU/RTL8822BU)")?;
+/// Windows has its own driver on it: its model and device instance, or
+/// `None` if none is plugged in.
+fn claim_adapter() -> Result<Option<(warlock_usb::Model, String)>, Box<dyn Error>> {
+    let Some((dev, model)) = warlock_usb::find_supported()? else { return Ok(None) };
     if model.is_reference() {
         info!(model = model.name, device = %dev.instance_id, "adapter");
     } else {
@@ -188,211 +188,370 @@ fn claim_dongle() -> Result<warlock_usb::Model, Box<dyn Error>> {
             warn!("Windows asks for a reboot to finish binding the adapter");
         }
     }
-    Ok(model)
+    Ok(Some((model, dev.instance_id)))
 }
 
 /// The radio's part of the control API's info.
-fn radio_info(state: RadioState, own: Option<MacAddr>, o: &Options) -> wire::Radio {
+fn radio_info(state: RadioState, own: MacAddr, o: &Options) -> wire::Radio {
     let up = state == RadioState::Up;
     wire::Radio {
         state,
-        address: own.filter(|_| up).map(|a| a.to_string()),
+        address: up.then(|| own.to_string()),
         channel: up.then_some(o.channel),
         width_mhz: up.then_some(o.width),
     }
 }
 
-/// Runs until `stop` is set or something fails.
+/// How long to wait before trying an adapter again after its radio failed.
+const RETRY: Duration = Duration::from_secs(2);
+
+/// What lasts the whole run, through any number of adapters coming and going.
+struct Run<'a> {
+    o: &'a Options,
+    stop: &'a AtomicBool,
+    until: Option<Instant>,
+    control: warlock_api::Daemon,
+    info: wire::Info,
+    /// Our AWDL address, for the whole run.
+    own: MacAddr,
+    /// The adapter, for the whole run; connected while a radio is up.
+    tun: Tun,
+    /// The service types programs hold advertising locks on.
+    locked_types: BTreeSet<String>,
+    traffic: wire::Traffic,
+    mdns_held: u64,
+}
+
+/// Runs until `stop` is set, or `--seconds` pass. The control API and the
+/// adapter come up first and stay; a supported adapter is used whenever one
+/// is plugged in (PLAN.md, W5).
 pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
-    // The control API first: programs can watch the radio come up, and a
-    // second Warlock stops here, its pipe taken.
-    let mut info = wire::Info {
+    let own = random_addr();
+    // The control API first: programs can follow the radio from the start,
+    // and a second Warlock stops here, its pipe taken.
+    let info = wire::Info {
         version: env!("CARGO_PKG_VERSION").into(),
         host_name: api::host_name(),
         adapter: None,
-        radio: radio_info(RadioState::Opening, None, o),
+        radio: radio_info(RadioState::Absent, own, o),
         awdl: wire::Awdl { master: None, peers: 0 },
         traffic: None,
     };
     let initial = warlock_api::State { info: info.clone(), peers: Vec::new(), advertised: BTreeMap::new() };
-    let (_server, mut control) = Server::start(warlock_api::PIPE, Security::Service, initial).map_err(|e| {
+    let (_server, control) = Server::start(warlock_api::PIPE, Security::Service, initial).map_err(|e| {
         format!("can't serve the control API on {} (is Warlock running already?): {e}", warlock_api::PIPE)
     })?;
     info!(pipe = warlock_api::PIPE, "control API up");
 
-    let model = claim_dongle()?;
+    // The adapter, disconnected until a radio is up.
     let wintun = dll::load(&dll::ensure(&dll::default_root())?)?;
-    let own = random_addr();
-    info!(address = %own, channel = o.channel, width = o.width, metric = o.metric, "opening the radio (~8 s)");
-    let config = DevourerConfig { channel: o.channel, vid: model.vid, pid: model.pid, ..Default::default() };
-    let config = if o.width == 40 { config.forty(o.channel) } else { config };
-    let mut radio = DevourerRadio::open(&config)?;
-    radio.set_ack_responder(own.0)?;
     let tun = Tun::open(&wintun, ADAPTER_NAME, ADAPTER_GUID, own.0, MTU)?;
-    info!(adapter = ADAPTER_NAME, index = tun.index, address = %tun.address, mtu = tun.mtu, "up");
-    info.adapter =
-        Some(wire::Adapter { name: ADAPTER_NAME.into(), index: tun.index, address: tun.address, mtu: tun.mtu });
-    info.radio = radio_info(RadioState::Up, Some(own), o);
-    control.event(wire::Event::RadioChanged { radio: info.radio.clone() });
+    info!(adapter = ADAPTER_NAME, index = tun.index, address = %tun.address, mtu = tun.mtu, "adapter ready");
+    let watch = warlock_usb::DeviceWatch::start()?;
 
-    let mut tx = TxConfig::new(own);
-    tx.self_metric = o.metric;
-    tx.ht_40mhz = o.width == 40;
-    let mut engine = Engine::new(Config {
-        band_change_settle_us: radio.band_change_settle().as_micros() as u64,
-        ..Config::active(tx)
-    });
-
-    let mut discovery = Discovery::new(MTU as usize);
-    let mut advertiser = Advertiser::new(tun.index, tun.address, &o.advertise);
-    // What the control API reports as advertised, by type.
-    let mut advertised: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut last_publish = Instant::now() - PUBLISH;
-    let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
-    let (mut to_air, mut to_windows, mut unroutable, mut announced, mut mdns_held) = (0u64, 0u64, 0u64, 0u64, 0u64);
-    let mut buf = vec![0u8; 65536];
-    let until = o.seconds.map(|s| Instant::now() + Duration::from_secs(s));
-    while !stop.load(Ordering::Relaxed) && until.is_none_or(|u| Instant::now() < u) {
-        let now = radio.tsf_now();
-        let wait = match (now, now.and_then(|n| engine.next_wakeup(n))) {
-            (Some(n), Some(w)) => Duration::from_micros(w.saturating_sub(n)).min(SLICE),
-            _ => SLICE,
-        };
-        // AWDL → Windows.
-        if let Some(f) = radio.recv(wait)? {
-            for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
-                match ev {
-                    Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
-                        if o.log_packets {
-                            info!("to Windows from {from} (to {to}): {}", describe(&payload));
-                        }
-                        match tun.send(&payload) {
-                            Ok(()) => to_windows += 1,
-                            Err(e) => warn!("to Windows: {e}"),
-                        }
-                    }
-                    Event::Packet { .. } => {}
-                    Event::ServicesChanged(a) => {
-                        let Some(p) = engine.peer(a) else { continue };
-                        info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
-                        announced += write_to_windows(&tun, discovery.update(p), o.log_packets);
-                        control
-                            .event(wire::Event::ServicesChanged { address: a.to_string(), services: api::services(p) });
-                    }
-                    Event::PeerLost(a) => {
-                        info!("PeerLost({a})");
-                        announced += write_to_windows(&tun, discovery.lost(a), o.log_packets);
-                        control.event(wire::Event::PeerLost { address: a.to_string() });
-                    }
-                    Event::PeerFound(a) => {
-                        info!("PeerFound({a})");
-                        if let Some(p) = engine.peer(a) {
-                            control.event(wire::Event::PeerFound { peer: Box::new(api::peer(p, Some(f.tsf))) });
-                        }
-                    }
-                    Event::MasterChanged(m) => {
-                        info!("MasterChanged({m:?})");
-                        control.event(wire::Event::MasterChanged { master: m.map(|a| a.to_string()) });
-                    }
-                    other => info!("{other:?}"),
-                }
+    let mut run = Run {
+        o,
+        stop,
+        until: o.seconds.map(|s| Instant::now() + Duration::from_secs(s)),
+        control,
+        info,
+        own,
+        tun,
+        locked_types: BTreeSet::new(),
+        traffic: wire::Traffic::default(),
+        mdns_held: 0,
+    };
+    run.info.adapter =
+        Some(wire::Adapter { name: ADAPTER_NAME.into(), index: run.tun.index, address: run.tun.address, mtu: MTU });
+    run.set_radio(RadioState::Absent);
+    while let Some((model, instance)) = run.wait_for_adapter(&watch) {
+        run.set_radio(RadioState::Opening);
+        let result = run.session(&watch, model, &instance);
+        run.set_radio(RadioState::Absent);
+        match result {
+            Ok(()) if run.stopping() => break,
+            Ok(()) => info!("the adapter is gone; waiting for one"),
+            Err(e) => {
+                warn!("the radio stopped: {e}; trying again");
+                watch.wait(watch.changes(), RETRY);
             }
-        }
-        let Some(now) = radio.tsf_now() else { continue };
-        // Windows → AWDL: every IPv6 packet with an AWDL address to go to
-        // (none for IPv4: the adapter has no ARP).
-        while let Some(n) = tun.try_recv(&mut buf) {
-            let packet = &buf[..n];
-            if o.log_packets {
-                info!("from Windows: {}", describe(packet));
-            }
-            if o.no_mdns_to_air && is_mdns(packet) {
-                mdns_held += 1;
-                continue;
-            }
-            let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
-                unroutable += 1;
-                continue;
-            };
-            to_air += 1;
-            engine.send_packet(now, MacAddr(mac), ETHERTYPE_IPV6, packet.to_vec());
-        }
-        for a in engine.poll(now) {
-            match a {
-                Action::Hop(c) => {
-                    if let Err(e) = radio.hop(c) {
-                        warn!("hop to {c}: {e}");
-                    }
-                }
-                Action::Transmit { mpdu, rate_500kbps, kind } => {
-                    if let Err(e) = radio.send(&mpdu, rate_500kbps) {
-                        warn!("sending {kind:?}: {e}");
-                    } else if kind == TxKind::AddbaResponse {
-                        info!("answered a Block Ack setup");
-                    }
-                }
-            }
-        }
-        announced += write_to_windows(&tun, discovery.refresh(Instant::now()), o.log_packets);
-        // Locks programs hold: the types to watch are ours plus theirs.
-        if let Some(wants) = control.wants() {
-            info!(types = ?wants.types, holds = wants.holds, "locks");
-            let types: Vec<String> = o.advertise.iter().cloned().chain(wants.types).collect();
-            advertiser.set_types(&types);
-        }
-        if let Some(a) = advertiser.poll(Instant::now()) {
-            info!(instances = ?a.instances, host = ?a.host, "advertising");
-            let types: BTreeSet<&String> = advertised.keys().chain(a.instances.keys()).collect();
-            for t in types {
-                let (before, after) = (advertised.get(t), a.instances.get(t));
-                if before != after {
-                    control.event(wire::Event::AdvertisingChanged {
-                        service_type: t.clone(),
-                        instances: after.cloned().unwrap_or_default(),
-                    });
-                }
-            }
-            advertised = a.instances;
-            engine.set_services(a.records, a.host);
-        }
-        if last_publish.elapsed() >= PUBLISH {
-            last_publish = Instant::now();
-            info.awdl = wire::Awdl { master: engine.master().map(|m| m.to_string()), peers: engine.peers().count() };
-            info.traffic = Some(wire::Traffic { to_air, to_windows, announced, unroutable });
-            control.publish(warlock_api::State {
-                info: info.clone(),
-                peers: engine.peers().map(|p| api::peer(p, Some(now))).collect(),
-                advertised: advertised.clone(),
-            });
-        }
-        if last_enforce.elapsed() >= Duration::from_secs(2) {
-            last_enforce = Instant::now();
-            if let Err(e) = tun.enforce_address() {
-                warn!("adapter address: {e}");
-            }
-        }
-        if last_report.elapsed() >= Duration::from_secs(60) {
-            last_report = Instant::now();
-            let (advertisers, records) = discovery.counts();
-            info!(
-                master = ?engine.master(),
-                peers = engine.peers().count(),
-                to_air,
-                to_windows,
-                unroutable,
-                advertisers,
-                records,
-                announced,
-                mdns_held,
-                "status"
-            );
         }
     }
     info!("stopping");
-    write_to_windows(&tun, discovery.stop(), o.log_packets);
-    // The adapter goes first, then the radio, which clears the ACK responder
-    // as it closes.
-    drop(tun);
-    drop(radio);
     Ok(())
+}
+
+impl Run<'_> {
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::Relaxed) || self.until.is_some_and(|u| Instant::now() >= u)
+    }
+
+    /// Reports the radio's state, and clears what only a running radio has.
+    fn set_radio(&mut self, state: RadioState) {
+        self.info.radio = radio_info(state, self.own, self.o);
+        if state != RadioState::Up {
+            self.info.awdl = wire::Awdl { master: None, peers: 0 };
+            self.control.publish(warlock_api::State {
+                info: self.info.clone(),
+                peers: Vec::new(),
+                advertised: BTreeMap::new(),
+            });
+        }
+        info!(?state, "radio");
+        self.control.event(wire::Event::RadioChanged { radio: self.info.radio.clone() });
+    }
+
+    /// Takes in what locks ask for; the service types to watch, if they changed.
+    fn wanted_types(&mut self) -> Option<Vec<String>> {
+        let wants = self.control.wants()?;
+        info!(types = ?wants.types, holds = wants.holds, "locks");
+        self.locked_types = wants.types;
+        Some(self.types())
+    }
+
+    /// Ours plus what locks ask for.
+    fn types(&self) -> Vec<String> {
+        self.o.advertise.iter().cloned().chain(self.locked_types.iter().cloned()).collect()
+    }
+
+    /// Waits for a supported adapter and claims it, waking on USB devices
+    /// coming and going; `None` when stopping.
+    fn wait_for_adapter(&mut self, watch: &warlock_usb::DeviceWatch) -> Option<(warlock_usb::Model, String)> {
+        let mut seen = watch.changes();
+        let mut last_error = None;
+        let mut said = false;
+        loop {
+            if self.stopping() {
+                return None;
+            }
+            self.wanted_types();
+            match claim_adapter() {
+                Ok(Some(found)) => return Some(found),
+                Ok(None) if !said => {
+                    info!("waiting for a supported adapter (a TP-Link Archer T3U, or another RTL8812BU/RTL8822BU)");
+                    said = true;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let message = e.to_string();
+                    if last_error.as_ref() != Some(&message) {
+                        warn!("can't claim the adapter: {message}");
+                        last_error = Some(message);
+                    }
+                }
+            }
+            // Wakes when a device comes or goes; at least once a second, to
+            // notice being stopped.
+            seen = watch.wait(seen, Duration::from_secs(1));
+        }
+    }
+
+    /// Opens the radio and runs AWDL until the adapter goes, the radio fails,
+    /// or Warlock stops. The adapter is connected meanwhile; the radio closes
+    /// last, which clears its ACK responder.
+    fn session(
+        &mut self,
+        watch: &warlock_usb::DeviceWatch,
+        model: warlock_usb::Model,
+        instance: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        let o = self.o;
+        info!(address = %self.own, channel = o.channel, width = o.width, metric = o.metric, "opening the radio (~8 s)");
+        let config = DevourerConfig { channel: o.channel, vid: model.vid, pid: model.pid, ..Default::default() };
+        let config = if o.width == 40 { config.forty(o.channel) } else { config };
+        let mut radio = DevourerRadio::open(&config)?;
+        radio.set_ack_responder(self.own.0)?;
+        self.tun.connect()?;
+        self.set_radio(RadioState::Up);
+        let result = self.awdl(&mut radio, watch, instance);
+        self.tun.disconnect();
+        drop(radio);
+        result
+    }
+
+    /// The AWDL engine on an open radio, bridged to the connected adapter.
+    fn awdl(
+        &mut self,
+        radio: &mut DevourerRadio,
+        watch: &warlock_usb::DeviceWatch,
+        instance: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        let o = self.o;
+        let mut tx = TxConfig::new(self.own);
+        tx.self_metric = o.metric;
+        tx.ht_40mhz = o.width == 40;
+        let mut engine = Engine::new(Config {
+            band_change_settle_us: radio.band_change_settle().as_micros() as u64,
+            ..Config::active(tx)
+        });
+        let mut discovery = Discovery::new(MTU as usize);
+        let mut advertiser = Advertiser::new(self.tun.index, self.tun.address, &self.types());
+        // What the control API reports as advertised, by type.
+        let mut advertised: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut seen_devices = watch.changes();
+        let mut last_publish = Instant::now() - PUBLISH;
+        let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
+        let mut buf = vec![0u8; 65536];
+        let mut ended = Ok(());
+        while !self.stopping() {
+            // A USB device came or went: is ours still there?
+            if watch.changes() != seen_devices {
+                seen_devices = watch.changes();
+                if !warlock_usb::is_present(instance)? {
+                    info!(device = instance, "the adapter was unplugged");
+                    break;
+                }
+            }
+            let now = radio.tsf_now();
+            let wait = match (now, now.and_then(|n| engine.next_wakeup(n))) {
+                (Some(n), Some(w)) => Duration::from_micros(w.saturating_sub(n)).min(SLICE),
+                _ => SLICE,
+            };
+            // AWDL → Windows.
+            let frame = match radio.recv(wait) {
+                Ok(f) => f,
+                Err(e) => {
+                    ended = Err(e.into());
+                    break;
+                }
+            };
+            if let Some(f) = frame {
+                for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
+                    match ev {
+                        Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
+                            if o.log_packets {
+                                info!("to Windows from {from} (to {to}): {}", describe(&payload));
+                            }
+                            match self.tun.send(&payload) {
+                                Ok(()) => self.traffic.to_windows += 1,
+                                Err(e) => warn!("to Windows: {e}"),
+                            }
+                        }
+                        Event::Packet { .. } => {}
+                        Event::ServicesChanged(a) => {
+                            let Some(p) = engine.peer(a) else { continue };
+                            info!(peer = %a, sui = ?p.services_sui, host = ?p.hostname, instances = ?instances(p), "services");
+                            self.traffic.announced += write_to_windows(&self.tun, discovery.update(p), o.log_packets);
+                            self.control.event(wire::Event::ServicesChanged {
+                                address: a.to_string(),
+                                services: api::services(p),
+                            });
+                        }
+                        Event::PeerLost(a) => {
+                            info!("PeerLost({a})");
+                            self.traffic.announced += write_to_windows(&self.tun, discovery.lost(a), o.log_packets);
+                            self.control.event(wire::Event::PeerLost { address: a.to_string() });
+                        }
+                        Event::PeerFound(a) => {
+                            info!("PeerFound({a})");
+                            if let Some(p) = engine.peer(a) {
+                                self.control
+                                    .event(wire::Event::PeerFound { peer: Box::new(api::peer(p, Some(f.tsf))) });
+                            }
+                        }
+                        Event::MasterChanged(m) => {
+                            info!("MasterChanged({m:?})");
+                            self.control.event(wire::Event::MasterChanged { master: m.map(|a| a.to_string()) });
+                        }
+                        other => info!("{other:?}"),
+                    }
+                }
+            }
+            let Some(now) = radio.tsf_now() else { continue };
+            // Windows → AWDL: every IPv6 packet with an AWDL address to go to
+            // (none for IPv4: the adapter has no ARP).
+            while let Some(n) = self.tun.try_recv(&mut buf) {
+                let packet = &buf[..n];
+                if o.log_packets {
+                    info!("from Windows: {}", describe(packet));
+                }
+                if o.no_mdns_to_air && is_mdns(packet) {
+                    self.mdns_held += 1;
+                    continue;
+                }
+                let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
+                    self.traffic.unroutable += 1;
+                    continue;
+                };
+                self.traffic.to_air += 1;
+                engine.send_packet(now, MacAddr(mac), ETHERTYPE_IPV6, packet.to_vec());
+            }
+            for a in engine.poll(now) {
+                match a {
+                    Action::Hop(c) => {
+                        if let Err(e) = radio.hop(c) {
+                            warn!("hop to {c}: {e}");
+                        }
+                    }
+                    Action::Transmit { mpdu, rate_500kbps, kind } => {
+                        if let Err(e) = radio.send(&mpdu, rate_500kbps) {
+                            warn!("sending {kind:?}: {e}");
+                        } else if kind == TxKind::AddbaResponse {
+                            info!("answered a Block Ack setup");
+                        }
+                    }
+                }
+            }
+            self.traffic.announced += write_to_windows(&self.tun, discovery.refresh(Instant::now()), o.log_packets);
+            if let Some(types) = self.wanted_types() {
+                advertiser.set_types(&types);
+            }
+            if let Some(a) = advertiser.poll(Instant::now()) {
+                info!(instances = ?a.instances, host = ?a.host, "advertising");
+                let types: BTreeSet<&String> = advertised.keys().chain(a.instances.keys()).collect();
+                for t in types {
+                    let (before, after) = (advertised.get(t), a.instances.get(t));
+                    if before != after {
+                        self.control.event(wire::Event::AdvertisingChanged {
+                            service_type: t.clone(),
+                            instances: after.cloned().unwrap_or_default(),
+                        });
+                    }
+                }
+                advertised = a.instances;
+                engine.set_services(a.records, a.host);
+            }
+            if last_publish.elapsed() >= PUBLISH {
+                last_publish = Instant::now();
+                self.info.awdl =
+                    wire::Awdl { master: engine.master().map(|m| m.to_string()), peers: engine.peers().count() };
+                self.info.traffic = Some(self.traffic.clone());
+                self.control.publish(warlock_api::State {
+                    info: self.info.clone(),
+                    peers: engine.peers().map(|p| api::peer(p, Some(now))).collect(),
+                    advertised: advertised.clone(),
+                });
+            }
+            if last_enforce.elapsed() >= Duration::from_secs(2) {
+                last_enforce = Instant::now();
+                if let Err(e) = self.tun.enforce_address() {
+                    warn!("adapter address: {e}");
+                }
+            }
+            if last_report.elapsed() >= Duration::from_secs(60) {
+                last_report = Instant::now();
+                let (advertisers, records) = discovery.counts();
+                let t = &self.traffic;
+                info!(
+                    master = ?engine.master(),
+                    peers = engine.peers().count(),
+                    to_air = t.to_air,
+                    to_windows = t.to_windows,
+                    unroutable = t.unroutable,
+                    advertisers,
+                    records,
+                    announced = t.announced,
+                    mdns_held = self.mdns_held,
+                    "status"
+                );
+            }
+        }
+        // Goodbyes for the records we announced for peers, while the adapter
+        // is still connected.
+        write_to_windows(&self.tun, discovery.stop(), o.log_packets);
+        for t in advertised.keys() {
+            self.control.event(wire::Event::AdvertisingChanged { service_type: t.clone(), instances: Vec::new() });
+        }
+        ended
+    }
 }

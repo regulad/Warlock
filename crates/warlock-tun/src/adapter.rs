@@ -38,12 +38,15 @@ fn win32(what: &str, code: u32) -> io::Result<()> {
     }
 }
 
-/// Warlock's virtual adapter, up and configured, with a session open.
+/// Warlock's virtual adapter, configured. It shows as connected only while a
+/// session is open ([`Tun::connect`]): the daemon keeps the adapter for its
+/// whole life and connects it while a radio is up, as a Mac keeps `awdl0`
+/// while switching AWDL off and on (PLAN.md, W5).
 pub struct Tun {
-    session: Arc<Session>,
+    session: Option<Arc<Session>>,
     // Keeps the adapter alive; Wintun removes an adapter we created when its
     // last handle closes.
-    _adapter: Arc<Adapter>,
+    adapter: Arc<Adapter>,
     luid: NET_LUID_LH,
     /// Its interface index, for `ping fe80::…%<index>`.
     pub index: u32,
@@ -54,26 +57,45 @@ pub struct Tun {
 }
 
 impl Tun {
-    /// Opens the adapter `name`, creating it (with `guid`) if needed, starts
-    /// a session and configures IPv6 for the AWDL address `mac`. Needs
-    /// Administrator.
+    /// Opens the adapter `name`, creating it (with `guid`) if needed, and
+    /// configures IPv6 for the AWDL address `mac`. It starts disconnected.
+    /// Needs Administrator.
     pub fn open(wintun: &Wintun, name: &str, guid: u128, mac: [u8; 6], mtu: u32) -> io::Result<Self> {
         let adapter = match Adapter::open(wintun, name) {
             Ok(a) => a,
             Err(_) => Adapter::create(wintun, name, "Warlock", Some(guid)).map_err(other)?,
         };
-        let session = adapter.start_session(RING).map_err(other)?;
         let tun = Self {
             luid: adapter.get_luid(),
             index: adapter.get_adapter_index().map_err(other)?,
-            session,
-            _adapter: adapter,
+            session: None,
+            adapter,
             address: link_local(mac),
             mtu,
         };
         tun.configure_interface()?;
         tun.enforce_address()?;
         Ok(tun)
+    }
+
+    /// Opens a session: the adapter shows as connected and carries packets.
+    pub fn connect(&mut self) -> io::Result<()> {
+        if self.session.is_none() {
+            self.session = Some(self.adapter.start_session(RING).map_err(other)?);
+        }
+        // Windows may add its own link-local as the adapter comes up.
+        self.enforce_address()
+    }
+
+    /// Ends the session: the adapter shows as disconnected, and packets to
+    /// it go nowhere.
+    pub fn disconnect(&mut self) {
+        self.session = None;
+    }
+
+    /// Whether a session is open.
+    pub fn is_connected(&self) -> bool {
+        self.session.is_some()
     }
 
     fn configure_interface(&self) -> io::Result<()> {
@@ -134,13 +156,16 @@ impl Tun {
         }
     }
 
-    /// A packet Windows sent into the adapter, if one is waiting.
+    /// A packet Windows sent into the adapter, if one is waiting (never while
+    /// disconnected).
     pub fn try_recv(&self, buf: &mut [u8]) -> Option<usize> {
-        self.session.try_recv(buf).ok()
+        self.session.as_ref()?.try_recv(buf).ok()
     }
 
-    /// Hands a packet to Windows as if received on the adapter.
+    /// Hands a packet to Windows as if received on the adapter. Fails while
+    /// disconnected.
     pub fn send(&self, packet: &[u8]) -> io::Result<()> {
-        self.session.send(packet).map(|_| ())
+        let session = self.session.as_ref().ok_or_else(|| io::Error::from(io::ErrorKind::NotConnected))?;
+        session.send(packet).map(|_| ())
     }
 }
