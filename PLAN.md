@@ -201,7 +201,7 @@ Pinned decisions:
   - The data plane stays the Wintun NIC; the API is control only.
   - Server stack: tokio's named-pipe server behind axum 0.8 (a custom `Listener`). To check: whether hyper notices a closed connection during a streaming response before the next heartbeat.
   - Checking the server against the contract (proposed): the YAML is authoritative; tests validate every response, and every line of every stream, against its schemas.
-  - Not yet run: a full OpenAPI 3.2 lint (e.g. Redocly CLI). A structural check (references, operation IDs, discriminators) passes.
+  - Linted by Redocly CLI's recommended rules on every commit that touches it (`.pre-commit-config.yaml`, `redocly.yaml`).
 - **W4 Service bridge:** browsing `_airdrop._tcp` / `_rdlink._tcp` on the NIC shows Apple devices; a test service we register appears on a Mac (verify on a lab Mac via `dns-sd -B` and `tcpdump -i awdl0`). **Exit criterion met 2026-11-18** (`docs/service-discovery.md`):
   - Browse: a Mac's in-frame-only `_airdrop._tcp` showed up in Windows' own DNS-SD (2026-11-17).
   - Advertise: a Windows registration named with `--advertise` reached a Mac (macOS 11.7) through our TLVs alone, with Windows' mDNS held back. The Mac browsed, resolved and got our address. An iPhone (iOS 27) with AirDrop open connected to a test `_airdrop._tcp` instance's port the same way. Until the control API exists, types are named on the command line.
@@ -220,6 +220,7 @@ Pinned decisions:
 - wintun.dll licensing on distribution (see above).
 
 ## Verification
+- pre-commit hooks on every commit (`.pre-commit-config.yaml`, added 2026-11-18 at Parker's request): `cargo fmt` (`rustfmt.toml`: 120 columns, the code's existing style), `cargo clippy --workspace --all-targets -D warnings`, Redocly's lint of `api/openapi.yaml`, and whitespace, line-ending, YAML and TOML checks. `pre-commit run --all-files` runs them all.
 - Unit and fuzz tests on `awdl-proto`.
 - Deterministic `awdl-core` tests driven by captured pcapngs through `PcapReplayRadio` with a simulated TSF clock.
 - Hardware loops per milestone using the T3U, an iPhone, and lab Macs / a jailbroken Apple TV as witnesses (`tcpdump -i awdl0`, `dns-sd`, `ping6 %awdl0`). Tools: `awdlsync` (engine live or on a capture, with the W2 check), `awdlcap` (radiotap pcapng for Wireshark), `warlock-usb`.

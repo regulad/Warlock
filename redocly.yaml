@@ -1,0 +1,8 @@
+# Redocly CLI configuration for `redocly lint api/openapi.yaml`, which
+# pre-commit runs (.pre-commit-config.yaml).
+extends:
+  - recommended
+rules:
+  # The read-only operations take no input that can be wrong, so they have
+  # no 4XX response to describe. Their failures are the `default` response.
+  operation-4xx-response: off

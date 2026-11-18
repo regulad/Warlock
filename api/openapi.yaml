@@ -59,19 +59,27 @@ info:
     ## Errors
 
     Every 4xx and 5xx response carries an `Error`.
+# No HTTP authentication: who may connect is decided by the pipe's access
+# control list (see Transport), which OpenAPI can't express.
+security: []
 tags:
   - name: daemon
     summary: Warlock itself, its radio and its adapter
+    description: What a program needs before it starts, such as the adapter's index and the host name to register services with.
   - name: peers
     summary: AWDL devices in range
+    description: The devices Warlock hears, and the service records they carry in their frames.
   - name: advertising
     summary: Service types advertised in Warlock's frames
+    description: Locks that put Windows' registrations of a service type in Warlock's AWDL frames.
   - name: holds
     summary: Keeping AWDL active
+    description: Locks that keep Warlock taking part in AWDL while a program uses the link.
   - name: events
     summary: What happens, as it happens
+    description: A stream of changes, for monitoring and `warlock-ctl`.
 servers:
-  - url: http://localhost
+  - url: http://warlock
     description: The named pipe `\\.\pipe\warlock`; the host is ignored.
 paths:
   /v1/info:

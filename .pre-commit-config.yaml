@@ -1,0 +1,47 @@
+# pre-commit (https://pre-commit.com) hooks. They run on every commit once
+# installed (`pre-commit install`, or globally through an init template);
+# `pre-commit run --all-files` runs them on the whole tree.
+#
+# Needs on PATH: cargo with its fmt and clippy subcommands, and Node.js for
+# the API lint.
+#
+# The licence text stays exactly as published.
+exclude: '^LICENSE\.md$'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+  - repo: local
+    hooks:
+      # Formats in place (rustfmt.toml); a commit that needed it fails once,
+      # with the changes left to stage.
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all
+        language: system
+        files: '\.rs$|(^|/)rustfmt\.toml$'
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        files: '\.rs$|(^|/)Cargo\.(toml|lock)$'
+        pass_filenames: false
+      # The API contract against Redocly's recommended rules (redocly.yaml).
+      # Through the system's npx: pre-commit's own Node environments can't
+      # use an installed Node.js on Windows.
+      - id: redocly-lint
+        name: redocly lint api/openapi.yaml
+        entry: npx --yes @redocly/cli@2.73.0 lint api/openapi.yaml
+        language: system
+        files: '^api/.*\.yaml$|^redocly\.yaml$'
+        pass_filenames: false
