@@ -649,15 +649,18 @@ fn check(what: &str, rc: u32) -> Result<()> {
     if rc == 0 { Ok(()) } else { Err(format!("{what}: Windows Installer error {rc}").into()) }
 }
 
-/// `warlock`'s version, from its manifest.
-fn warlock_version(root: &Path) -> Result<String> {
-    let manifest = std::fs::read_to_string(root.join("crates").join("warlock").join("Cargo.toml"))?;
-    let version = manifest
-        .lines()
-        .find_map(|l| l.strip_prefix("version = \"")?.strip_suffix('"'))
-        .ok_or("no version in crates/warlock/Cargo.toml")?;
-    // ProductVersion is major.minor.build, numbers only.
-    if version.split('.').count() != 3 || !version.split('.').all(|p| p.parse::<u16>().is_ok()) {
+/// Warlock's version: the workspace's, which this builder shares with
+/// `warlock` and every other crate.
+fn warlock_version() -> Result<String> {
+    let version = env!("CARGO_PKG_VERSION");
+    // ProductVersion is major.minor.build, numbers only, at most
+    // 255.255.65535: no pre-release or build suffixes.
+    let parts: Vec<&str> = version.split('.').collect();
+    let fits = parts.len() == 3
+        && parts[0].parse::<u8>().is_ok()
+        && parts[1].parse::<u8>().is_ok()
+        && parts[2].parse::<u16>().is_ok();
+    if !fits {
         return Err(format!("{version} isn't a version Windows Installer takes (major.minor.build)").into());
     }
     Ok(version.to_string())
@@ -998,7 +1001,7 @@ fn main() -> Result<()> {
             _ => return Err(format!("unknown argument {a}\n{USAGE}").into()),
         }
     }
-    let version = warlock_version(&root)?;
+    let version = warlock_version()?;
     if !no_build {
         let status = Command::new("cargo")
             .args(["build", "--release", "-p", "warlock", "-p", "warlockctl"])

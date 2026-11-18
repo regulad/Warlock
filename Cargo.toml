@@ -3,6 +3,10 @@ resolver = "3"
 members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlock-client", "crates/warlock-msi", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
 
 [workspace.package]
+# Warlock's one version, which every crate, the API contract and the MSI
+# carry: semver, with 0.y.z read as y for breaking changes (PLAN.md,
+# "Versioning").
+version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0-only"
 authors = ["Parker Wahle <regulad@regulad.xyz>"]

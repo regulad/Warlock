@@ -1,6 +1,6 @@
 [package]
 name = "warlock-capture"
-version = "0.1.0"
+version.workspace = true
 description = "Radiotap pcapng captures for Warlock: reading them for replay and tests, writing them from a live radio"
 edition.workspace = true
 license.workspace = true

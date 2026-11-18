@@ -1,6 +1,6 @@
 [package]
 name = "warlock-client"
-version = "0.1.0"
+version.workspace = true
 description = "A client of Warlock's control API (api/openapi.yaml): its wire types and an HTTP client on the named pipe"
 edition.workspace = true
 # Like the contract it implements: GPL-2.0 Warlock and AGPL programs can both

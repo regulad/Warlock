@@ -1,6 +1,6 @@
 [package]
 name = "warlock-tun"
-version = "0.1.0"
+version.workspace = true
 description = "Warlock's virtual network adapter: a Wintun layer-3 adapter carrying IPv6 between Windows and AWDL"
 edition.workspace = true
 license.workspace = true

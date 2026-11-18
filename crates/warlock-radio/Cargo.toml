@@ -1,6 +1,6 @@
 [package]
 name = "warlock-radio"
-version = "0.1.0"
+version.workspace = true
 description = "Warlock's radio: the TP-Link Archer T3U through devourer, or a capture replayed, behind one trait"
 edition.workspace = true
 license.workspace = true

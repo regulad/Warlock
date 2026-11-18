@@ -1,6 +1,6 @@
 [package]
 name = "warlock-api"
-version = "0.1.0"
+version.workspace = true
 description = "Warlock's control API server (api/openapi.yaml), on a named pipe"
 edition.workspace = true
 license.workspace = true

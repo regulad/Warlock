@@ -1,6 +1,6 @@
 [package]
 name = "warlockctl"
-version = "0.1.0"
+version.workspace = true
 description = "Warlock's control API from the command line, the way docker is a client of Docker's"
 edition.workspace = true
 # AGPL, unlike Warlock itself; it links only warlock-client, which is

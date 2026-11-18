@@ -1,6 +1,6 @@
 [package]
 name = "awdl-core"
-version = "0.1.0"
+version.workspace = true
 description = "Warlock's AWDL engine, sans-IO: peers, election, and the drift-tracking availability-window clock"
 edition.workspace = true
 license.workspace = true

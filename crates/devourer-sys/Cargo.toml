@@ -1,6 +1,6 @@
 [package]
 name = "devourer-sys"
-version = "0.1.0"
+version.workspace = true
 description = "Raw FFI to the OpenIPC devourer userspace Realtek Wi-Fi driver, via a narrow C shim"
 edition.workspace = true
 license.workspace = true

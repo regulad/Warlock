@@ -171,6 +171,13 @@ fn a_body_that_breaks_the_contract_fails_the_check() {
     check("Peer", &peer);
 }
 
+/// The contract carries Warlock's version, the workspace's (PLAN.md,
+/// "Versioning").
+#[test]
+fn the_contract_has_warlocks_version() {
+    assert_eq!(document()["info"]["version"], json!(env!("CARGO_PKG_VERSION")));
+}
+
 #[test]
 fn every_operation_in_the_contract_is_served() {
     let mut documented: Vec<(String, String)> = Vec::new();

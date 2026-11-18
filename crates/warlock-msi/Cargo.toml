@@ -1,6 +1,6 @@
 [package]
 name = "warlock-msi"
-version = "0.1.0"
+version.workspace = true
 description = "Builds Warlock's MSI with Windows' own Windows Installer API and makecab, no installer toolchain"
 edition.workspace = true
 license.workspace = true

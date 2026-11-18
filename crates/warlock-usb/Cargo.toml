@@ -1,6 +1,6 @@
 [package]
 name = "warlock-usb"
-version = "0.1.0"
+version.workspace = true
 description = "Claims Warlock's USB Wi-Fi adapter for WinUSB (and gives it back) using Windows' own signed winusb.inf"
 edition.workspace = true
 license.workspace = true
