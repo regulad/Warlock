@@ -316,6 +316,26 @@ Pinned decisions:
       - Checked 2026-11-18 on a host-only adapter. A service registered through `DnsServiceRegister` with another host name and the interface's own address was published with that name as its SRV target, but an AAAA query for the name went unanswered. The computer name's was answered.
       - A random name would mean Warlock answering for it itself, and changing which registrations the advertiser counts as ours.
     - The README says so, under Privacy, and suggests not giving the PC an identifying name: Windows' default `DESKTOP-…` names are meaningless.
+- **W6 Frames in Wireshark, then LLW (Parker, 2026-11-19).** Koala's trial 17 found that Continuity Capture's audio travels over Apple's Low-Latency Wi-Fi (LLW, `llw0`), not AWDL. The iPhone sent about 900 kbps that Warlock never delivered, since it carries only AWDL-encapsulated data. No tool here could show those frames: Wireshark sees only what Warlock delivers on its adapter. This reverses the 2026-11-18 decision of no capture endpoint and no capture command. In order:
+  1. **A capture endpoint.** `GET /v1/capture` streams radiotap pcapng (linktype 127) of the frames the radio hears, and optionally its own transmissions, until the client closes; like `/v1/events`, it holds nothing.
+     - Filters: `peer=MAC` (repeatable), `kind=awdl|other|all`, `tx=true`.
+     - It is a tap in the radio loop, costing one atomic check when no one captures. Each capture gets a bounded queue, so a slow client loses frames and never stalls the radio; drops are counted and logged.
+     - Each capture is logged with its process, as locks are.
+     - *Open:* Administrators only, or `warlock-users` too; whether a `peer` filter is required.
+  2. **A Wireshark extcap plugin.** It shows a "Warlock radio (802.11)" interface beside the Warlock AWDL adapter, with the filters in its options dialog, reading the capture endpoint. Wireshark looks for it in its own `extcap` folder or the per-user `%APPDATA%\Wireshark\extcap`.
+     - *Open:* how it gets there, by the MSI or a `warlockctl` command.
+  3. **Release 0.1.2** once 1 and 2 are done: a new endpoint is a feature, so the `z` goes up.
+  4. **Reverse-engineer LLW,** from a capture made with 1 and 2 during a Continuity Capture session, and from prior art:
+     - [Henri Jäger, "Cracking open what makes Apple's Low-Latency WiFi so fast", 39C3](https://events.ccc.de/congress/2025/hub/en/event/detail/cracking-open-what-makes-apple-s-low-latency-wifi-so-fast) (recorded, with an [HPI write-up](https://hpi.de/en/article/reverse-engineering-of-apples-low-latency-wi-fi/));
+     - [US11184890, "Low-latency Wi-Fi MAC-layer protocol"](https://patents.google.com/patent/US11184890), with an LLW master scheduling channel access, and a schedule frame;
+     - [The Apple Wiki's LLW page](https://theapplewiki.com/wiki/LLW);
+     - [Wang Yu, Black Hat USA 2022](https://i.blackhat.com/USA-22/Wednesday/US-22-Wang-Dive-into-Apple-IO80211Family-Vol-II.pdf), where `llw0` is the "Low-latency WLAN Interface" of Skywalk;
+     - [RTL8814Native](https://github.com/DrogaBox/RTL8814Native/releases/tag/awdl-preview-20261117), a macOS Realtek driver whose experimental `rtlawdl_llw=1` creates `llw0`. Its licence is unstated, so it is a reference only.
+     - What's known from Koala's trials (its `docs/guest-pairing.md`, trial 17):
+       - On a Mac, `llw0` is a standing interface with `awdl0`'s MAC and link-local address.
+       - A Continuity Capture stream adds a per-session ULA on it, `fd…::N`.
+       - The iPhone sends to the MAC the host gave it, with no neighbour discovery.
+  5. **An LLW interface in Warlock** beside AWDL, as on a Mac: a second adapter carrying LLW both ways. That includes reaching a peer's LLW ULA, which isn't derived from its MAC. Designed once 4 says what LLW needs.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
 - **K2 (moment of truth):** the iPhone scans our QR and completes guest pair-setup with Koala over Warlock.
 - **K3:** mic-only Continuity Capture session negotiated.
