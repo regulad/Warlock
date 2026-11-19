@@ -270,7 +270,11 @@ Pinned decisions:
         - It got the suspend notice at 20:09:18.397Z and closed the radio in 155 ms; Windows went down 5 s later.
         - It woke at 20:11:35.9Z, the radio was up 7.4 s later, the first frame came 1 s after that, and it was synced to the master again at 20:11:51.
         - No warning or error.
-      - **Untried:** the stop limit and the close limit (no way to wedge devourer on purpose), and the notices inside the service rather than a foreground run.
+      - **Live, the 0.1.1 service, installed over 0.1.0 by its MSI:**
+        - The first version upgrade: 0.1.0 stopped cleanly, `warlock setup` kept `warlock-users` and set the failure actions again, and 0.1.1 had the radio up 7 s after starting.
+        - `sc stop` answered STOP_PENDING (checkpoint 1, a 30 s hint) at once, and the service was stopped 0.5 s later.
+        - Hibernated: the suspend notice came at 20:32:33.904Z, and the radio closed in 235 ms; Windows went down 2 s later. It woke at 20:34:58.8Z; the radio was up 7.4 s later and synced again at 20:35:14. No warning or error.
+      - **Untried:** the stop limit and the close limit (no way to wedge devourer on purpose).
       - **Untested: Modern Standby (S0ix), and S3 sleep,** since this PC supports neither. Only hibernation has been tried. Under S0ix, Windows may deliver the suspend and resume notices at different moments, and may keep the USB bus powered, so the fix may behave differently there. That needs a machine with Modern Standby.
   - **Installer (Parker, 2026-11-18):** Warlock is to be distributed through winget as `Regulad.Warlock`, so that Koala and the AirDrop app can declare it as a package dependency (stable in winget since 1.6; it must come from the same source). Its installer is an **MSI**: winget's `portable` and `zip` types only copy files, so they can't register a service, and MSIX needs a signing certificate and sandboxes the app.
     - **Built with Windows' own tools**, not WiX: WiX's binaries come with the "Open Source Maintenance Fee" EULA since v6, and Parker chose not to depend on an installer toolchain. `crates/warlock-msi` writes the database through the Windows Installer API (`msi.dll`), as `.idt` tables whose column definitions are copied from MSIs Windows itself installed, and packs the files with `makecab`.
