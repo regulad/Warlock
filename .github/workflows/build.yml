@@ -41,6 +41,7 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
           cargo --version
+      # warlockctl's package builds warlock-extcap too.
       - name: Build
         run: cargo build --release --locked -p warlock -p warlockctl
       - uses: actions/upload-artifact@v7
@@ -49,6 +50,7 @@ jobs:
           path: |
             target/release/warlock.exe
             target/release/warlockctl.exe
+            target/release/warlock-extcap.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -172,7 +174,7 @@ jobs:
             "$($f.Name): $($s.Status) ($($s.StatusMessage)) signer: $($s.SignerCertificate.Subject); issuer: $($s.SignerCertificate.Issuer); timestamped: $($null -ne $s.TimeStamperCertificate)"
             if (-not $ok) { $bad++ }
           }
-          if ($files.Count -lt 3) { "expected the package and two binaries, found $($files.Count) files"; $bad++ }
+          if ($files.Count -lt 4) { "expected the package and three binaries, found $($files.Count) files"; $bad++ }
           exit $bad
       - uses: actions/upload-artifact@v7
         with:

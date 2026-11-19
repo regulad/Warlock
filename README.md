@@ -84,11 +84,15 @@ warlockctl capture -w FILE       the radio's 802.11 frames as pcapng until Ctrl+
 ```
 
 For packets, Wireshark captures on the Warlock AWDL adapter. For the frames
-underneath, including those Warlock doesn't deliver to Windows, use
-`warlockctl capture [--peer MAC]... [--kind awdl|other|all] [--tx]` and open
-the file in Wireshark, or pipe it in live: `warlockctl capture -w - |
-wireshark -k -i -`. The radio hears every device nearby, so a capture holds
-other devices' addresses and host names too.
+underneath, including those Warlock doesn't deliver to Windows, the installer
+can add **Warlock radio (802.11)** to Wireshark's capture interfaces. Tick
+"Also install the Wireshark plugin" when installing; it's greyed out when
+Wireshark isn't installed. A silent install adds it with `WIRESHARKPLUGIN=1`.
+Its options pick peers, AWDL or other frames, and Warlock's own. Without the
+plugin, `warlockctl capture [--peer MAC]... [--kind awdl|other|all] [--tx]`
+writes the same pcapng, to open in Wireshark or pipe in live:
+`warlockctl capture -w - | wireshark -k -i -`. The radio hears every device
+nearby, so a capture holds other devices' addresses and host names too.
 
 Add yourself to `warlock-users` to use it without elevation
 (`net localgroup warlock-users <you> /add`, then sign in again).

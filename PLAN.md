@@ -330,6 +330,23 @@ Pinned decisions:
        - Tested against the real server and client (`tests/contract.rs`) and by unit tests; not yet live on the radio.
   2. **A Wireshark extcap plugin.** It shows a "Warlock radio (802.11)" interface beside the Warlock AWDL adapter, with the filters in its options dialog, reading the capture endpoint. Wireshark looks for it in its own `extcap` folder or the per-user `%APPDATA%\Wireshark\extcap`.
      - **Installed by the MSI (Parker, 2026-11-19),** as a checkbox that is off by default, so installing it is a choice. It is greyed out, with a note that Wireshark was not detected, when there's no Wireshark.
+     - **Implemented 2026-11-19:**
+       - `warlock-extcap.exe`, a second binary of `warlockctl`'s package. It answers Wireshark's `--extcap-interfaces`, `--extcap-dlts` and `--extcap-config` (Peers, Frames, Warlock's own frames), then writes `GET /v1/capture` into Wireshark's pipe.
+       - The options have no validation regex: extcap values are delimited by braces, so a quantifier such as `{2}` would end the field. Warlock's 400 reaches Wireshark instead.
+       - **Tried with Wireshark 4.6.9 (`tshark`):** from the per-user `extcap` folder, `tshark -D` listed `warlock (Warlock radio (802.11))`. A capture against the 0.1.1 service showed the API's own error ("not allowed to use Warlock", since the user isn't in `warlock-users`).
+       - **The MSI:**
+         - Feature `WiresharkPlugin` (child of Warlock, level 1000, so off), raised to 1 by `WIRESHARKPLUGIN AND WIRESHARKDIR`.
+         - `AppSearch` finds `WIRESHARKDIR` through `RegLocator`, from `App Paths\Wireshark.exe` `Path` (64-bit) or `SOFTWARE\Wireshark` `InstallDir` (32-bit view, where Wireshark's installer writes it). It's a directory search, so the folder must exist. The plugin goes into `[WIRESHARKDIR]extcap`.
+         - A `CompLocator` on the plugin's component sets `WIRESHARKPLUGIN` when it's installed, so upgrades keep it.
+         - The checkbox is on the install-folder page; `ControlCondition` disables it and shows "Wireshark was not detected." when `NOT WIRESHARKDIR`.
+         - Both properties are secure custom properties.
+       - **Checked without installing** (`OpenPackage` with machine state ignored, then `AppSearch` and costing):
+         - here `WIRESHARKDIR` is `C:\Program Files\Wireshark\` and the plugin's target `…\extcap\`;
+         - unticked, the plugin isn't requested; ticked, it is (local);
+         - ticked with `WIRESHARKDIR` cleared, it isn't, and Warlock still is.
+         - An administrative install unpacks `extcap\warlock-extcap.exe` with the other two binaries.
+       - The release builds, uploads and signs it with the others, and checks the package and three binaries.
+       - Not yet seen: the page itself with the checkbox, and an upgrade that keeps the plugin.
   3. **Release 0.1.2** once 1 and 2 are done: a new endpoint is a feature, so the `z` goes up.
   4. **Reverse-engineer LLW,** from a capture made with 1 and 2 during a Continuity Capture session, and from prior art:
      - [Henri Jäger, "Cracking open what makes Apple's Low-Latency WiFi so fast", 39C3](https://events.ccc.de/congress/2025/hub/en/event/detail/cracking-open-what-makes-apple-s-low-latency-wifi-so-fast) (recorded, with an [HPI write-up](https://hpi.de/en/article/reverse-engineering-of-apples-low-latency-wi-fi/));

@@ -23,7 +23,12 @@
 //!   `warlock-users` group, the service's restart-on-failure actions; undone
 //!   if a fresh install rolls back), and on an uninstall that isn't an
 //!   upgrade, `warlock teardown` (the adapter back to Windows' own driver,
-//!   the group removed).
+//!   the group removed);
+//! - optionally, `warlock-extcap.exe` in Wireshark's `extcap` folder, which
+//!   makes Warlock's radio a Wireshark capture interface. It goes in when
+//!   the install page's checkbox (off by default) or `WIRESHARKPLUGIN=1`
+//!   asks for it and the registry shows where Wireshark is; it stays in on
+//!   an upgrade that finds it installed.
 //!
 //! A newer version replaces an older one (and a rebuild of the same version
 //! replaces itself); an older one won't install over a newer one.
@@ -86,6 +91,15 @@ const COMPONENT_WARLOCKCTL: &str = "{34A10DA0-A780-4C21-8E81-FE0E0DDED176}";
 /// `LICENSE-WINTUN-EXCEPTION.md` (added before the first release, so no
 /// installed version had the component without it).
 const COMPONENT_LICENSES: &str = "{017BEEEC-3CC4-4536-BC22-1F8363621EB7}";
+/// Key file `warlock-extcap.exe`, in Wireshark's `extcap` folder. Generated
+/// 2026-11-19 (0.1.2).
+const COMPONENT_WIRESHARK_PLUGIN: &str = "{5BB193A0-3D81-4220-97CA-7FC16F300AC6}";
+
+/// The optional Wireshark plugin (PLAN.md, W6): installed when the
+/// installer's checkbox sets this property and Wireshark was found, which
+/// sets `WIRESHARKDIR`. Off by default, so silent installs (winget's) leave
+/// it out unless given `WIRESHARKPLUGIN=1`.
+const WIRESHARK_PLUGIN_PROPERTY: &str = "WIRESHARKPLUGIN";
 
 /// As the winget package's publisher.
 const MANUFACTURER: &str = "Regulad";
@@ -145,6 +159,14 @@ const MIGRATE_FEATURES: i32 = 1;
 const ONLY_DETECT: i32 = 2;
 /// `msidbUpgradeAttributesVersionMaxInclusive`.
 const MAX_INCLUSIVE: i32 = 0x200;
+/// `msidbRegistryRootLocalMachine`.
+const HKLM: i32 = 2;
+/// `msidbLocatorTypeDirectory`: the value is a folder, which must exist.
+const LOCATOR_DIRECTORY: i32 = 0;
+/// `msidbLocatorTypeFileName`: a component's key path is a file.
+const LOCATOR_FILE: i32 = 1;
+/// `msidbLocatorType64bit`: the 64-bit registry, not the 32-bit view.
+const LOCATOR_64BIT: i32 = 16;
 
 /// A cell: `None` is null.
 type Cell = Option<String>;
@@ -238,8 +260,9 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("ALLUSERS", "1"),
         ("ARPNOMODIFY", "1"),
         ("ARPCOMMENTS", "Apple Wireless Direct Link (AWDL) for Windows"),
-        // Found by FindRelatedProducts in the UI, used by the elevated part.
-        ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND"),
+        // Set in the UI (FindRelatedProducts, AppSearch, the checkbox), used
+        // by the elevated part.
+        ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN"),
     ]
     .into_iter()
     .chain(ui::PROPERTIES)
@@ -256,7 +279,11 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     directory
         .row(vec![s("TARGETDIR"), None, s("SourceDir")])
         .row(vec![s("ProgramFiles64Folder"), s("TARGETDIR"), s(".")])
-        .row(vec![s("INSTALLDIR"), s("ProgramFiles64Folder"), s("Warlock")]);
+        .row(vec![s("INSTALLDIR"), s("ProgramFiles64Folder"), s("Warlock")])
+        // Wireshark's folder, as AppSearch finds it (a directory takes the
+        // path of the property named after it), and its extcap folder.
+        .row(vec![s("WIRESHARKDIR"), s("TARGETDIR"), s(".")])
+        .row(vec![s("WIRESHARKEXTCAP"), s("WIRESHARKDIR"), s("extcap")]);
     all.push(directory);
 
     let mut component = Table::new(
@@ -278,6 +305,14 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     ] {
         component.row(vec![s(name), s(guid), s("INSTALLDIR"), n(COMPONENT_64BIT), None, s(key)]);
     }
+    component.row(vec![
+        s("WiresharkPlugin"),
+        s(COMPONENT_WIRESHARK_PLUGIN),
+        s("WIRESHARKEXTCAP"),
+        n(COMPONENT_64BIT),
+        None,
+        s("warlock_extcap.exe"),
+    ]);
     all.push(component);
 
     let mut feature = Table::new(
@@ -295,13 +330,31 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         &["Feature"],
     );
     feature.row(vec![s("Warlock"), None, s("Warlock"), s("Warlock and warlockctl"), n(1), n(1), s("INSTALLDIR"), n(0)]);
+    // Level 1000, above the default INSTALLLEVEL of 1: off unless the
+    // Condition table raises it. Not displayed: the checkbox is its UI.
+    feature.row(vec![
+        s("WiresharkPlugin"),
+        s("Warlock"),
+        s("Wireshark plugin"),
+        s("Warlock's radio as a capture interface in Wireshark"),
+        n(0),
+        n(1000),
+        None,
+        n(0),
+    ]);
     all.push(feature);
+
+    let mut condition =
+        Table::new("Condition", &[("Feature_", "s38"), ("Level", "i2"), ("Condition", "S255")], &["Feature_", "Level"]);
+    condition.row(vec![s("WiresharkPlugin"), n(1), s(&format!("{WIRESHARK_PLUGIN_PROPERTY} AND WIRESHARKDIR"))]);
+    all.push(condition);
 
     let mut feature_components =
         Table::new("FeatureComponents", &[("Feature_", "s38"), ("Component_", "s72")], &["Feature_", "Component_"]);
     for c in ["Warlock", "Warlockctl", "Licenses"] {
         feature_components.row(vec![s("Warlock"), s(c)]);
     }
+    feature_components.row(vec![s("WiresharkPlugin"), s("WiresharkPlugin")]);
     all.push(feature_components);
 
     let mut file = Table::new(
@@ -394,9 +447,37 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         signature.row(vec![s(&sig), s(file_name), s(&floor), None, None, None, None, None, None]);
         dr_locator.row(vec![s(&sig), None, s("[System64Folder]"), n(0)]);
     }
+    // Wireshark's folder, from either place its installer records it: the
+    // App Paths entry (64-bit registry) or its own key (32-bit). A directory
+    // search sets the property only if the folder exists.
+    let mut reg_locator = Table::new(
+        "RegLocator",
+        &[("Signature_", "s72"), ("Root", "i2"), ("Key", "s255"), ("Name", "S255"), ("Type", "I2")],
+        &["Signature_"],
+    );
+    for (sig, key, name, kind) in [
+        (
+            "SigWiresharkAppPath",
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Wireshark.exe",
+            "Path",
+            LOCATOR_DIRECTORY | LOCATOR_64BIT,
+        ),
+        ("SigWiresharkInstallDir", r"SOFTWARE\Wireshark", "InstallDir", LOCATOR_DIRECTORY),
+    ] {
+        app_search.row(vec![s("WIRESHARKDIR"), s(sig)]);
+        reg_locator.row(vec![s(sig), n(HKLM), s(key), s(name), n(kind)]);
+    }
+    // The plugin already installed (an upgrade or repair): the checkbox
+    // starts ticked, so a silent upgrade keeps it.
+    let mut comp_locator =
+        Table::new("CompLocator", &[("Signature_", "s72"), ("ComponentId", "s38"), ("Type", "I2")], &["Signature_"]);
+    app_search.row(vec![s(WIRESHARK_PLUGIN_PROPERTY), s("SigWiresharkPlugin")]);
+    comp_locator.row(vec![s("SigWiresharkPlugin"), s(COMPONENT_WIRESHARK_PLUGIN), n(LOCATOR_FILE)]);
     all.push(app_search);
     all.push(signature);
     all.push(dr_locator);
+    all.push(reg_locator);
+    all.push(comp_locator);
 
     let runtime_found = RUNTIME_DLLS.map(|(p, _)| p).join(" AND ");
     let mut launch = Table::new("LaunchCondition", &[("Condition", "s255"), ("Description", "l255")], &["Condition"]);
@@ -764,6 +845,13 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
             vital: true,
         },
         Payload {
+            key: "warlock_extcap.exe",
+            component: "WiresharkPlugin",
+            name: "WLEXTCAP.EXE|warlock-extcap.exe",
+            source: release.join("warlock-extcap.exe"),
+            vital: true,
+        },
+        Payload {
             key: "LICENSE.md",
             component: "Licenses",
             name: "LICENSE.MD|LICENSE.md",
@@ -1028,6 +1116,7 @@ fn main() -> Result<()> {
     let version = warlock_version()?;
     if !no_build {
         let status = Command::new("cargo")
+            // warlockctl's package also builds warlock-extcap.
             .args(["build", "--release", "-p", "warlock", "-p", "warlockctl"])
             .current_dir(&root)
             .status()?;
