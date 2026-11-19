@@ -16,11 +16,14 @@ Apple's protocols over it come separately.
 tried with Macs, an iPhone and an Apple TV. Expect rough edges, and breaking
 changes to the API between 0.y versions.
 
+Warlock was built with the assistance of Claude Opus 5.5.
+
 ## What you need
 
 - **Windows 11, x64.** Windows 10 may work but hasn't been tried.
 - **A USB Wi-Fi adapter on Realtek's RTL8812BU or RTL8822BU**, given to
-  Warlock. Warlock is built and tested with the **TP-Link Archer T3U (v1)**.
+  Warlock. Warlock is built and tested with the
+  [**TP-Link Archer T3U (v1)**](https://link.amazon/B00RQheqL).
   It also uses the other adapters with those chips that Linux's `rtw88` driver
   lists (`MODELS` in [`crates/warlock-usb`](crates/warlock-usb/src/lib.rs)),
   with a warning, since none of them has been tried.
