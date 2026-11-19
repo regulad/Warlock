@@ -327,7 +327,12 @@ Pinned decisions:
        - Each capture queues 4,096 frames. Frames dropped for a slow client are counted in the next frame's `epb_dropcount`, and the direction goes in `epb_flags` (`warlock-capture`'s `Writer::write_with`).
        - The daemon offers each received frame before the engine sees it, and each frame it sends once the radio accepted it.
        - `warlock-client`'s `capture`, and `warlockctl capture`.
-       - Tested against the real server and client (`tests/contract.rs`) and by unit tests; not yet live on the radio.
+       - Tested against the real server and client (`tests/contract.rs`) and by unit tests.
+       - **Live, 2026-11-19:** `warlockctl capture --tx` for 20 s on the T3U, with the development build in the foreground.
+         - It wrote 560 frames, none dropped (328 in, 232 out by `epb_flags`), on channels 149 and 6.
+         - The TSF matched the capture times to the microsecond, and Wireshark dissected Warlock's own AWDL frames cleanly.
+         - The 23 frames Wireshark called malformed were one nearby Apple device's MIFs, which its AWDL dissector doesn't fully parse.
+         - Sent frames carried a made-up 0 dBm signal; they now carry no antenna-signal field at all.
   2. **A Wireshark extcap plugin.** It shows a "Warlock radio (802.11)" interface beside the Warlock AWDL adapter, with the filters in its options dialog, reading the capture endpoint. Wireshark looks for it in its own `extcap` folder or the per-user `%APPDATA%\Wireshark\extcap`.
      - **Installed by the MSI (Parker, 2026-11-19),** as a checkbox that is off by default, so installing it is a choice. It is greyed out, with a note that Wireshark was not detected, when there's no Wireshark.
      - **Implemented 2026-11-19:**

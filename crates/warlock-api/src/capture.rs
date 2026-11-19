@@ -43,8 +43,8 @@ pub struct Frame<'a> {
     /// The radio's TSF, µs.
     pub tsf: u64,
     pub channel: u8,
-    /// The signal of a received frame; 0 for a sent one.
-    pub rssi_dbm: i8,
+    /// The signal of a received frame; none for a sent one.
+    pub rssi_dbm: Option<i8>,
     /// The MPDU, without FCS.
     pub mpdu: &'a [u8],
 }
@@ -141,7 +141,7 @@ struct Queued {
     sent: bool,
     tsf: u64,
     channel: u8,
-    rssi_dbm: i8,
+    rssi_dbm: Option<i8>,
     mpdu: Vec<u8>,
     dropped_before: u64,
 }
@@ -269,7 +269,7 @@ mod tests {
     }
 
     fn frame(mpdu: &[u8], kind: FrameKind, sent: bool) -> Frame<'_> {
-        Frame { sent, kind, tsf: 1, channel: 149, rssi_dbm: -50, mpdu }
+        Frame { sent, kind, tsf: 1, channel: 149, rssi_dbm: (!sent).then_some(-50), mpdu }
     }
 
     #[test]

@@ -388,7 +388,8 @@ async fn a_capture_streams_the_frames_it_asks_for_while_open() {
         (wanted.clone(), FrameKind::Other, false),
     ];
     for (mpdu, kind, sent) in &offered {
-        daemon.capture(&Frame { sent: *sent, kind: *kind, tsf: 7, channel: 149, rssi_dbm: -40, mpdu });
+        let rssi_dbm = (!sent).then_some(-40);
+        daemon.capture(&Frame { sent: *sent, kind: *kind, tsf: 7, channel: 149, rssi_dbm, mpdu });
     }
     let block = tokio::time::timeout(Duration::from_secs(1), chunks.next()).await.unwrap().unwrap().unwrap();
     assert_eq!(&block[..4], &6u32.to_le_bytes(), "an enhanced packet block");

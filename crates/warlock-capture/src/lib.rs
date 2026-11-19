@@ -165,16 +165,17 @@ impl<W: Write> Writer<W> {
         rssi_dbm: i8,
         mpdu: &[u8],
     ) -> Result<(), Error> {
-        self.write_with(timestamp, tsf, freq_mhz, rssi_dbm, mpdu, Extra::default())
+        self.write_with(timestamp, tsf, freq_mhz, Some(rssi_dbm), mpdu, Extra::default())
     }
 
-    /// Writes one frame, with what [`Extra`] says about it.
+    /// Writes one frame, with what [`Extra`] says about it. A frame with no
+    /// signal (one Warlock sent) gets no antenna-signal field.
     pub fn write_with(
         &mut self,
         timestamp: Duration,
         tsf: u64,
         freq_mhz: u16,
-        rssi_dbm: i8,
+        rssi_dbm: Option<i8>,
         mpdu: &[u8],
         extra: Extra,
     ) -> Result<(), Error> {
@@ -189,7 +190,7 @@ impl<W: Write> Writer<W> {
             options.push(EnhancedPacketOption::DropCount(extra.dropped_before));
         }
         let data: Vec<u8> = if self.radiotap {
-            let mut d = radiotap_header(tsf, freq_mhz, rssi_dbm).to_vec();
+            let mut d = radiotap_header(tsf, freq_mhz, rssi_dbm);
             d.extend_from_slice(mpdu);
             d
         } else {
@@ -216,20 +217,24 @@ impl<W: Write> Writer<W> {
     }
 }
 
-/// The radiotap header Warlock writes: TSFT, flags (no FCS), channel and
-/// antenna signal.
-pub fn radiotap_header(tsf: u64, freq_mhz: u16, rssi_dbm: i8) -> [u8; 23] {
-    let mut h = [0u8; 23];
-    h[2..4].copy_from_slice(&23u16.to_le_bytes());
-    // Present: TSFT (0), Flags (1), Channel (3), Antenna signal (5).
-    h[4..8].copy_from_slice(&0b10_1011u32.to_le_bytes());
+/// The radiotap header Warlock writes: TSFT, flags (no FCS), channel and,
+/// when there is one, antenna signal.
+pub fn radiotap_header(tsf: u64, freq_mhz: u16, rssi_dbm: Option<i8>) -> Vec<u8> {
+    let len = if rssi_dbm.is_some() { 23 } else { 22 };
+    let mut h = vec![0u8; len];
+    h[2..4].copy_from_slice(&(len as u16).to_le_bytes());
+    // Present: TSFT (0), Flags (1), Channel (3), and Antenna signal (5).
+    let present: u32 = if rssi_dbm.is_some() { 0b10_1011 } else { 0b1011 };
+    h[4..8].copy_from_slice(&present.to_le_bytes());
     h[8..16].copy_from_slice(&tsf.to_le_bytes());
     h[16] = 0; // flags: no FCS
     // h[17]: padding to align the channel field
     h[18..20].copy_from_slice(&freq_mhz.to_le_bytes());
     let chan_flags: u16 = if freq_mhz < 3000 { 0x0080 | 0x0400 } else { 0x0100 | 0x0040 }; // 2 GHz+dyn CCK-OFDM / 5 GHz+OFDM
     h[20..22].copy_from_slice(&chan_flags.to_le_bytes());
-    h[22] = rssi_dbm as u8;
+    if let Some(dbm) = rssi_dbm {
+        h[22] = dbm as u8;
+    }
     h
 }
 
@@ -274,6 +279,21 @@ mod tests {
         assert_eq!(frames[0].rssi_dbm, Some(-48));
         assert_eq!(frames[0].mpdu, b"\xd0\x00frame");
         assert_eq!((frames[1].number, frames[1].channel()), (2, Some(6)));
+    }
+
+    /// A frame Warlock sent has no signal to report, so it has none, rather
+    /// than a made-up 0 dBm.
+    #[test]
+    fn sent_frames_have_no_signal() {
+        let mut w = Writer::radiotap(Vec::new()).unwrap();
+        let extra = Extra { direction: Some(Direction::Outbound), dropped_before: 0 };
+        w.write_with(Duration::from_secs(1), 7, 5745, None, b"\x08\x00sent", extra).unwrap();
+        let path = std::env::temp_dir().join(format!("warlock-capture-sent-{}.pcapng", std::process::id()));
+        std::fs::write(&path, w.into_inner()).unwrap();
+        let frames = read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!((frames[0].tsf, frames[0].freq_mhz, frames[0].rssi_dbm), (Some(7), Some(5745), None));
+        assert_eq!(frames[0].mpdu, b"\x08\x00sent");
     }
 
     #[test]

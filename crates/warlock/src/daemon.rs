@@ -553,7 +553,7 @@ impl Run<'_> {
                             kind: frame_kind(&f.mpdu),
                             tsf: f.tsf,
                             channel: f.channel,
-                            rssi_dbm: f.rssi_dbm,
+                            rssi_dbm: Some(f.rssi_dbm),
                             mpdu: &f.mpdu,
                         });
                     }
@@ -642,7 +642,7 @@ impl Run<'_> {
                                     kind: frame_kind(mpdu),
                                     tsf: now,
                                     channel: radio.channel(),
-                                    rssi_dbm: 0,
+                                    rssi_dbm: None,
                                     mpdu,
                                 });
                             }
