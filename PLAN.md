@@ -358,6 +358,8 @@ Pinned decisions:
        - It counts from that account's next sign-in, as the page says.
        - Nothing undoes it except an uninstall, which removes the group. Unticking the box on an upgrade leaves the membership as it is.
   3. **Release 0.1.2** once 1 and 2 are done: a new endpoint is a feature, so the `z` goes up.
+     - **Released 2026-11-19** ([v0.1.2](https://github.com/regulad/Warlock/releases/tag/v0.1.2), tag signed, at `2f9cd53`). Before the tag, "Build and sign" ran by hand on master, so the release path's third binary was built and signed once before it counted. The published MSI's signature is Valid.
+     - Still to be seen in a real install of it: both checkboxes' effects (the plugin in Wireshark's `extcap` folder, the account in `warlock-users`), and an upgrade keeping the plugin.
   4. **Reverse-engineer LLW,** from a capture made with 1 and 2 during a Continuity Capture session, and from prior art:
      - [Henri Jäger, "Cracking open what makes Apple's Low-Latency WiFi so fast", 39C3](https://events.ccc.de/congress/2025/hub/en/event/detail/cracking-open-what-makes-apple-s-low-latency-wifi-so-fast) (recorded, with an [HPI write-up](https://hpi.de/en/article/reverse-engineering-of-apples-low-latency-wi-fi/));
      - [US11184890, "Low-latency Wi-Fi MAC-layer protocol"](https://patents.google.com/patent/US11184890), with an LLW master scheduling channel access, and a schedule frame;
