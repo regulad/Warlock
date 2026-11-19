@@ -54,7 +54,8 @@ The installer adds:
 - the **`warlock-users`** group, whose members may use Warlock's control API
   (Administrators always may). Tick "Add me to warlock-users" while
   installing to join it (a silent install: `JOINWARLOCKUSERS=1`); it counts
-  from your next sign-in.
+  from your next sign-in, so the installer then offers to sign you out. The
+  box shows ticked and greyed out when you're already a member.
 
 ## Use
 

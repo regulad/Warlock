@@ -1,0 +1,22 @@
+[package]
+name = "warlock-msi-ca"
+version.workspace = true
+description = "The custom action Warlock's MSI runs before its pages: whether the account installing is already in warlock-users"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# Loaded by Windows Installer from the package's Binary table.
+crate-type = ["cdylib"]
+
+[dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_ApplicationInstallationAndServicing",
+    "Win32_System_Shutdown",
+] }

@@ -182,10 +182,14 @@ impl Ui {
         }
     }
 
-    /// A control shown only when `condition` holds (it starts hidden).
+    /// A control shown only while `condition` holds (it starts hidden).
+    /// Windows Installer evaluates control conditions again as properties
+    /// change on the page, so it's hidden again when `condition` stops
+    /// holding.
     fn shown_if(&mut self, dialog: &str, name: &str, at: (i32, i32, i32, i32), text: &str, condition: &str) {
         self.control(dialog, name, "Text", at, TEXT & !VISIBLE, None, Some(text), None);
         self.condition.row(vec![s(dialog), s(name), s("Show"), s(condition)]);
+        self.condition.row(vec![s(dialog), s(name), s("Hide"), s(&format!("NOT ({condition})"))]);
     }
 
     /// The parts every page has: its title and description, the two rules,
@@ -260,7 +264,8 @@ pub fn tables(licence: &str) -> Vec<Table> {
          supported USB Wi-Fi adapter it finds away from Windows' Wi-Fi driver; uninstalling gives them back.",
     );
     // The account installing joins warlock-users, unticked by default; it
-    // counts from that account's next sign-in.
+    // counts from that account's next sign-in. Already a member: ticked and
+    // greyed out, saying so.
     ui.control(
         d,
         "JoinUsers",
@@ -271,7 +276,13 @@ pub fn tables(licence: &str) -> Vec<Table> {
         Some("Add &me ([LogonUser]) to warlock-users"),
         Some("WiresharkPlugin"),
     );
-    ui.text(d, "JoinUsersNote", (34, 178, 316, 12), "To use Warlock without elevation, from your next sign-in.");
+    let member = crate::MEMBER_PROPERTY;
+    ui.condition.row(vec![s(d), s("JoinUsers"), s("Disable"), s(member)]);
+    ui.condition.row(vec![s(d), s("JoinUsers"), s("Enable"), s(&format!("NOT {member}"))]);
+    let note = (34, 178, 316, 12);
+    let not_member = format!("NOT {member}");
+    ui.shown_if(d, "JoinUsersNote", note, "To use Warlock without elevation, from your next sign-in.", &not_member);
+    ui.shown_if(d, "JoinUsersMember", note, "You're already in warlock-users.", member);
     // The optional Wireshark plugin (PLAN.md, W6): unticked unless already
     // installed, and greyed out, saying why in place of what it is, when
     // Wireshark wasn't found.
@@ -287,15 +298,38 @@ pub fn tables(licence: &str) -> Vec<Table> {
     );
     ui.condition.row(vec![s(d), s("WiresharkPlugin"), s("Disable"), s("NOT WIRESHARKDIR")]);
     ui.condition.row(vec![s(d), s("WiresharkPlugin"), s("Enable"), s("WIRESHARKDIR")]);
+    // One note in three: what the plugin is; on an upgrade with it unticked,
+    // that the installed one goes; or that there's no Wireshark.
     let note = (34, 212, 316, 12);
-    ui.shown_if(d, "WiresharkNote", note, "Warlock's radio as a capture interface in Wireshark.", "WIRESHARKDIR");
+    let removing = format!(
+        "WIRESHARKDIR AND {} AND NOT {}",
+        crate::WIRESHARK_PLUGIN_FOUND_PROPERTY,
+        crate::WIRESHARK_PLUGIN_PROPERTY
+    );
+    let what = format!("WIRESHARKDIR AND NOT ({removing})");
+    ui.shown_if(d, "WiresharkNote", note, "Warlock's radio as a capture interface in Wireshark.", &what);
+    ui.shown_if(d, "WiresharkRemoved", note, "The previous version of the plugin will be removed.", &removing);
     ui.shown_if(d, "WiresharkMissing", note, "Wireshark was not detected.", "NOT WIRESHARKDIR");
     ui.button(d, "Back", BACK, BUTTON, "&Back", "Install");
     ui.button(d, "Install", NEXT, BUTTON | ELEVATION_SHIELD, "&Install", "Cancel");
     ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "FolderLabel");
     ui.events(d, "ChangeFolder", &[("SpawnDialog", "BrowseDlg")]);
     ui.events(d, "Back", &[("NewDialog", "LicenseDlg")]);
-    ui.events(d, "Install", &[("SetTargetPath", "INSTALLDIR"), ("EndDialog", "Return")]);
+    // Windows Installer decides the features in CostFinalize, before this
+    // page, and a property set here doesn't decide again: Install says what
+    // the checkbox chose, or ticking it does nothing (0.1.2, 2026-11-19).
+    let wanted = "WIRESHARKPLUGIN AND WIRESHARKDIR";
+    for (i, (event, argument, condition)) in [
+        ("SetTargetPath", "INSTALLDIR", "1".to_string()),
+        ("AddLocal", "WiresharkPlugin", wanted.to_string()),
+        ("Remove", "WiresharkPlugin", format!("NOT ({wanted})")),
+        ("EndDialog", "Return", "1".to_string()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ui.event.row(vec![s(d), s("Install"), s(event), s(argument), s(&condition), n(i as i32 + 1)]);
+    }
     ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
 
     // The folder browser Change opens.
@@ -379,17 +413,29 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.mapping.row(vec![s(d), s("ProgressBar"), s("SetProgress"), s("Progress")]);
 
     // The ends: done, cancelled, failed.
-    let finish = |ui: &mut Ui, d: &str, title: &str, end: &str| {
+    let finish = |ui: &mut Ui, d: &str, title: &str| {
         ui.dialog(d, WIDTH, HEIGHT, MODAL, "Finish", s("Finish"), s("Finish"));
         ui.page(d, title, "");
         ui.button(d, "Back", BACK, VISIBLE, "&Back", "Finish");
         ui.button(d, "Finish", NEXT, BUTTON, "&Finish", "Cancel");
         ui.button(d, "Cancel", CANCEL, VISIBLE, "Cancel", "Back");
-        ui.events(d, "Finish", &[("EndDialog", end)]);
     };
     let body = (20, 60, 330, 60);
     let d = "ExitDlg";
-    finish(&mut ui, d, "Done", "Return");
+    finish(&mut ui, d, "Done");
+    // Asked to join warlock-users, and not in it before: is it in now? Then
+    // the sign-out modal, then the end.
+    let (member, joined) = (crate::MEMBER_PROPERTY, crate::JOINED_PROPERTY);
+    for (i, (event, argument, condition)) in [
+        ("DoAction", "WarlockFindJoined", format!("{} AND NOT {member}", crate::JOIN_USERS_PROPERTY)),
+        ("SpawnDialog", "SignOutDlg", joined.to_string()),
+        ("EndDialog", "Return", "1".to_string()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ui.event.row(vec![s(d), s("Finish"), s(event), s(argument), s(&condition), n(i as i32 + 1)]);
+    }
     ui.shown_if(
         d,
         "Installed",
@@ -401,10 +447,12 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.shown_if(d, "Repaired", body, "Warlock is repaired.", REPAIRING);
     ui.shown_if(d, "Removed", body, "Warlock is removed, and the adapter it had is back with Windows.", REMOVING);
     let d = "UserExitDlg";
-    finish(&mut ui, d, "Cancelled", "Exit");
+    finish(&mut ui, d, "Cancelled");
+    ui.events(d, "Finish", &[("EndDialog", "Exit")]);
     ui.text(d, "Body", body, "Warlock's setup was cancelled. Nothing was changed.");
     let d = "FatalErrorDlg";
-    finish(&mut ui, d, "Setup failed", "Exit");
+    finish(&mut ui, d, "Setup failed");
+    ui.events(d, "Finish", &[("EndDialog", "Exit")]);
     ui.text(
         d,
         "Body",
@@ -420,6 +468,24 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.button(d, "No", (132, 57, 56, 17), BUTTON, "&No", "Yes");
     ui.events(d, "Yes", &[("EndDialog", "Exit")]);
     ui.events(d, "No", &[("EndDialog", "Return")]);
+
+    // Sign out now? Over the Done page, when the install added this account
+    // to warlock-users. Later is the default: signing out closes every
+    // program.
+    let d = "SignOutDlg";
+    ui.dialog(d, 280, 110, MODAL, "Later", s("Later"), s("Later"));
+    ui.text(
+        d,
+        "Text",
+        (20, 12, 240, 42),
+        "Warlock added you to warlock-users. Windows applies that the next time you sign in; until then, Warlock \
+         still needs administrator rights.",
+    );
+    ui.text(d, "Ask", (20, 58, 240, 14), "Sign out now? Save your work in other programs first.");
+    ui.button(d, "SignOut", (114, 82, 84, 17), BUTTON, "Sign &out now", "Later");
+    ui.button(d, "Later", (204, 82, 56, 17), BUTTON, "&Later", "SignOut");
+    ui.events(d, "SignOut", &[("DoAction", "WarlockSignOut"), ("EndDialog", "Return")]);
+    ui.events(d, "Later", &[("EndDialog", "Return")]);
 
     // Windows Installer's own messages: it shows the buttons each needs.
     let d = "ErrorDlg";
@@ -492,6 +558,134 @@ mod tests {
 
     fn cell(row: &[Cell], i: usize) -> Option<&str> {
         row[i].as_deref()
+    }
+
+    /// The features are decided before the install page, so its Install
+    /// button carries the plugin checkbox's choice, both ways, before it
+    /// ends the dialog.
+    #[test]
+    fn install_carries_the_plugin_checkbox() {
+        let tables = tables("{\\rtf1 x}");
+        let install: Vec<(&str, &str, &str, i32)> = rows(&tables, "ControlEvent")
+            .iter()
+            .filter(|r| cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some("Install"))
+            .map(|r| {
+                (cell(r, 2).unwrap(), cell(r, 3).unwrap(), cell(r, 4).unwrap(), cell(r, 5).unwrap().parse().unwrap())
+            })
+            .collect();
+        let at = |event: &str| install.iter().find(|e| e.0 == event).unwrap();
+        assert_eq!(at("AddLocal").1, "WiresharkPlugin");
+        assert_eq!(at("Remove").1, "WiresharkPlugin");
+        assert_eq!(at("Remove").2, format!("NOT ({})", at("AddLocal").2));
+        assert!(at("AddLocal").2.contains(crate::WIRESHARK_PLUGIN_PROPERTY));
+        assert!(at("AddLocal").3 < at("EndDialog").3 && at("Remove").3 < at("EndDialog").3);
+    }
+
+    /// Exactly one of the plugin's three notes holds in each case, as the
+    /// checkbox changes: Show and Hide conditions are each other's opposite.
+    #[test]
+    fn the_plugin_has_one_note_at_a_time() {
+        let tables = tables("{\\rtf1 x}");
+        let conditions = rows(&tables, "ControlCondition");
+        let show = |control: &str| {
+            conditions
+                .iter()
+                .find(|r| {
+                    cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Show")
+                })
+                .and_then(|r| cell(r, 3))
+                .unwrap()
+                .to_string()
+        };
+        let hide = |control: &str| {
+            conditions
+                .iter()
+                .find(|r| {
+                    cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Hide")
+                })
+                .and_then(|r| cell(r, 3))
+                .unwrap()
+                .to_string()
+        };
+        // (Wireshark found, plugin installed before, ticked) -> the note shown.
+        let cases = [
+            ((true, true, false), "WiresharkRemoved"),
+            ((true, true, true), "WiresharkNote"),
+            ((true, false, false), "WiresharkNote"),
+            ((true, false, true), "WiresharkNote"),
+            ((false, true, false), "WiresharkMissing"),
+            ((false, false, true), "WiresharkMissing"),
+        ];
+        for ((dir, found, ticked), expected) in cases {
+            for control in ["WiresharkNote", "WiresharkRemoved", "WiresharkMissing"] {
+                let eval = |c: &str| {
+                    let c = c
+                        .replace(crate::WIRESHARK_PLUGIN_FOUND_PROPERTY, if found { "true" } else { "false" })
+                        .replace(crate::WIRESHARK_PLUGIN_PROPERTY, if ticked { "true" } else { "false" })
+                        .replace("WIRESHARKDIR", if dir { "true" } else { "false" });
+                    evaluate(&c)
+                };
+                assert_eq!(eval(&show(control)), control == expected, "{control} in {dir}/{found}/{ticked}");
+                assert_eq!(eval(&hide(control)), control != expected, "{control} hidden in {dir}/{found}/{ticked}");
+            }
+        }
+    }
+
+    /// Enough of Windows Installer's condition syntax for the tests: `true`,
+    /// `false`, `NOT`, `AND` and parentheses, `NOT` binding tightest.
+    fn evaluate(condition: &str) -> bool {
+        let spaced = condition.replace('(', " ( ").replace(')', " ) ");
+        let tokens: Vec<&str> = spaced.split_whitespace().collect();
+        fn and(t: &[&str], i: &mut usize) -> bool {
+            let mut v = not(t, i);
+            while t.get(*i) == Some(&"AND") {
+                *i += 1;
+                v &= not(t, i);
+            }
+            v
+        }
+        fn not(t: &[&str], i: &mut usize) -> bool {
+            match t[*i] {
+                "NOT" => {
+                    *i += 1;
+                    !not(t, i)
+                }
+                "(" => {
+                    *i += 1;
+                    let v = and(t, i);
+                    assert_eq!(t[*i], ")");
+                    *i += 1;
+                    v
+                }
+                v => {
+                    *i += 1;
+                    v == "true"
+                }
+            }
+        }
+        let mut i = 0;
+        let v = and(&tokens, &mut i);
+        assert_eq!(i, tokens.len(), "{condition}");
+        v
+    }
+
+    /// Done's Finish asks the group, then asks to sign out only an account
+    /// it added, then ends.
+    #[test]
+    fn finish_asks_a_new_member_to_sign_out() {
+        let tables = tables("{\\rtf1 x}");
+        let mut finish: Vec<(i32, &str, &str, &str)> = rows(&tables, "ControlEvent")
+            .iter()
+            .filter(|r| cell(r, 0) == Some("ExitDlg") && cell(r, 1) == Some("Finish"))
+            .map(|r| {
+                (cell(r, 5).unwrap().parse().unwrap(), cell(r, 2).unwrap(), cell(r, 3).unwrap(), cell(r, 4).unwrap())
+            })
+            .collect();
+        finish.sort();
+        let steps: Vec<(&str, &str)> = finish.iter().map(|f| (f.1, f.2)).collect();
+        assert_eq!(steps, [("DoAction", "WarlockFindJoined"), ("SpawnDialog", "SignOutDlg"), ("EndDialog", "Return")]);
+        assert_eq!(finish[1].3, crate::JOINED_PROPERTY);
+        assert!(rows(&tables, "Dialog").iter().any(|d| cell(d, 0) == Some("SignOutDlg")));
     }
 
     /// Windows Installer refuses a dialog whose tab order isn't one cycle

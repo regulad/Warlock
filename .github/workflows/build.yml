@@ -41,9 +41,10 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
           cargo --version
-      # warlockctl's package builds warlock-extcap too.
+      # warlockctl's package builds warlock-extcap too; warlock-msi-ca is the
+      # MSI's custom action DLL.
       - name: Build
-        run: cargo build --release --locked -p warlock -p warlockctl
+        run: cargo build --release --locked -p warlock -p warlockctl -p warlock-msi-ca
       - uses: actions/upload-artifact@v7
         with:
           name: unsigned-binaries
@@ -51,6 +52,7 @@ jobs:
             target/release/warlock.exe
             target/release/warlockctl.exe
             target/release/warlock-extcap.exe
+            target/release/warlock_msi_ca.dll
           if-no-files-found: error
           retention-days: 1
 
@@ -78,7 +80,7 @@ jobs:
           signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
           files-folder: binaries
-          files-folder-filter: exe
+          files-folder-filter: exe,dll
       # `testing` signs with a test certificate, whose root Windows doesn't
       # trust: there a signature may fail on that and nothing else. A
       # release must be valid. (Tampering would show as HashMismatch.)
@@ -88,7 +90,9 @@ jobs:
           RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
         run: |
           $bad = 0
-          foreach ($f in Get-ChildItem binaries -Filter *.exe) {
+          $files = @(Get-ChildItem binaries -Include *.exe, *.dll -Recurse)
+          if ($files.Count -lt 4) { "expected three programs and the DLL, found $($files.Count) files"; exit 1 }
+          foreach ($f in $files) {
             $s = Get-AuthenticodeSignature $f.FullName
             $untrustedRoot = $s.Status -eq 'UnknownError' -and $s.StatusMessage -match 'root certificate which is not trusted'
             $ok = $s.Status -eq 'Valid' -or ($env:RELEASE -ne 'true' -and $untrustedRoot)
@@ -99,7 +103,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: signed-binaries
-          path: binaries/*.exe
+          path: |
+            binaries/*.exe
+            binaries/*.dll
           if-no-files-found: error
           retention-days: 1
 

@@ -9,7 +9,8 @@
 //! cargo run -p warlock-msi -- winget MSI --installer-url URL [--out DIR]
 //! ```
 //!
-//! Builds `warlock` and `warlockctl` in release (unless `--no-build`) and
+//! Builds `warlock`, `warlockctl` and the custom action DLL
+//! (`warlock-msi-ca`) in release (unless `--no-build`) and
 //! writes `target/msi/Warlock-<version>-x64.msi`. It installs only where
 //! the Visual C++ runtime the binaries link to is there, at least as new as
 //! the toolset that linked them (read from their headers): a fresh Windows
@@ -25,7 +26,9 @@
 //!   upgrade, `warlock teardown` (the adapter back to Windows' own driver,
 //!   the group removed);
 //! - optionally, the account installing in `warlock-users`, when the install
-//!   page's other checkbox (off by default) or `JOINWARLOCKUSERS=1` asks;
+//!   page's other checkbox (off by default) or `JOINWARLOCKUSERS=1` asks. The
+//!   checkbox shows ticked and greyed out when that account is already a
+//!   member, which `warlock-msi-ca`'s DLL finds out before the pages;
 //! - optionally, `warlock-extcap.exe` in Wireshark's `extcap` folder, which
 //!   makes Warlock's radio a Wireshark capture interface. It goes in when
 //!   the install page's checkbox (off by default) or `WIRESHARKPLUGIN=1`
@@ -102,6 +105,10 @@ const COMPONENT_WIRESHARK_PLUGIN: &str = "{5BB193A0-3D81-4220-97CA-7FC16F300AC6}
 /// sets `WIRESHARKDIR`. Off by default, so silent installs (winget's) leave
 /// it out unless given `WIRESHARKPLUGIN=1`.
 const WIRESHARK_PLUGIN_PROPERTY: &str = "WIRESHARKPLUGIN";
+/// Set by the same search when the plugin is already installed, and left
+/// alone by the checkbox: unticking it on an upgrade says the previous
+/// version's plugin will be removed (Parker, 2026-11-19).
+const WIRESHARK_PLUGIN_FOUND_PROPERTY: &str = "WIRESHARKPLUGINFOUND";
 
 /// Adds the account that runs the install (`UserSID`) to `warlock-users`,
 /// so it can use Warlock without elevation from its next sign-in: the
@@ -109,6 +116,16 @@ const WIRESHARK_PLUGIN_PROPERTY: &str = "WIRESHARKPLUGIN";
 /// (Parker, 2026-11-19). Nothing takes the account out again but an
 /// uninstall, which removes the group.
 const JOIN_USERS_PROPERTY: &str = "JOINWARLOCKUSERS";
+/// Set by `warlock-msi-ca`'s `FindMembership`, before the pages, when the
+/// account installing is already in `warlock-users`: the checkbox shows
+/// ticked and greyed out (Parker, 2026-11-19).
+const MEMBER_PROPERTY: &str = "WARLOCKUSERSMEMBER";
+/// Set by `FindJoined`, when the Done page's Finish is pressed, when the
+/// install added that account: a modal asks it to sign out, since the group
+/// counts from its next sign-in (Parker, 2026-11-19).
+const JOINED_PROPERTY: &str = "WARLOCKUSERSJOINED";
+/// The Binary table's name for `warlock_msi_ca.dll`.
+const CA_BINARY: &str = "WarlockCa";
 
 /// As the winget package's publisher.
 const MANUFACTURER: &str = "Regulad";
@@ -141,6 +158,9 @@ const FILE_VITAL: i32 = 512;
 const CA_EXE_AS_SYSTEM: i32 = 18 + 1024 + 2048;
 /// `msidbCustomActionTypeContinue`: the exit code doesn't fail the install.
 const CA_CONTINUE: i32 = 64;
+/// Custom action type 1: a function of a DLL in the Binary table, run at
+/// once (in the UI sequence, as the user).
+const CA_DLL: i32 = 1;
 /// `msidbCustomActionTypeRollback`: runs only if the install rolls back.
 const CA_ROLLBACK: i32 = 256;
 /// `SERVICE_WIN32_OWN_PROCESS`.
@@ -481,6 +501,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     let mut comp_locator =
         Table::new("CompLocator", &[("Signature_", "s72"), ("ComponentId", "s38"), ("Type", "I2")], &["Signature_"]);
     app_search.row(vec![s(WIRESHARK_PLUGIN_PROPERTY), s("SigWiresharkPlugin")]);
+    app_search.row(vec![s(WIRESHARK_PLUGIN_FOUND_PROPERTY), s("SigWiresharkPlugin")]);
     comp_locator.row(vec![s("SigWiresharkPlugin"), s(COMPONENT_WIRESHARK_PLUGIN), n(LOCATOR_FILE)]);
     all.push(app_search);
     all.push(signature);
@@ -619,8 +640,16 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
             s("warlock.exe"),
             s("setup --member [UserSID]"),
             None,
-        ]);
+        ])
+        // Before the pages: is the account installing already in the group?
+        .row(vec![s("WarlockFindMembership"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindMembership"), None])
+        // Run by the Done page and its sign-out modal (`ui`).
+        .row(vec![s("WarlockFindJoined"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindJoined"), None])
+        .row(vec![s("WarlockSignOut"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("SignOut"), None]);
     all.push(custom);
+
+    // The custom action DLL's row is added by `build`, as a stream.
+    all.push(Table::new("Binary", &[("Name", "s72"), ("Data", "v0")], &["Name"]));
 
     let mut environment = Table::new(
         "Environment",
@@ -643,6 +672,9 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("FindRelatedProducts", None, 25),
         ("AppSearch", None, 50),
         ("LaunchConditions", None, 100),
+        // After LaunchConditions, which makes sure of the Visual C++
+        // runtime the DLL links to.
+        ("WarlockFindMembership", Some("NOT Installed"), 110),
         ("CostInitialize", None, 800),
         ("FileCost", None, 900),
         ("CostFinalize", None, 1000),
@@ -926,18 +958,26 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
         check(&format!("importing {}", t.name), rc)?;
     }
 
-    // The cabinet goes in as a stream of the package.
-    let mut view: MSIHANDLE = 0;
-    let query = wide("INSERT INTO `_Streams` (`Name`, `Data`) VALUES (?, ?)");
-    // SAFETY: valid handles, strings and paths throughout.
-    unsafe {
-        check("opening _Streams", MsiDatabaseOpenViewW(db.0, query.as_ptr(), &mut view))?;
-        let view = Handle(view);
-        let record = Handle(MsiCreateRecord(2));
-        check("naming the cabinet", MsiRecordSetStringW(record.0, 1, wide(CABINET).as_ptr()))?;
-        check("reading the cabinet", MsiRecordSetStreamW(record.0, 2, wide_path(&cab).as_ptr()))?;
-        check("adding the cabinet", MsiViewExecute(view.0, record.0))?;
-        check("closing _Streams", MsiViewClose(view.0))?;
+    // The cabinet goes in as a stream of the package, and the custom
+    // action DLL as the Binary table's one row.
+    let ca = release.join("warlock_msi_ca.dll");
+    if !ca.is_file() {
+        return Err(format!("{}: not built", ca.display()).into());
+    }
+    for (table, name, path, what) in [("_Streams", CABINET, &cab, "the cabinet"), ("Binary", CA_BINARY, &ca, "the DLL")]
+    {
+        let mut view: MSIHANDLE = 0;
+        let query = wide(&format!("INSERT INTO `{table}` (`Name`, `Data`) VALUES (?, ?)"));
+        // SAFETY: valid handles, strings and paths throughout.
+        unsafe {
+            check(&format!("opening {table}"), MsiDatabaseOpenViewW(db.0, query.as_ptr(), &mut view))?;
+            let view = Handle(view);
+            let record = Handle(MsiCreateRecord(2));
+            check(&format!("naming {what}"), MsiRecordSetStringW(record.0, 1, wide(name).as_ptr()))?;
+            check(&format!("reading {what}"), MsiRecordSetStreamW(record.0, 2, wide_path(path).as_ptr()))?;
+            check(&format!("adding {what}"), MsiViewExecute(view.0, record.0))?;
+            check(&format!("closing {table}"), MsiViewClose(view.0))?;
+        }
     }
 
     // Summary information: what kind of package this is.
@@ -1139,7 +1179,7 @@ fn main() -> Result<()> {
     if !no_build {
         let status = Command::new("cargo")
             // warlockctl's package also builds warlock-extcap.
-            .args(["build", "--release", "-p", "warlock", "-p", "warlockctl"])
+            .args(["build", "--release", "-p", "warlock", "-p", "warlockctl", "-p", "warlock-msi-ca"])
             .current_dir(&root)
             .status()?;
         if !status.success() {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlock-client", "crates/warlock-msi", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
+members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlock-client", "crates/warlock-msi", "crates/warlock-msi-ca", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb"]
 
 [workspace.package]
 # Warlock's one version, which every crate, the API contract and the MSI
