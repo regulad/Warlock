@@ -5,7 +5,8 @@
 //! - Licences: the licence page ([`crate::licence`]). It asks nothing: the
 //!   GPL and the AGPL don't need accepting to install or run a program.
 //! - Install folder: where Warlock goes, with a folder browser, what its
-//!   service will do, and the optional Wireshark plugin.
+//!   service will do, and two options: adding the account installing to
+//!   `warlock-users`, and the Wireshark plugin.
 //! - Progress, then Done, Cancelled or Failed; a confirmation before
 //!   cancelling; the error dialog Windows Installer reports through.
 //! - Repair or remove, when the package is opened again on a PC that has it.
@@ -236,40 +237,59 @@ pub fn tables(licence: &str) -> Vec<Table> {
     let d = "InstallDirDlg";
     ui.dialog(d, WIDTH, HEIGHT, MODAL, "FolderLabel", s("Install"), s("Cancel"));
     ui.page(d, "Install folder", "Where Warlock's programs go.");
-    ui.control(d, "FolderLabel", "Text", (20, 60, 330, 12), LABEL, None, Some("&Install Warlock to:"), Some("Folder"));
+    // A line of text is about 12.3 units high and 4.1 units a character
+    // (measured on this page, 2026-11-19): a checkbox's label fits one line,
+    // and what more it needs to say goes on a line under it.
+    ui.control(d, "FolderLabel", "Text", (20, 56, 330, 12), LABEL, None, Some("&Install Warlock to:"), Some("Folder"));
     ui.control(
         d,
         "Folder",
         "PathEdit",
-        (20, 74, 330, 18),
+        (20, 69, 330, 18),
         VISIBLE | ENABLED | SUNKEN,
         Some("INSTALLDIR"),
         None,
         Some("ChangeFolder"),
     );
-    ui.button(d, "ChangeFolder", (20, 97, 66, 17), BUTTON, "&Change...", "WiresharkPlugin");
+    ui.button(d, "ChangeFolder", (20, 91, 66, 17), BUTTON, "&Change...", "JoinUsers");
     ui.text(
         d,
         "ServiceNote",
-        (20, 130, 330, 50),
+        (20, 116, 330, 40),
         "Warlock installs the Warlock service, which starts with Windows. While Warlock is installed, it takes every \
          supported USB Wi-Fi adapter it finds away from Windows' Wi-Fi driver; uninstalling gives them back.",
     );
+    // The account installing joins warlock-users, unticked by default; it
+    // counts from that account's next sign-in.
+    ui.control(
+        d,
+        "JoinUsers",
+        "CheckBox",
+        (20, 164, 330, 14),
+        BUTTON,
+        Some(crate::JOIN_USERS_PROPERTY),
+        Some("Add &me ([LogonUser]) to warlock-users"),
+        Some("WiresharkPlugin"),
+    );
+    ui.text(d, "JoinUsersNote", (34, 178, 316, 12), "To use Warlock without elevation, from your next sign-in.");
     // The optional Wireshark plugin (PLAN.md, W6): unticked unless already
-    // installed, and greyed out, saying why, when Wireshark wasn't found.
+    // installed, and greyed out, saying why in place of what it is, when
+    // Wireshark wasn't found.
     ui.control(
         d,
         "WiresharkPlugin",
         "CheckBox",
-        (20, 184, 330, 18),
+        (20, 198, 330, 14),
         BUTTON,
         Some(crate::WIRESHARK_PLUGIN_PROPERTY),
-        Some("Also install the &Wireshark plugin: Warlock's radio as a capture interface in Wireshark"),
+        Some("Also install the &Wireshark plugin"),
         Some("Back"),
     );
     ui.condition.row(vec![s(d), s("WiresharkPlugin"), s("Disable"), s("NOT WIRESHARKDIR")]);
     ui.condition.row(vec![s(d), s("WiresharkPlugin"), s("Enable"), s("WIRESHARKDIR")]);
-    ui.shown_if(d, "WiresharkMissing", (34, 204, 316, 12), "Wireshark was not detected.", "NOT WIRESHARKDIR");
+    let note = (34, 212, 316, 12);
+    ui.shown_if(d, "WiresharkNote", note, "Warlock's radio as a capture interface in Wireshark.", "WIRESHARKDIR");
+    ui.shown_if(d, "WiresharkMissing", note, "Wireshark was not detected.", "NOT WIRESHARKDIR");
     ui.button(d, "Back", BACK, BUTTON, "&Back", "Install");
     ui.button(d, "Install", NEXT, BUTTON | ELEVATION_SHIELD, "&Install", "Cancel");
     ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "FolderLabel");
@@ -427,7 +447,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
 
     // What a ticked checkbox sets its property to.
     let mut check_box = Table::new("CheckBox", &[("Property", "s72"), ("Value", "S64")], &["Property"]);
-    check_box.row(vec![s(crate::WIRESHARK_PLUGIN_PROPERTY), s("1")]);
+    check_box.row(vec![s(crate::WIRESHARK_PLUGIN_PROPERTY), s("1")]).row(vec![s(crate::JOIN_USERS_PROPERTY), s("1")]);
 
     // The name a new folder gets in the browser.
     let mut ui_text = Table::new("UIText", &[("Key", "s72"), ("Text", "L255")], &["Key"]);
@@ -439,6 +459,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
     action_text
         .row(vec![s("WarlockSetup"), s("Setting up Warlock's events, group and service"), None])
         .row(vec![s("WarlockSetupRollback"), s("Undoing Warlock's setup"), None])
+        .row(vec![s("WarlockJoinUsers"), s("Adding you to the warlock-users group"), None])
         .row(vec![s("WarlockTeardown"), s("Giving the adapter back to Windows"), None]);
 
     vec![ui.dialog, ui.control, ui.event, ui.condition, ui.mapping, style, check_box, ui_text, action_text]

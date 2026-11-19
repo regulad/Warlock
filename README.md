@@ -52,7 +52,9 @@ The installer adds:
 - `warlock.exe` and `warlockctl.exe` in `C:\Program Files\Warlock`, which joins
   the system `PATH`;
 - the **`warlock-users`** group, whose members may use Warlock's control API
-  (Administrators always may).
+  (Administrators always may). Tick "Add me to warlock-users" while
+  installing to join it (a silent install: `JOINWARLOCKUSERS=1`); it counts
+  from your next sign-in.
 
 ## Use
 
@@ -94,8 +96,10 @@ writes the same pcapng, to open in Wireshark or pipe in live:
 `warlockctl capture -w - | wireshark -k -i -`. The radio hears every device
 nearby, so a capture holds other devices' addresses and host names too.
 
-Add yourself to `warlock-users` to use it without elevation
-(`net localgroup warlock-users <you> /add`, then sign in again).
+To use `warlockctl` and the plugin without elevation, be in `warlock-users`:
+tick the installer's "Add me" box, or run
+`net localgroup warlock-users <you> /add` as Administrator, then sign in
+again.
 
 Programs control Warlock the same way, through a local HTTP API on the named
 pipe `\\.\pipe\warlock`. Its contract is [`api/openapi.yaml`](api/openapi.yaml);

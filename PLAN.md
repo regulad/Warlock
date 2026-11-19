@@ -352,6 +352,11 @@ Pinned decisions:
          - An administrative install unpacks `extcap\warlock-extcap.exe` with the other two binaries.
        - The release builds, uploads and signs it with the others, and checks the package and three binaries.
        - Not yet seen: the page itself with the checkbox, and an upgrade that keeps the plugin.
+     - **Joining `warlock-users` from the installer (Parker, 2026-11-19):** the plugin is only usable without elevation by a member, so the same page has a second checkbox, "Add me to warlock-users", also off by default. A silent install takes `JOINWARLOCKUSERS=1`.
+       - It adds the account running the install: `warlock setup --member [UserSID]`, as SYSTEM, after `warlock setup` has made the group. The target is formatted as the action is scheduled, so the SID is the installer's.
+       - "Already a member" counts as success. A failure is only logged (`msidbCustomActionTypeContinue`), since the account can still join by hand.
+       - It counts from that account's next sign-in, as the page says.
+       - Nothing undoes it except an uninstall, which removes the group. Unticking the box on an upgrade leaves the membership as it is.
   3. **Release 0.1.2** once 1 and 2 are done: a new endpoint is a feature, so the `z` goes up.
   4. **Reverse-engineer LLW,** from a capture made with 1 and 2 during a Continuity Capture session, and from prior art:
      - [Henri Jäger, "Cracking open what makes Apple's Low-Latency WiFi so fast", 39C3](https://events.ccc.de/congress/2025/hub/en/event/detail/cracking-open-what-makes-apple-s-low-latency-wifi-so-fast) (recorded, with an [HPI write-up](https://hpi.de/en/article/reverse-engineering-of-apples-low-latency-wi-fi/));

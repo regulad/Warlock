@@ -5,7 +5,7 @@
 //! SYSTEM.
 
 use std::error::Error;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
 use std::time::Duration;
 
 use tracing::info;
@@ -14,7 +14,12 @@ use windows_service::service::{
     ServiceAccess, ServiceAction, ServiceActionType, ServiceFailureActions, ServiceFailureResetPeriod,
 };
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
-use windows_sys::Win32::NetworkManagement::NetManagement::{LOCALGROUP_INFO_1, NetLocalGroupAdd, NetLocalGroupDel};
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::NetworkManagement::NetManagement::{
+    LOCALGROUP_INFO_1, LOCALGROUP_MEMBERS_INFO_0, NetLocalGroupAdd, NetLocalGroupAddMembers, NetLocalGroupDel,
+};
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows_sys::Win32::Security::PSID;
 
 use crate::{events, service};
 
@@ -22,6 +27,8 @@ use crate::{events, service};
 const GROUP_EXISTS: [u32; 2] = [1379, 2223];
 /// `ERROR_NO_SUCH_ALIAS` and `NERR_GroupNotFound`.
 const NO_GROUP: [u32; 2] = [1376, 2220];
+/// `ERROR_MEMBER_IN_ALIAS`.
+const ALREADY_MEMBER: u32 = 1378;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
@@ -32,6 +39,9 @@ fn wide(s: &str) -> Vec<u16> {
 /// allowed to use the control API ([`USERS_GROUP`]), if it isn't there, and
 /// sets the service's failure actions. With `--undo` (the MSI's rollback of a
 /// fresh install), removes the group and the events' registration instead.
+/// With `--member SID`, after that, adds the account with that SID to the
+/// group: the installer's "add me" checkbox, with the SID of the account
+/// that ran it.
 pub fn setup(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args {
         [] => {
@@ -45,8 +55,31 @@ pub fn setup(args: &[String]) -> Result<(), Box<dyn Error>> {
             let _ = events::uninstall();
             group
         }
-        _ => Err("usage: warlock setup [--undo]".into()),
+        [member, sid] if member == "--member" => add_member(sid),
+        _ => Err("usage: warlock setup [--undo | --member SID]".into()),
     }
+}
+
+/// Adds the account `sid` (`S-1-5-21-…`) to [`USERS_GROUP`]; already being
+/// in it is fine. It counts from that account's next sign-in, when Windows
+/// builds its token afresh.
+fn add_member(sid: &str) -> Result<(), Box<dyn Error>> {
+    let mut psid: PSID = null_mut();
+    // SAFETY: a NUL-terminated string, and an out pointer.
+    if unsafe { ConvertStringSidToSidW(wide(sid).as_ptr(), &mut psid) } == 0 {
+        return Err(format!("adding {sid:?} to the {USERS_GROUP} group: that isn't a SID").into());
+    }
+    let member = LOCALGROUP_MEMBERS_INFO_0 { lgrmi0_sid: psid };
+    // SAFETY: a valid level-0 entry whose SID outlives the call.
+    let rc = unsafe { NetLocalGroupAddMembers(null(), wide(USERS_GROUP).as_ptr(), 0, (&raw const member).cast(), 1) };
+    // SAFETY: allocated by ConvertStringSidToSidW.
+    unsafe { LocalFree(psid) };
+    match rc {
+        0 => info!(group = USERS_GROUP, sid, "member added"),
+        ALREADY_MEMBER => info!(group = USERS_GROUP, sid, "already a member"),
+        rc => return Err(format!("adding {sid} to the {USERS_GROUP} group: error {rc}").into()),
+    }
+    Ok(())
 }
 
 /// Restart after 5 s, 10 s, then 60 s; failures forgiven after a day. The

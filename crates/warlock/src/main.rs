@@ -9,6 +9,7 @@
 //! warlock setup [--undo]       what the MSI runs before starting the service: registers Warlock's events,
 //!                              creates the warlock-users group, sets the service's failure actions
 //!                              (--undo: removes the group and the events' registration)
+//! warlock setup --member SID   what the MSI runs after that when asked: adds that account to warlock-users
 //! warlock teardown             what the MSI runs on uninstall: gives the adapter back to Windows, removes the
 //!                              group, unregisters the events
 //!

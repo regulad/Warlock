@@ -24,6 +24,8 @@
 //!   if a fresh install rolls back), and on an uninstall that isn't an
 //!   upgrade, `warlock teardown` (the adapter back to Windows' own driver,
 //!   the group removed);
+//! - optionally, the account installing in `warlock-users`, when the install
+//!   page's other checkbox (off by default) or `JOINWARLOCKUSERS=1` asks;
 //! - optionally, `warlock-extcap.exe` in Wireshark's `extcap` folder, which
 //!   makes Warlock's radio a Wireshark capture interface. It goes in when
 //!   the install page's checkbox (off by default) or `WIRESHARKPLUGIN=1`
@@ -100,6 +102,13 @@ const COMPONENT_WIRESHARK_PLUGIN: &str = "{5BB193A0-3D81-4220-97CA-7FC16F300AC6}
 /// sets `WIRESHARKDIR`. Off by default, so silent installs (winget's) leave
 /// it out unless given `WIRESHARKPLUGIN=1`.
 const WIRESHARK_PLUGIN_PROPERTY: &str = "WIRESHARKPLUGIN";
+
+/// Adds the account that runs the install (`UserSID`) to `warlock-users`,
+/// so it can use Warlock without elevation from its next sign-in: the
+/// installer's other checkbox (off by default), or `JOINWARLOCKUSERS=1`
+/// (Parker, 2026-11-19). Nothing takes the account out again but an
+/// uninstall, which removes the group.
+const JOIN_USERS_PROPERTY: &str = "JOINWARLOCKUSERS";
 
 /// As the winget package's publisher.
 const MANUFACTURER: &str = "Regulad";
@@ -262,7 +271,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("ARPCOMMENTS", "Apple Wireless Direct Link (AWDL) for Windows"),
         // Set in the UI (FindRelatedProducts, AppSearch, the checkbox), used
         // by the elevated part.
-        ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN"),
+        ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN;JOINWARLOCKUSERS"),
     ]
     .into_iter()
     .chain(ui::PROPERTIES)
@@ -600,7 +609,17 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
             s("setup --undo"),
             None,
         ])
-        .row(vec![s("WarlockTeardown"), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s("teardown"), None]);
+        .row(vec![s("WarlockTeardown"), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s("teardown"), None])
+        // The target is formatted as the action is scheduled, so it carries
+        // the SID of the account installing. A failure only goes in the log:
+        // that account can still join the group by hand.
+        .row(vec![
+            s("WarlockJoinUsers"),
+            n(CA_EXE_AS_SYSTEM | CA_CONTINUE),
+            s("warlock.exe"),
+            s("setup --member [UserSID]"),
+            None,
+        ]);
     all.push(custom);
 
     let mut environment = Table::new(
@@ -618,6 +637,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     // there before, with its members.
     let fresh_install = Some("NOT REMOVE~=\"ALL\" AND NOT OLDERFOUND");
     let real_uninstall = Some("REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE");
+    let join_users = format!("{JOIN_USERS_PROPERTY} AND UserSID AND NOT REMOVE~=\"ALL\"");
     // With the dialogs (`ui`) between costing and executing.
     let ui_sequence: Vec<(&str, Option<&str>, i32)> = [
         ("FindRelatedProducts", None, 25),
@@ -665,6 +685,8 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
             // starts; a rollback action goes before the action it undoes.
             ("WarlockSetupRollback", fresh_install, 5870),
             ("WarlockSetup", install, 5875),
+            // Once the group exists.
+            ("WarlockJoinUsers", Some(join_users.as_str()), 5880),
             ("StartServices", Some("VersionNT"), 5900),
             ("RegisterUser", None, 6000),
             ("RegisterProduct", None, 6100),
