@@ -321,9 +321,15 @@ Pinned decisions:
      - Filters: `peer=MAC` (repeatable), `kind=awdl|other|all`, `tx=true`.
      - It is a tap in the radio loop, costing one atomic check when no one captures. Each capture gets a bounded queue, so a slow client loses frames and never stalls the radio; drops are counted and logged.
      - Each capture is logged with its process, as locks are.
-     - *Open:* Administrators only, or `warlock-users` too; whether a `peer` filter is required.
+     - **Who may capture (Parker, 2026-11-19):** anyone who may use the API, `warlock-users` included. A `peer` filter is optional.
+     - **Implemented 2026-11-19:**
+       - `warlock-api`'s `capture` module. A frame matches a filter by its first three addresses (receiver, transmitter, BSSID or third address); `kind` comes from the daemon via `awdl_proto::parse`.
+       - Each capture queues 4,096 frames. Frames dropped for a slow client are counted in the next frame's `epb_dropcount`, and the direction goes in `epb_flags` (`warlock-capture`'s `Writer::write_with`).
+       - The daemon offers each received frame before the engine sees it, and each frame it sends once the radio accepted it.
+       - `warlock-client`'s `capture`, and `warlockctl capture`.
+       - Tested against the real server and client (`tests/contract.rs`) and by unit tests; not yet live on the radio.
   2. **A Wireshark extcap plugin.** It shows a "Warlock radio (802.11)" interface beside the Warlock AWDL adapter, with the filters in its options dialog, reading the capture endpoint. Wireshark looks for it in its own `extcap` folder or the per-user `%APPDATA%\Wireshark\extcap`.
-     - *Open:* how it gets there, by the MSI or a `warlockctl` command.
+     - **Installed by the MSI (Parker, 2026-11-19),** as a checkbox that is off by default, so installing it is a choice. It is greyed out, with a note that Wireshark was not detected, when there's no Wireshark.
   3. **Release 0.1.2** once 1 and 2 are done: a new endpoint is a feature, so the `z` goes up.
   4. **Reverse-engineer LLW,** from a capture made with 1 and 2 during a Continuity Capture session, and from prior art:
      - [Henri Jäger, "Cracking open what makes Apple's Low-Latency WiFi so fast", 39C3](https://events.ccc.de/congress/2025/hub/en/event/detail/cracking-open-what-makes-apple-s-low-latency-wifi-so-fast) (recorded, with an [HPI write-up](https://hpi.de/en/article/reverse-engineering-of-apples-low-latency-wi-fi/));

@@ -20,7 +20,7 @@ use awdl_proto::MacAddr;
 use awdl_proto::tlv::Rdata;
 use tracing::{info, warn};
 use warlock_api::types::{self as wire, RadioState};
-use warlock_api::{Security, Server};
+use warlock_api::{Frame as CapturedFrame, FrameKind, Security, Server};
 use warlock_radio::{DevourerConfig, DevourerRadio, Radio};
 use warlock_tun::{Tun, addr, dll};
 
@@ -75,6 +75,15 @@ fn is_mdns(packet: &[u8]) -> bool {
         && packet[0] >> 4 == 6
         && packet[6] == 17
         && (packet[40..42] == 5353u16.to_be_bytes() || packet[42..44] == 5353u16.to_be_bytes())
+}
+
+/// What a frame is to captures: AWDL if Warlock reads it, otherwise other
+/// (malformed AWDL included).
+fn frame_kind(mpdu: &[u8]) -> FrameKind {
+    match awdl_proto::parse(mpdu) {
+        Ok(Some(_)) => FrameKind::Awdl,
+        _ => FrameKind::Other,
+    }
 }
 
 /// One line about an IPv6 packet: addresses, protocol, UDP ports, length.
@@ -538,6 +547,16 @@ impl Run<'_> {
                     if !std::mem::replace(&mut heard, true) {
                         info!(after = ?opened.elapsed(), channel = f.channel, master = ?engine.master(), "first frame heard");
                     }
+                    if self.control.capturing() {
+                        self.control.capture(&CapturedFrame {
+                            sent: false,
+                            kind: frame_kind(&f.mpdu),
+                            tsf: f.tsf,
+                            channel: f.channel,
+                            rssi_dbm: f.rssi_dbm,
+                            mpdu: &f.mpdu,
+                        });
+                    }
                     let meta = RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm };
                     (engine.on_frame(meta, &f.mpdu), Some(f.tsf))
                 }
@@ -614,6 +633,18 @@ impl Run<'_> {
                             failures.ok();
                             if matches!(a, Action::Transmit { kind: TxKind::AddbaResponse, .. }) {
                                 info!("answered a Block Ack setup");
+                            }
+                            if let Action::Transmit { mpdu, .. } = &a
+                                && self.control.capturing()
+                            {
+                                self.control.capture(&CapturedFrame {
+                                    sent: true,
+                                    kind: frame_kind(mpdu),
+                                    tsf: now,
+                                    channel: radio.channel(),
+                                    rssi_dbm: 0,
+                                    mpdu,
+                                });
                             }
                         }
                         Err(e) => {

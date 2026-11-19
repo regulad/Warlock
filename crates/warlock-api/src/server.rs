@@ -11,6 +11,9 @@
 //! - [`Wants`], published by the server (`watch`): the service types and
 //!   holds that open locks ask for, which the daemon acts on.
 //!
+//! A fourth, captures (`crate::capture`), carries radio frames to
+//! `GET /v1/capture` streams, queued per capture so the radio never waits.
+//!
 //! A lock (`POST /v1/advertising`, `POST /v1/holds`) is registered for as
 //! long as its response stream exists. Hyper drops the stream when the
 //! connection ends, and the stream's guard then releases the lock. A line
@@ -38,6 +41,7 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tracing::{debug, info, warn};
 
+use crate::capture::{Captures, Filter, Frame as RadioFrame};
 use crate::pipe::{Client, PipeListener, Security};
 use warlock_client::types::*;
 
@@ -70,9 +74,22 @@ pub struct Daemon {
     state: watch::Sender<State>,
     events: broadcast::Sender<Event>,
     wants: watch::Receiver<Wants>,
+    captures: Arc<Captures>,
 }
 
 impl Daemon {
+    /// Whether any capture is open: one atomic load, for the radio loop to
+    /// skip building [`crate::Frame`]s when no one captures.
+    pub fn capturing(&self) -> bool {
+        self.captures.active()
+    }
+
+    /// Offers a frame to the open captures. Never blocks: a capture that
+    /// can't keep up drops frames, and says so in its stream.
+    pub fn capture(&self, frame: &RadioFrame) {
+        self.captures.offer(frame);
+    }
+
     /// Replaces the state the API reports.
     pub fn publish(&self, state: State) {
         self.state.send_if_modified(|s| {
@@ -141,11 +158,13 @@ impl Server {
         let (state_tx, state_rx) = watch::channel(initial);
         let (events, _) = broadcast::channel(1024);
         let (wants_tx, wants_rx) = watch::channel(Wants::default());
+        let captures = Arc::new(Captures::default());
         let app = App {
             state: state_rx,
             events: events.clone(),
             locks: Arc::new(Mutex::new(Locks::default())),
             wants: Arc::new(wants_tx),
+            captures: captures.clone(),
         };
         runtime.spawn(async move {
             loop {
@@ -163,13 +182,13 @@ impl Server {
                 });
             }
         });
-        Ok((Server { runtime: Some(runtime) }, Daemon { state: state_tx, events, wants: wants_rx }))
+        Ok((Server { runtime: Some(runtime) }, Daemon { state: state_tx, events, wants: wants_rx, captures }))
     }
 }
 
 /// Every operation in `api/openapi.yaml`, as (method, path): the contract
 /// test checks this against the document.
-pub const OPERATIONS: [(&str, &str); 8] = [
+pub const OPERATIONS: [(&str, &str); 9] = [
     ("get", "/v1/info"),
     ("get", "/v1/peers"),
     ("get", "/v1/peers/{address}"),
@@ -178,7 +197,11 @@ pub const OPERATIONS: [(&str, &str); 8] = [
     ("get", "/v1/holds"),
     ("post", "/v1/holds"),
     ("get", "/v1/events"),
+    ("get", "/v1/capture"),
 ];
+
+/// A capture's media type: pcapng, as Wireshark names it.
+pub const PCAPNG: &str = "application/x-pcapng";
 
 #[derive(Clone)]
 struct App {
@@ -186,6 +209,7 @@ struct App {
     events: broadcast::Sender<Event>,
     locks: Arc<Mutex<Locks>>,
     wants: Arc<watch::Sender<Wants>>,
+    captures: Arc<Captures>,
 }
 
 /// One open lock.
@@ -288,8 +312,8 @@ fn jsonl(lines: impl Stream<Item = Bytes> + Send + 'static) -> Response<Body> {
     respond(StatusCode::OK, "application/jsonl", body.boxed_unsync())
 }
 
-/// `%XX` escapes in a path segment, decoded.
-fn percent_decode(s: &str) -> String {
+/// `%XX` escapes in a path segment or query value, decoded.
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -335,7 +359,8 @@ impl App {
             (Method::GET, "/v1/holds") => self.holds(),
             (Method::POST, "/v1/holds") => self.hold(client, request).await,
             (Method::GET, "/v1/events") => self.events(),
-            (_, "/v1/info" | "/v1/peers" | "/v1/events") => not_allowed("GET"),
+            (Method::GET, "/v1/capture") => self.capture(client, request.uri().query()),
+            (_, "/v1/info" | "/v1/peers" | "/v1/events" | "/v1/capture") => not_allowed("GET"),
             (_, "/v1/advertising" | "/v1/holds") => not_allowed("GET, POST"),
             _ => error(StatusCode::NOT_FOUND, "no such endpoint".into()),
         }
@@ -412,6 +437,16 @@ impl App {
         };
         let guard = self.acquire(Kind::Hold, request.reason, client);
         jsonl(lock_stream(guard, self.state.clone(), |s| HoldState { active: s.info.radio.state == RadioState::Up }))
+    }
+
+    fn capture(&self, client: Client, query: Option<&str>) -> Response<Body> {
+        let filter = match Filter::parse(query) {
+            Ok(f) => f,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        };
+        let chunks = self.captures.open(filter, client.pid.unwrap_or(0), client.image());
+        let body = StreamBody::new(chunks.map(|b| Ok::<_, Infallible>(Frame::data(b))));
+        respond(StatusCode::OK, PCAPNG, body.boxed_unsync())
     }
 
     fn events(&self) -> Response<Body> {

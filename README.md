@@ -80,7 +80,15 @@ warlockctl events                what happens, as it happens
 warlockctl advertise TYPE        advertise a service type (e.g. _x._tcp) until Ctrl+C
 warlockctl hold REASON           keep AWDL up until Ctrl+C
 warlockctl advertising | holds   who is advertising or holding what
+warlockctl capture -w FILE       the radio's 802.11 frames as pcapng until Ctrl+C
 ```
+
+For packets, Wireshark captures on the Warlock AWDL adapter. For the frames
+underneath, including those Warlock doesn't deliver to Windows, use
+`warlockctl capture [--peer MAC]... [--kind awdl|other|all] [--tx]` and open
+the file in Wireshark, or pipe it in live: `warlockctl capture -w - |
+wireshark -k -i -`. The radio hears every device nearby, so a capture holds
+other devices' addresses and host names too.
 
 Add yourself to `warlock-users` to use it without elevation
 (`net localgroup warlock-users <you> /add`, then sign in again).

@@ -186,6 +186,79 @@ impl Client {
     pub async fn events(&self) -> Result<Lines, ClientError> {
         self.raw_stream(Method::GET, "/v1/events", None).await
     }
+
+    /// `GET /v1/capture`: the radio's frames as a pcapng stream, for as long
+    /// as the returned [`Chunks`] is kept.
+    pub async fn capture(&self, filter: &CaptureFilter) -> Result<Chunks, ClientError> {
+        let response = self.send(Method::GET, &format!("/v1/capture{}", filter.query()), None).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let bytes = response.into_body().collect().await?.to_bytes();
+            return Err(api_error(status, &bytes));
+        }
+        Ok(Chunks { body: response.into_body() })
+    }
+}
+
+/// Which frames `GET /v1/capture` streams.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CaptureFilter {
+    /// Only frames to or from these addresses; every frame when empty.
+    pub peers: Vec<String>,
+    /// AWDL frames, other frames, or both (the default, as `None`).
+    pub kind: Option<CaptureKind>,
+    /// Warlock's own transmissions too.
+    pub tx: bool,
+}
+
+/// The `kind` of a capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureKind {
+    /// The frames Warlock reads: AWDL action frames and AWDL data.
+    Awdl,
+    /// Everything else the radio hears.
+    Other,
+    All,
+}
+
+impl CaptureFilter {
+    /// The query string, with its `?`; empty for the default.
+    pub fn query(&self) -> String {
+        let mut parts: Vec<String> = self.peers.iter().map(|p| format!("peer={p}")).collect();
+        if let Some(kind) = self.kind {
+            let kind = match kind {
+                CaptureKind::Awdl => "awdl",
+                CaptureKind::Other => "other",
+                CaptureKind::All => "all",
+            };
+            parts.push(format!("kind={kind}"));
+        }
+        if self.tx {
+            parts.push("tx=true".into());
+        }
+        if parts.is_empty() { String::new() } else { format!("?{}", parts.join("&")) }
+    }
+}
+
+/// A capture's pcapng, a chunk at a time. Dropping it ends the capture.
+pub struct Chunks {
+    body: Incoming,
+}
+
+impl Chunks {
+    /// The next bytes of the stream; `None` when it ends (Warlock stopped).
+    pub async fn next(&mut self) -> Option<Result<Bytes, ClientError>> {
+        loop {
+            match self.body.frame().await? {
+                Ok(frame) => {
+                    if let Ok(data) = frame.into_data() {
+                        return Some(Ok(data));
+                    }
+                }
+                Err(e) => return Some(Err(e.into())),
+            }
+        }
+    }
 }
 
 fn api_error(status: StatusCode, body: &[u8]) -> ClientError {

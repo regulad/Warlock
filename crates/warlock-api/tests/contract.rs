@@ -353,6 +353,61 @@ async fn events_reach_every_stream() {
     }
 }
 
+/// A data frame from `from` to `to`, its body `tag`.
+fn data_frame(to: u8, from: u8, tag: &[u8]) -> Vec<u8> {
+    let addr = |n: u8| [2, 0, 0, 0, 0, n];
+    [&[0x08, 0x00, 0, 0][..], &addr(to), &addr(from), &[0x00, 0x25, 0x00, 0xff, 0x94, 0x73], &[0, 0], tag].concat()
+}
+
+/// Waits until the daemon's end sees a capture open (or none).
+async fn until_capturing(daemon: &Daemon, open: bool) {
+    let start = Instant::now();
+    while daemon.capturing() != open {
+        assert!(start.elapsed() < Duration::from_secs(2), "capturing never became {open}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_capture_streams_the_frames_it_asks_for_while_open() {
+    use warlock_api::{Frame, FrameKind};
+    use warlock_client::{CaptureFilter, CaptureKind};
+    let (_server, daemon, client, _) = serve(RadioState::Up);
+    assert!(!daemon.capturing());
+    let filter = CaptureFilter { peers: vec![mac(1)], kind: Some(CaptureKind::Other), tx: false };
+    let mut chunks = client.capture(&filter).await.unwrap();
+    until_capturing(&daemon, true).await;
+    let header = chunks.next().await.unwrap().unwrap();
+    assert_eq!(&header[..4], &0x0A0D_0D0Au32.to_le_bytes(), "a pcapng section header first");
+    // Only the last is to or from 02:00:00:00:00:01, of kind other, received.
+    let wanted = data_frame(3, 1, b"wanted");
+    let offered = [
+        (data_frame(2, 3, b"another peer"), FrameKind::Other, false),
+        (data_frame(1, 3, b"awdl"), FrameKind::Awdl, false),
+        (data_frame(3, 1, b"sent"), FrameKind::Other, true),
+        (wanted.clone(), FrameKind::Other, false),
+    ];
+    for (mpdu, kind, sent) in &offered {
+        daemon.capture(&Frame { sent: *sent, kind: *kind, tsf: 7, channel: 149, rssi_dbm: -40, mpdu });
+    }
+    let block = tokio::time::timeout(Duration::from_secs(1), chunks.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(&block[..4], &6u32.to_le_bytes(), "an enhanced packet block");
+    assert!(block.windows(wanted.len()).any(|w| w == wanted.as_slice()), "the wanted frame, first");
+    drop(chunks);
+    until_capturing(&daemon, false).await;
+}
+
+#[tokio::test]
+async fn a_capture_with_a_bad_query_gets_400() {
+    let (_server, daemon, client, _) = serve(RadioState::Up);
+    for query in ["?peer=02:00:00", "?kind=most", "?tx=yes", "?channel=6"] {
+        let (status, v) = client.raw(Method::GET, &format!("/v1/capture{query}"), None).await.unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        check("Error", &v);
+    }
+    assert!(!daemon.capturing(), "a rejected capture was opened");
+}
+
 #[tokio::test]
 async fn streams_end_when_warlock_stops() {
     let (server, _daemon, client, _) = serve(RadioState::Up);

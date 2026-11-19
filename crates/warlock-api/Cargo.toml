@@ -9,6 +9,8 @@ authors.workspace = true
 [dependencies]
 # The wire types, shared with clients.
 warlock-client.workspace = true
+# Radiotap pcapng, for captures.
+warlock-capture.workspace = true
 # The HTTP server (all MIT). Not axum: its sync_wrapper dependency is
 # Apache-2.0 only (deny.toml).
 hyper = { version = "1.12.0", features = ["server", "http1"] }

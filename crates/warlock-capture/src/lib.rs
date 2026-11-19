@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use pcap_file::DataLink;
-use pcap_file::pcapng::blocks::enhanced_packet::EnhancedPacketBlock;
+use pcap_file::pcapng::blocks::enhanced_packet::{EnhancedPacketBlock, EnhancedPacketOption};
 use pcap_file::pcapng::blocks::interface_description::InterfaceDescriptionBlock;
 use pcap_file::pcapng::{Block, PcapNgReader, PcapNgWriter};
 
@@ -111,6 +111,24 @@ fn from_radiotap(number: usize, data: &[u8]) -> Option<Captured> {
     })
 }
 
+/// Which way a frame went: pcapng's `epb_flags` direction bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    /// Received.
+    Inbound,
+    /// Sent.
+    Outbound,
+}
+
+/// What a written frame may say besides its radio: its direction, and how
+/// many frames were lost before it (`epb_dropcount`), both shown by
+/// Wireshark.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Extra {
+    pub direction: Option<Direction>,
+    pub dropped_before: u64,
+}
+
 /// Writes a pcapng capture.
 pub struct Writer<W: Write> {
     inner: PcapNgWriter<W>,
@@ -147,6 +165,29 @@ impl<W: Write> Writer<W> {
         rssi_dbm: i8,
         mpdu: &[u8],
     ) -> Result<(), Error> {
+        self.write_with(timestamp, tsf, freq_mhz, rssi_dbm, mpdu, Extra::default())
+    }
+
+    /// Writes one frame, with what [`Extra`] says about it.
+    pub fn write_with(
+        &mut self,
+        timestamp: Duration,
+        tsf: u64,
+        freq_mhz: u16,
+        rssi_dbm: i8,
+        mpdu: &[u8],
+        extra: Extra,
+    ) -> Result<(), Error> {
+        let mut options = Vec::new();
+        if let Some(d) = extra.direction {
+            options.push(EnhancedPacketOption::Flags(match d {
+                Direction::Inbound => 1,
+                Direction::Outbound => 2,
+            }));
+        }
+        if extra.dropped_before > 0 {
+            options.push(EnhancedPacketOption::DropCount(extra.dropped_before));
+        }
         let data: Vec<u8> = if self.radiotap {
             let mut d = radiotap_header(tsf, freq_mhz, rssi_dbm).to_vec();
             d.extend_from_slice(mpdu);
@@ -159,7 +200,7 @@ impl<W: Write> Writer<W> {
             timestamp,
             original_len: data.len() as u32,
             data: Cow::Owned(data),
-            options: vec![],
+            options,
         })?;
         Ok(())
     }

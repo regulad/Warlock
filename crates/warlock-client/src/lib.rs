@@ -13,7 +13,7 @@
 pub mod client;
 pub mod types;
 
-pub use client::{Client, ClientError, Lines};
+pub use client::{CaptureFilter, CaptureKind, Chunks, Client, ClientError, Lines};
 
 /// The API's pipe.
 pub const PIPE: &str = r"\\.\pipe\warlock";
