@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime};
 
 use awdl_core::{Action, Config, Engine, Event, Peer, RxMeta, TxConfig, TxKind};
@@ -26,6 +27,8 @@ use warlock_tun::{Tun, addr, dll};
 use crate::advertise::Advertiser;
 use crate::api;
 use crate::discovery::Discovery;
+use crate::power::Power;
+use crate::service;
 
 const ETHERTYPE_IPV6: u16 = 0x86dd;
 /// The adapter's fixed identity (the last group spells "WARLOC").
@@ -205,6 +208,68 @@ fn radio_info(state: RadioState, own: MacAddr, o: &Options) -> wire::Radio {
 /// How long to wait before trying an adapter again after its radio failed.
 const RETRY: Duration = Duration::from_secs(2);
 
+/// How long closing a radio may take. A clean close takes a fraction of a
+/// second, even after an unplug; devourer stuck on a radio that stopped
+/// answering never finishes (2026-11-19, after a hibernation).
+const CLOSE_LIMIT: Duration = Duration::from_secs(20);
+
+/// A radio that has failed every send and hop for this long, this many times
+/// at least, has stopped answering: its bus died under it, as in a
+/// hibernation. devourer's occasional failed register read (one or two a
+/// minute on a busy channel) never strings this many together; a radio up
+/// sends or hops several times a second.
+const DEAD_AFTER: Duration = Duration::from_secs(3);
+const DEAD_AFTER_FAILURES: u32 = 20;
+
+/// Why a radio's session ended, when it didn't fail.
+enum End {
+    /// Warlock is stopping.
+    Stopping,
+    /// The adapter was unplugged.
+    Unplugged,
+    /// The system is going to sleep: the radio opens again when it wakes.
+    Sleep,
+    /// The system slept with the radio open, without saying it would: the
+    /// chip may have lost power, and with it everything devourer set up.
+    Woke,
+}
+
+/// A radio's run of failed sends and hops, to tell one that stopped answering
+/// from devourer's occasional failed register read.
+#[derive(Default)]
+struct Failures {
+    since: Option<Instant>,
+    count: u32,
+}
+
+impl Failures {
+    fn ok(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Counts a failure; whether the radio has now failed long enough to be
+    /// given up on.
+    fn failed(&mut self, now: Instant) -> bool {
+        let since = *self.since.get_or_insert(now);
+        self.count += 1;
+        self.count >= DEAD_AFTER_FAILURES && now.duration_since(since) >= DEAD_AFTER
+    }
+}
+
+/// Runs `f`, but gives up on the process (`service::give_up`) if it takes
+/// longer than `limit`: for what can hang in devourer.
+fn within<T>(limit: Duration, what: &'static str, f: impl FnOnce() -> T) -> T {
+    let (done, wait) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if let Err(RecvTimeoutError::Timeout) = wait.recv_timeout(limit) {
+            service::give_up(&format!("{what} took over {} s", limit.as_secs()));
+        }
+    });
+    let out = f();
+    let _ = done.send(());
+    out
+}
+
 /// What lasts the whole run, through any number of adapters coming and going.
 struct Run<'a> {
     o: &'a Options,
@@ -220,6 +285,8 @@ struct Run<'a> {
     locked_types: BTreeSet<String>,
     traffic: wire::Traffic,
     mdns_held: u64,
+    /// The system's sleeps and resumes.
+    power: Power,
 }
 
 /// Runs until `stop` is set, or `--seconds` pass. The control API and the
@@ -248,6 +315,10 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
     let tun = Tun::open(&wintun, ADAPTER_NAME, ADAPTER_GUID, own.0, MTU)?;
     info!(adapter = ADAPTER_NAME, index = tun.index, address = %tun.address, mtu = tun.mtu, "adapter ready");
     let watch = warlock_usb::DeviceWatch::start()?;
+    let power = Power::watch().unwrap_or_else(|e| {
+        warn!("can't follow the system's sleeps (error {e}); a radio that dies in one is found by its failures");
+        Power::deaf()
+    });
 
     let mut run = Run {
         o,
@@ -260,6 +331,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         locked_types: BTreeSet::new(),
         traffic: wire::Traffic::default(),
         mdns_held: 0,
+        power,
     };
     run.info.adapter =
         Some(wire::Adapter { name: ADAPTER_NAME.into(), index: run.tun.index, address: run.tun.address, mtu: MTU });
@@ -269,8 +341,11 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         let result = run.session(&watch, model, &instance);
         run.set_radio(RadioState::Absent);
         match result {
-            Ok(()) if run.stopping() => break,
-            Ok(()) => info!("the adapter is gone; waiting for one"),
+            _ if run.stopping() => break,
+            Ok(End::Unplugged) => info!("the adapter is gone; waiting for one"),
+            // Asleep, the wait for the adapter waits for the system to wake
+            // first; woken, the radio opens again at once.
+            Ok(End::Sleep | End::Woke | End::Stopping) => {}
             Err(e) => {
                 warn!("the radio stopped: {e}; trying again");
                 watch.wait(watch.changes(), RETRY);
@@ -324,6 +399,15 @@ impl Run<'_> {
             if self.stopping() {
                 return None;
             }
+            if self.power.asleep() {
+                info!("the system is going to sleep; the radio opens again when it wakes");
+                while !self.power.wait_awake(Duration::from_secs(1)) {
+                    if self.stopping() {
+                        return None;
+                    }
+                }
+                info!("the system woke");
+            }
             self.wanted_types();
             match claim_adapter() {
                 Ok(Some(found)) => return Some(found),
@@ -347,25 +431,40 @@ impl Run<'_> {
     }
 
     /// Opens the radio and runs AWDL until the adapter goes, the radio fails,
-    /// or Warlock stops. The adapter is connected meanwhile; the radio closes
-    /// last, which clears its ACK responder.
+    /// the system sleeps, or Warlock stops. The adapter is connected
+    /// meanwhile; the radio closes last, which clears its ACK responder, and
+    /// within `CLOSE_LIMIT`.
     fn session(
         &mut self,
         watch: &warlock_usb::DeviceWatch,
         model: warlock_usb::Model,
         instance: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<End, Box<dyn Error>> {
         let o = self.o;
         info!(address = %self.own, channel = o.channel, width = o.width, metric = o.metric, "opening the radio (~8 s)");
         let config = DevourerConfig { channel: o.channel, vid: model.vid, pid: model.pid, ..Default::default() };
         let config = if o.width == 40 { config.forty(o.channel) } else { config };
         let mut radio = DevourerRadio::open(&config)?;
+        self.power.set_radio_open(true);
+        let result = self.up(&mut radio, watch, instance);
+        within(CLOSE_LIMIT, "closing the radio", move || drop(radio));
+        self.power.set_radio_open(false);
+        result
+    }
+
+    /// Arms the open radio's ACK responder and runs AWDL on it, the adapter
+    /// connected meanwhile.
+    fn up(
+        &mut self,
+        radio: &mut DevourerRadio,
+        watch: &warlock_usb::DeviceWatch,
+        instance: &str,
+    ) -> Result<End, Box<dyn Error>> {
         radio.set_ack_responder(self.own.0)?;
         self.tun.connect()?;
         self.set_radio(RadioState::Up);
-        let result = self.awdl(&mut radio, watch, instance);
+        let result = self.awdl(radio, watch, instance);
         self.tun.disconnect();
-        drop(radio);
         result
     }
 
@@ -375,7 +474,7 @@ impl Run<'_> {
         radio: &mut DevourerRadio,
         watch: &warlock_usb::DeviceWatch,
         instance: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<End, Box<dyn Error>> {
         let o = self.o;
         let mut tx = TxConfig::new(self.own);
         tx.self_metric = o.metric;
@@ -392,17 +491,31 @@ impl Run<'_> {
         let mut last_publish = Instant::now() - PUBLISH;
         let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
         let mut buf = vec![0u8; 65536];
-        let mut ended = Ok(());
+        let mut ended = Ok(End::Stopping);
         // A radio that stays deaf long after opening is worth knowing about.
         let (opened, mut heard) = (Instant::now(), false);
-        while !self.stopping() {
+        let resumes = self.power.resumes();
+        let mut failures = Failures::default();
+        'session: while !self.stopping() {
             // A USB device came or went: is ours still there?
             if watch.changes() != seen_devices {
                 seen_devices = watch.changes();
                 if !warlock_usb::is_present(instance)? {
                     info!(device = instance, "the adapter was unplugged");
+                    ended = Ok(End::Unplugged);
                     break;
                 }
+            }
+            // Close before the system sleeps, while the bus still answers.
+            if self.power.asleep() {
+                info!("the system is going to sleep: closing the radio");
+                ended = Ok(End::Sleep);
+                break;
+            }
+            if self.power.resumes() != resumes {
+                warn!("the system slept with the radio open: opening it afresh");
+                ended = Ok(End::Woke);
+                break;
             }
             let now = radio.tsf_now();
             let wait = match (now, now.and_then(|n| engine.next_wakeup(n))) {
@@ -492,17 +605,32 @@ impl Run<'_> {
                     engine.send_packet(now, MacAddr(mac), ETHERTYPE_IPV6, packet.to_vec());
                 }
                 for a in engine.poll(now) {
-                    match a {
-                        Action::Hop(c) => {
-                            if let Err(e) = radio.hop(c) {
-                                warn!("hop to {c}: {e}");
+                    let result = match &a {
+                        Action::Hop(c) => radio.hop(*c),
+                        Action::Transmit { mpdu, rate_500kbps, .. } => radio.send(mpdu, *rate_500kbps),
+                    };
+                    match result {
+                        Ok(()) => {
+                            failures.ok();
+                            if matches!(a, Action::Transmit { kind: TxKind::AddbaResponse, .. }) {
+                                info!("answered a Block Ack setup");
                             }
                         }
-                        Action::Transmit { mpdu, rate_500kbps, kind } => {
-                            if let Err(e) = radio.send(&mpdu, rate_500kbps) {
-                                warn!("sending {kind:?}: {e}");
-                            } else if kind == TxKind::AddbaResponse {
-                                info!("answered a Block Ack setup");
+                        Err(e) => {
+                            let what = match a {
+                                Action::Hop(c) => format!("hop to {c}"),
+                                Action::Transmit { kind, .. } => format!("sending {kind:?}"),
+                            };
+                            warn!("{what}: {e}");
+                            if failures.failed(Instant::now()) {
+                                ended = Err(format!(
+                                    "the radio stopped answering: {} sends and hops failed in a row, over {} s; the \
+                                     last, {what}: {e}",
+                                    failures.count,
+                                    DEAD_AFTER.as_secs()
+                                )
+                                .into());
+                                break 'session;
                             }
                         }
                     }
@@ -569,5 +697,38 @@ impl Run<'_> {
             self.control.event(wire::Event::AdvertisingChanged { service_type: t.clone(), instances: Vec::new() });
         }
         ended
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Failures, `every` apart, until the radio is given up on; how many.
+    fn failures_until_dead(every: Duration, limit: u32) -> Option<u32> {
+        let (start, mut f) = (Instant::now(), Failures::default());
+        (1..=limit).find(|&i| f.failed(start + every * (i - 1)))
+    }
+
+    #[test]
+    fn a_radio_failing_steadily_is_given_up_on_after_a_few_seconds() {
+        // The rate seen after the 2026-11-19 hibernation: ~10 a second.
+        assert_eq!(failures_until_dead(Duration::from_millis(100), 1000), Some(31));
+        // Faster failures still wait out the time.
+        assert_eq!(failures_until_dead(Duration::from_millis(10), 1000), Some(301));
+        // Slow ones wait for the count.
+        assert_eq!(failures_until_dead(Duration::from_secs(1), 1000), Some(DEAD_AFTER_FAILURES));
+    }
+
+    #[test]
+    fn one_success_forgives_the_failures_before_it() {
+        let (start, mut f) = (Instant::now(), Failures::default());
+        for i in 0..100 {
+            if i % 25 == 24 {
+                f.ok();
+            } else {
+                assert!(!f.failed(start + Duration::from_millis(100) * i), "given up at {i}");
+            }
+        }
     }
 }

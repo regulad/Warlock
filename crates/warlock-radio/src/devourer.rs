@@ -179,6 +179,9 @@ pub struct DevourerRadio {
     radio: *mut dvr_radio,
     rx_thread: Option<JoinHandle<()>>,
     rx: Receiver<RxFrame>,
+    /// How the RX loop ended, once it has: `dvr_run_rx`'s code and, on a
+    /// failure, its message. It ends by itself only when the radio failed.
+    rx_end: Arc<Mutex<Option<(i32, String)>>>,
     ctx: *const RxContext,
     channel: Arc<AtomicU8>,
     rx_clock: RxClock,
@@ -232,21 +235,24 @@ impl DevourerRadio {
             dropped: AtomicU64::new(0),
         }));
         let (ptr, user) = (RadioPtr(radio), ctx as usize);
+        let rx_end = Arc::new(Mutex::new(None));
+        let end = rx_end.clone();
         let rx_thread = thread::Builder::new()
             .name("devourer-rx".into())
             .spawn(move || {
                 let r = ptr;
                 // SAFETY: the radio and context outlive this thread (see Drop).
                 let code = unsafe { dvr_run_rx(r.0, on_frame, user as *mut c_void) };
-                if code != DVR_OK {
-                    eprintln!("dvr_run_rx failed ({code}): {}", last_error());
-                }
+                // The shim's last error is per thread: read it here.
+                let message = if code == DVR_OK { String::new() } else { last_error() };
+                *end.lock().unwrap_or_else(|e| e.into_inner()) = Some((code, message));
             })
             .expect("spawning the RX thread");
         Ok(Self {
             radio,
             rx_thread: Some(rx_thread),
             rx,
+            rx_end,
             ctx,
             channel,
             rx_clock: RxClock::new(Instant::now()),
@@ -269,7 +275,13 @@ impl Radio for DevourerRadio {
                 f.tsf = self.rx_clock.observe(f.host, f.tsf);
                 Ok(Some(f))
             }
-            Err(RecvTimeoutError::Timeout) => Ok(None),
+            // The queue's sender lives as long as the radio, so an RX loop
+            // that ended shows only here, once its last frames are taken.
+            Err(RecvTimeoutError::Timeout) => match self.rx_end.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                None => Ok(None),
+                Some((DVR_OK, _)) => Err(Error::Ended),
+                Some((code, message)) => Err(Error::Devourer { call: "dvr_run_rx", code, message }),
+            },
             Err(RecvTimeoutError::Disconnected) => Err(Error::Ended),
         }
     }

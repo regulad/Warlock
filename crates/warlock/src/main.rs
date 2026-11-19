@@ -29,6 +29,7 @@ mod daemon;
 mod discovery;
 mod events;
 mod logging;
+mod power;
 mod service;
 mod setup;
 
