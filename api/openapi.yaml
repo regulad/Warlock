@@ -8,7 +8,7 @@ info:
   # Warlock's version (Cargo.toml, `[workspace.package]`; a test keeps them
   # equal). Paths stay under /v1 through 0.y; a break after 1.0.0 would
   # come with 2.0.0 and /v2.
-  version: 0.1.1
+  version: 0.1.2
   license:
     name: GPL-2.0-only OR AGPL-3.0-or-later
     identifier: GPL-2.0-only OR AGPL-3.0-or-later
