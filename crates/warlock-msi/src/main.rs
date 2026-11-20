@@ -673,7 +673,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         .row(vec![s("WarlockTeardown"), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s("teardown"), None])
         // Before the pages: is the account installing already in the groups?
         .row(vec![s("WarlockFindMembership"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindMembership"), None])
-        // Run by the Done page and its sign-out modal (`ui`).
+        // After the install (the UI sequence), and by the sign-out prompt.
         .row(vec![s("WarlockFindJoined"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindJoined"), None])
         .row(vec![s("WarlockSignOut"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("SignOut"), None]);
     // Joining a group. The target is formatted as the action is scheduled, so
@@ -710,6 +710,8 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         .zip(5880..)
         .map(|(g, at)| (g.action, format!("{} AND UserSID AND NOT REMOVE~=\"ALL\"", g.join), at))
         .collect();
+    // Asked to join a group it wasn't in before.
+    let asked = GROUPS.iter().map(|g| format!("({} AND NOT {})", g.join, g.member)).collect::<Vec<_>>().join(" OR ");
     // With the dialogs (`ui`) between costing and executing.
     let ui_sequence: Vec<(&str, Option<&str>, i32)> = [
         ("FindRelatedProducts", None, 25),
@@ -723,6 +725,11 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("CostFinalize", None, 1000),
         ("MigrateFeatureStates", None, 1200),
         ("ExecuteAction", None, 1300),
+        // Once the install is done, before the Done page: did it add the
+        // account to a group it asked for? The page's Finish then goes on to
+        // the sign-out prompt. (Run from Finish itself, in 0.2.0, the prompt
+        // never came: `ui`.)
+        ("WarlockFindJoined", Some(asked.as_str()), 1310),
     ]
     .into_iter()
     .chain(ui::SEQUENCE)
@@ -1253,5 +1260,20 @@ mod tests {
         for property in [JOINED_PROPERTY, JOINED_GROUPS_PROPERTY] {
             assert!(dll.contains(&format!("= \"{property}\";")), "warlock-msi-ca doesn't set {property}");
         }
+    }
+
+    /// `FindJoined` runs in the UI sequence once the install is done
+    /// (after ExecuteAction), so the Done page knows before Finish whether
+    /// to go on to the sign-out prompt.
+    #[test]
+    fn joining_is_known_before_the_done_page() {
+        let all = tables("0.0.0", "{00000000-0000-0000-0000-000000000000}", "14.50", "{\\rtf1 x}", &[]);
+        let ui = &all.iter().find(|t| t.name == "InstallUISequence").unwrap().rows;
+        let at = |action: &str| -> i32 {
+            let row = ui.iter().find(|r| r[0].as_deref() == Some(action)).unwrap_or_else(|| panic!("no {action}"));
+            row[2].as_deref().unwrap().parse().unwrap()
+        };
+        assert!(at("WarlockFindJoined") > at("ExecuteAction"));
+        assert_eq!(at("ExitDlg"), -1, "the Done page comes at the end, after it");
     }
 }

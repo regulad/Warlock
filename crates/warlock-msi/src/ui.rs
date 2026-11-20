@@ -431,16 +431,17 @@ pub fn tables(licence: &str) -> Vec<Table> {
     let body = (20, 60, 330, 60);
     let d = "ExitDlg";
     finish(&mut ui, d, "Done");
-    // Asked to join a group it wasn't in before: is it in now? Then the
-    // sign-out modal, then the end.
-    let asked: Vec<String> = crate::GROUPS.iter().map(|g| format!("({} AND NOT {})", g.join, g.member)).collect();
-    for (i, (event, argument, condition)) in [
-        ("DoAction", "WarlockFindJoined", asked.join(" OR ")),
-        ("SpawnDialog", "SignOutDlg", crate::JOINED_PROPERTY.to_string()),
-        ("EndDialog", "Return", "1".to_string()),
-    ]
-    .into_iter()
-    .enumerate()
+    // The install added this account to a group (`FindJoined`, run in the
+    // UI sequence after the install, has said so before this page): Finish
+    // goes on to the sign-out prompt, which ends setup. Otherwise it ends
+    // setup itself. A button changes dialogs once per press: given both a
+    // SpawnDialog and an EndDialog, Windows Installer did only the last
+    // (0.2.0, 2026-11-19), so the two conditions are each other's opposite.
+    let joined = crate::JOINED_PROPERTY;
+    for (i, (event, argument, condition)) in
+        [("NewDialog", "SignOutDlg", joined.to_string()), ("EndDialog", "Return", format!("NOT {joined}"))]
+            .into_iter()
+            .enumerate()
     {
         ui.event.row(vec![s(d), s("Finish"), s(event), s(argument), s(&condition), n(i as i32 + 1)]);
     }
@@ -477,9 +478,9 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.events(d, "Yes", &[("EndDialog", "Exit")]);
     ui.events(d, "No", &[("EndDialog", "Return")]);
 
-    // Sign out now? Over the Done page, when the install added this account
-    // to warlock-users. Later is the default: signing out closes every
-    // program.
+    // Sign out now? After the Done page, in its place, when the install
+    // added this account to a group. Either button ends setup, as Finish
+    // would have. Later is the default: signing out closes every program.
     let d = "SignOutDlg";
     ui.dialog(d, 280, 110, MODAL, "Later", s("Later"), s("Later"));
     ui.text(
@@ -681,23 +682,64 @@ mod tests {
         v
     }
 
-    /// Done's Finish asks the group, then asks to sign out only an account
-    /// it added, then ends.
+    /// Done's Finish goes on to the sign-out prompt for an account the
+    /// install added to a group, and otherwise ends; the prompt's buttons
+    /// end setup too.
     #[test]
     fn finish_asks_a_new_member_to_sign_out() {
         let tables = tables("{\\rtf1 x}");
-        let mut finish: Vec<(i32, &str, &str, &str)> = rows(&tables, "ControlEvent")
-            .iter()
-            .filter(|r| cell(r, 0) == Some("ExitDlg") && cell(r, 1) == Some("Finish"))
-            .map(|r| {
-                (cell(r, 5).unwrap().parse().unwrap(), cell(r, 2).unwrap(), cell(r, 3).unwrap(), cell(r, 4).unwrap())
-            })
-            .collect();
-        finish.sort();
-        let steps: Vec<(&str, &str)> = finish.iter().map(|f| (f.1, f.2)).collect();
-        assert_eq!(steps, [("DoAction", "WarlockFindJoined"), ("SpawnDialog", "SignOutDlg"), ("EndDialog", "Return")]);
-        assert_eq!(finish[1].3, crate::JOINED_PROPERTY);
-        assert!(rows(&tables, "Dialog").iter().any(|d| cell(d, 0) == Some("SignOutDlg")));
+        let events = |d: &str, c: &str| -> Vec<(&str, &str, &str)> {
+            let mut v: Vec<(i32, &str, &str, &str)> = rows(&tables, "ControlEvent")
+                .iter()
+                .filter(|r| cell(r, 0) == Some(d) && cell(r, 1) == Some(c))
+                .map(|r| {
+                    (
+                        cell(r, 5).unwrap().parse().unwrap(),
+                        cell(r, 2).unwrap(),
+                        cell(r, 3).unwrap(),
+                        cell(r, 4).unwrap(),
+                    )
+                })
+                .collect();
+            v.sort();
+            v.into_iter().map(|e| (e.1, e.2, e.3)).collect()
+        };
+        let joined = crate::JOINED_PROPERTY;
+        let not_joined = format!("NOT {joined}");
+        assert_eq!(
+            events("ExitDlg", "Finish"),
+            [("NewDialog", "SignOutDlg", joined), ("EndDialog", "Return", not_joined.as_str())]
+        );
+        assert_eq!(
+            events("SignOutDlg", "SignOut"),
+            [("DoAction", "WarlockSignOut", "1"), ("EndDialog", "Return", "1")]
+        );
+        assert_eq!(events("SignOutDlg", "Later"), [("EndDialog", "Return", "1")]);
+    }
+
+    /// A button changes dialogs once per press: given two dialog events whose
+    /// conditions both hold, Windows Installer does only the last (seen with
+    /// 0.2.0's SpawnDialog then EndDialog). So a control's dialog events
+    /// must be two whose conditions are each other's opposite, or one.
+    #[test]
+    fn a_button_changes_dialogs_once() {
+        let tables = tables("{\\rtf1 x}");
+        let mut by_control: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+        for r in rows(&tables, "ControlEvent") {
+            if ["NewDialog", "SpawnDialog", "SpawnWaitDialog", "EndDialog"].contains(&cell(r, 2).unwrap()) {
+                by_control.entry((cell(r, 0).unwrap(), cell(r, 1).unwrap())).or_default().push(cell(r, 4).unwrap());
+            }
+        }
+        for ((d, c), conditions) in by_control {
+            match conditions.as_slice() {
+                [_] => {}
+                [a, b] => assert!(
+                    *b == format!("NOT {a}") || *a == format!("NOT {b}"),
+                    "{d}.{c}: dialog events under {a:?} and {b:?} can both happen"
+                ),
+                more => panic!("{d}.{c}: {} dialog events", more.len()),
+            }
+        }
     }
 
     /// Windows Installer refuses a dialog whose tab order isn't one cycle

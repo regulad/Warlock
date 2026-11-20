@@ -11,9 +11,10 @@
 //! compares them with `UserSID`, the account running the install.
 //!
 //! An account the install added only gets a group's rights from its next
-//! sign-in, so the Done page then asks it to sign out (Parker, 2026-11-19):
-//! its Finish runs [`FindJoined`], which looks again, and the page's modal
-//! "Sign out now" runs [`SignOut`].
+//! sign-in, so setup then asks it to sign out (Parker, 2026-11-19): once the
+//! install is done, [`FindJoined`] looks again, the Done page's Finish goes
+//! on to the sign-out prompt if it found the account added, and the
+//! prompt's "Sign out now" runs [`SignOut`].
 //!
 //! [`FindMembership`] runs in the UI sequence after `LaunchConditions`, and
 //! the others after the install, so the Visual C++ runtime the DLL links to
@@ -88,7 +89,8 @@ pub unsafe extern "system" fn FindMembership(install: MSIHANDLE) -> u32 {
     0
 }
 
-/// The custom action the Done page's Finish runs: when `UserSID` is now in
+/// The custom action run once the install is done, before the Done page
+/// (the UI sequence, after `ExecuteAction`): when `UserSID` is now in
 /// groups whose `member` property said it wasn't before, sets
 /// [`JOINED_PROPERTY`] to 1 and [`JOINED_GROUPS_PROPERTY`] to their names.
 /// It asks the groups themselves, so an install that failed to add the
