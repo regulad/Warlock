@@ -7,15 +7,17 @@ use std::io;
 use std::net::Ipv6Addr;
 use std::sync::Arc;
 
-use windows_sys::Win32::Foundation::{ERROR_OBJECT_ALREADY_EXISTS, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
-    CreateUnicastIpAddressEntry, DeleteUnicastIpAddressEntry, FreeMibTable, GetIpInterfaceEntry,
-    GetUnicastIpAddressTable, InitializeIpInterfaceEntry, InitializeUnicastIpAddressEntry, MIB_IPINTERFACE_ROW,
-    MIB_UNICASTIPADDRESS_ROW, MIB_UNICASTIPADDRESS_TABLE, SetIpInterfaceEntry,
+    CreateIpForwardEntry2, CreateUnicastIpAddressEntry, DeleteIpForwardEntry2, DeleteUnicastIpAddressEntry,
+    FreeMibTable, GetIpForwardTable2, GetIpInterfaceEntry, GetUnicastIpAddressTable, InitializeIpForwardEntry,
+    InitializeIpInterfaceEntry, InitializeUnicastIpAddressEntry, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    MIB_IPINTERFACE_ROW, MIB_UNICASTIPADDRESS_ROW, MIB_UNICASTIPADDRESS_TABLE, SetIpInterfaceEntry,
 };
 use windows_sys::Win32::NetworkManagement::Ndis::NET_LUID_LH;
 use windows_sys::Win32::Networking::WinSock::{
-    AF_INET6, IpDadStatePreferred, IpPrefixOriginManual, IpSuffixOriginManual, RouterDiscoveryDisabled,
+    AF_INET6, IpDadStatePreferred, IpPrefixOriginManual, IpSuffixOriginManual, MIB_IPPROTO_NETMGMT,
+    RouterDiscoveryDisabled,
 };
 use wintun_bindings::{Adapter, Session, Wintun};
 
@@ -153,6 +155,71 @@ impl Tun {
                 ERROR_OBJECT_ALREADY_EXISTS => Ok(()),
                 code => win32("adding our link-local address", code),
             }
+        }
+    }
+
+    /// Routes `dest` to the adapter, on-link: for a peer's address that isn't
+    /// its EUI-64 link-local, such as an iPhone's `llw0` address, so Windows
+    /// sends what's for it here (issue #11). A route that's there already is
+    /// fine.
+    pub fn route_host(&self, dest: Ipv6Addr) -> io::Result<()> {
+        let row = self.host_route(dest);
+        // SAFETY: a plain IP Helper call on a row we own.
+        match unsafe { CreateIpForwardEntry2(&row) } {
+            ERROR_OBJECT_ALREADY_EXISTS => Ok(()),
+            code => win32(&format!("routing {dest} to the adapter"), code),
+        }
+    }
+
+    /// Removes the route [`Tun::route_host`] added. One that's gone already is
+    /// fine.
+    pub fn unroute_host(&self, dest: Ipv6Addr) -> io::Result<()> {
+        let row = self.host_route(dest);
+        // SAFETY: a plain IP Helper call on a row we own.
+        match unsafe { DeleteIpForwardEntry2(&row) } {
+            ERROR_NOT_FOUND => Ok(()),
+            code => win32(&format!("removing the route to {dest}"), code),
+        }
+    }
+
+    /// Removes every host route on the adapter: what a Warlock that stopped
+    /// without cleaning up left.
+    pub fn clear_host_routes(&self) -> io::Result<()> {
+        // SAFETY: IP Helper's table is read within its bounds and freed; rows
+        // are plain data.
+        unsafe {
+            let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+            win32("listing IPv6 routes", GetIpForwardTable2(AF_INET6, &mut table))?;
+            let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+            for row in rows.iter().filter(|r| r.InterfaceLuid.Value == self.luid.Value) {
+                if row.DestinationPrefix.PrefixLength == 128 && row.Protocol == MIB_IPPROTO_NETMGMT {
+                    let _ = DeleteIpForwardEntry2(row);
+                }
+            }
+            FreeMibTable(table as _);
+        }
+        Ok(())
+    }
+
+    fn host_route(&self, dest: Ipv6Addr) -> MIB_IPFORWARD_ROW2 {
+        // SAFETY: the row is plain data, initialised by IP Helper.
+        unsafe {
+            let mut row: MIB_IPFORWARD_ROW2 = std::mem::zeroed();
+            InitializeIpForwardEntry(&mut row);
+            row.InterfaceLuid = self.luid;
+            row.DestinationPrefix.Prefix.Ipv6.sin6_family = AF_INET6;
+            row.DestinationPrefix.Prefix.Ipv6.sin6_addr.u.Byte = dest.octets();
+            row.DestinationPrefix.PrefixLength = 128;
+            // On-link: the unspecified next hop.
+            row.NextHop.Ipv6.sin6_family = AF_INET6;
+            row.SitePrefixLength = 0;
+            row.Metric = 0;
+            row.Protocol = MIB_IPPROTO_NETMGMT;
+            // Not a loopback route, and never advertised.
+            row.Loopback = false;
+            row.AutoconfigureAddress = false;
+            row.Publish = false;
+            row
         }
     }
 

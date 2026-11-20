@@ -68,6 +68,8 @@ pub struct State {
     /// The realtime peers Warlock has asked to start a group (lowercase
     /// addresses).
     pub realtime_asked: BTreeSet<String>,
+    /// The realtime peers whose frames say they're in the group.
+    pub realtime_joined: BTreeSet<String>,
 }
 
 /// What open locks ask of the daemon.
@@ -517,6 +519,7 @@ impl App {
         jsonl(lock_stream(guard, self.state.clone(), move |s| RealtimeState {
             present: s.peers.iter().any(|p| p.address == peer),
             asked: s.realtime_asked.contains(&peer),
+            joined: s.realtime_joined.contains(&peer),
             peer: peer.clone(),
         }))
     }

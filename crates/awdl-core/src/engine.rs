@@ -102,30 +102,59 @@ pub enum TxKind {
     AddbaResponse,
     /// A data frame carrying a host packet.
     Data,
+    /// A Low-Latency Wi-Fi frame carrying a host packet.
+    Llw,
     /// A MIF to one peer with a UMI: starting or stopping a realtime group
     /// ([`Engine::set_realtime_peers`]).
     Umi,
 }
 
-/// Start UMIs sent to a peer per realtime group, and stop UMIs when it
-/// ends: a few, in case some are lost. iOS 27's driver acts on a start UMI
-/// in any frame whose payload changed, so more would restart nothing.
+/// The most UMIs sent to a peer to start a realtime group, or to stop one,
+/// before giving up: a peer that answers needs one.
 const UMI_REPEATS: u8 = 3;
+
+/// How long to wait for a peer to answer a UMI before sending another, µs.
+/// It answers in its frames: an iPhone's carry the group's TLV from its
+/// next frame on, and none after a stop. A UMI repeated before then
+/// restarted its LLW setup each time (Koala's trial 20, 2026-11-19).
+const UMI_RETRY_US: u64 = 500_000;
+
+/// A peer that answered counts as having left our group once its frames
+/// haven't named the group for this long, µs. One frame without it means
+/// nothing: right after answering, an iPhone sent one, and asking again
+/// restarted its LLW setup (Koala's trial 21, 2026-11-19).
+const LEFT_AFTER_US: u64 = 1_000_000;
 
 /// A realtime group with one peer: wanted, or ending.
 #[derive(Clone, Copy, Debug)]
 struct Realtime {
     /// Still wanted; otherwise ending.
     wanted: bool,
-    /// UMIs left to send it: starts while wanted, stops after.
-    left: u8,
-    /// The slot of our latest UMI to it: one per slot.
-    last_slot: Option<u16>,
+    /// UMIs sent it since it was last wanted, or since it was released.
+    sent: u8,
+    /// When we sent the latest.
+    last_sent: Option<u64>,
+    /// It answered the start: its frames named our group.
+    acked: bool,
 }
 
 impl Realtime {
     fn start() -> Self {
-        Self { wanted: true, left: UMI_REPEATS, last_slot: None }
+        Self { wanted: true, sent: 0, last_sent: None, acked: false }
+    }
+
+    fn stop() -> Self {
+        Self { wanted: false, sent: 0, last_sent: None, acked: false }
+    }
+
+    /// Whether the peer has had its time to answer the latest UMI.
+    fn waited(&self, now: u64) -> bool {
+        self.last_sent.is_none_or(|t| now.saturating_sub(t) >= UMI_RETRY_US)
+    }
+
+    /// Whether another UMI may go out now.
+    fn may_send(&self, now: u64) -> bool {
+        self.sent < UMI_REPEATS && self.waited(now)
     }
 }
 
@@ -144,6 +173,8 @@ struct Queued {
     ethertype: u16,
     payload: Vec<u8>,
     since: u64,
+    /// As Low-Latency Wi-Fi rather than AWDL data.
+    llw: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,6 +216,9 @@ pub enum Event {
         ethertype: u16,
         /// The payload.
         payload: Vec<u8>,
+        /// It came as Low-Latency Wi-Fi ([Frame::Llw]) rather than AWDL data:
+        /// from a peer's `llw0`, whose address isn't its link-local.
+        llw: bool,
     },
     /// A peer's first frame.
     PeerFound(MacAddr),
@@ -258,6 +292,11 @@ pub struct Peer {
     pub sequences_widened: Option<(ChannelSequence<'static>, Option<ChannelSequence<'static>>)>,
     /// Its country code (data path state).
     pub country: Option<[u8; 3]>,
+    /// The realtime group its latest action frame names (TLV 31's ID),
+    /// if any: while in a group, an iPhone puts it in every frame.
+    pub realtime_group: Option<MacAddr>,
+    /// The group its frames last named, and when.
+    pub realtime_group_seen: Option<(MacAddr, u64)>,
 }
 
 impl Peer {
@@ -285,6 +324,8 @@ impl Peer {
             sequence_tlv18: None,
             sequences_widened: None,
             country: None,
+            realtime_group: None,
+            realtime_group_seen: None,
         }
     }
 
@@ -380,6 +421,24 @@ impl Engine {
                         to,
                         ethertype: data.ethertype,
                         payload: data.payload.to_vec(),
+                        llw: false,
+                    });
+                }
+            }
+            // Low-Latency Wi-Fi from a realtime peer: delivered as data.
+            Frame::Llw { header, ethertype, payload } => {
+                if let Some(p) = self.peers.get_mut(&src) {
+                    p.last_seen = meta.tsf;
+                    p.data_frames += 1;
+                }
+                let to = header.destination();
+                if to.is_multicast() || Some(to) == self.config.own_addr {
+                    events.push(Event::Packet {
+                        from: src,
+                        to,
+                        ethertype: *ethertype,
+                        payload: payload.to_vec(),
+                        llw: true,
                     });
                 }
             }
@@ -396,6 +455,7 @@ impl Engine {
                             to: m.da,
                             ethertype: m.data.ethertype,
                             payload: m.data.payload.to_vec(),
+                            llw: false,
                         });
                     }
                 }
@@ -414,7 +474,7 @@ impl Engine {
                     p.psfs += 1;
                 }
                 let (mut v1, mut v2, mut from_sync, mut from_tlv18) = (None, None, None, None);
-                let (mut services, mut arpa, mut sui) = (Vec::new(), None, None);
+                let (mut services, mut arpa, mut sui, mut group) = (Vec::new(), None, None, None);
                 for t in action.tlvs() {
                     match t.decode() {
                         Ok(TlvBody::SyncParams(s)) => {
@@ -440,8 +500,13 @@ impl Engine {
                         }
                         Ok(TlvBody::ServiceResponse(s)) => services.push(s.into_owned()),
                         Ok(TlvBody::ServiceParams(s)) => sui = Some(s.sui),
+                        Ok(TlvBody::RealtimeGroup(g)) => group = Some(g.rtg_id),
                         _ => {}
                     }
+                }
+                p.realtime_group = group;
+                if let Some(g) = group {
+                    p.realtime_group_seen = Some((g, meta.tsf));
                 }
                 let mut changed = false;
                 if !services.is_empty() {
@@ -700,23 +765,29 @@ impl Engine {
     }
 
     /// Runs a Continuity Real Time Group with each of `peers`, the group in
-    /// which an iPhone sends Low-Latency Wi-Fi (issue #10). Each gets a few
-    /// UMIs asking it to start one with us, with a realtime group TLV (31)
-    /// whose ID is our address, in its next slots where it listens on our
-    /// channel; our frames carry the TLV while any group is wanted. A peer
-    /// no longer in `peers` gets UMIs asking it to stop. Without
-    /// `Config::transmit`, nothing.
+    /// which an iPhone sends Low-Latency Wi-Fi (issue #10). Each is asked to
+    /// start one with us by a UMI with a realtime group TLV (31) whose ID is
+    /// our address, in a MIF to it alone in a slot where it listens on our
+    /// channel. It answers by naming our group in its own frames' TLV 31;
+    /// one that hasn't within [`UMI_RETRY_US`] is asked again, up to
+    /// [`UMI_REPEATS`] times, and again if it later leaves the group (its
+    /// frames stop naming it for [`LEFT_AFTER_US`]). Our
+    /// frames carry the TLV while any group is wanted. A peer no longer in
+    /// `peers` is asked to stop the same way, until its frames no longer
+    /// name our group. Without `Config::transmit`, nothing.
     pub fn set_realtime_peers(&mut self, peers: &BTreeSet<MacAddr>) {
         if self.config.transmit.is_none() {
             return;
         }
+        let joined: BTreeSet<MacAddr> =
+            self.realtime.keys().copied().filter(|&a| self.realtime_joined_raw(a)).collect();
         self.realtime.retain(|a, r| {
             if r.wanted && !peers.contains(a) {
-                // Nothing to stop if we never asked it to start.
-                if r.left == UMI_REPEATS {
+                // Nothing to stop if it never started.
+                if !joined.contains(a) && r.sent == 0 {
                     return false;
                 }
-                *r = Realtime { wanted: false, left: UMI_REPEATS, last_slot: None };
+                *r = Realtime::stop();
             }
             true
         });
@@ -728,21 +799,68 @@ impl Engine {
         }
     }
 
-    /// Whether we've asked `peer` to start a realtime group with us and it
-    /// is still wanted: at least one start UMI went out since it was last
-    /// found.
-    pub fn realtime_asked(&self, peer: MacAddr) -> bool {
-        self.realtime.get(&peer).is_some_and(|r| r.wanted && r.left < UMI_REPEATS)
+    /// Whether `peer`'s latest frame names our realtime group.
+    fn realtime_joined_raw(&self, peer: MacAddr) -> bool {
+        let own = self.config.own_addr;
+        own.is_some() && self.peers.get(&peer).is_some_and(|p| p.realtime_group == own)
     }
 
-    /// Sends UMIs to the realtime peers listening on our channel now, one
-    /// per peer per slot: MIFs addressed to them alone.
+    /// Whether we've asked `peer` to start a realtime group with us, or it's
+    /// in one, and the group is still wanted.
+    pub fn realtime_asked(&self, peer: MacAddr) -> bool {
+        self.realtime.get(&peer).is_some_and(|r| r.wanted && (r.sent > 0 || r.acked || self.realtime_joined_raw(peer)))
+    }
+
+    /// Whether `peer` says it's in the realtime group we want with it: its
+    /// latest frame names our group.
+    pub fn realtime_joined(&self, peer: MacAddr) -> bool {
+        self.realtime.get(&peer).is_some_and(|r| r.wanted) && self.realtime_joined_raw(peer)
+    }
+
+    /// Sends UMIs to the realtime peers that haven't answered and listen on
+    /// our channel now: MIFs addressed to them alone.
     fn send_umis(&mut self, now: u64, aw_seq: u16, channel: u8, tx: &TxConfig, out: &mut Vec<Action>) {
-        let slot = aw_seq / AWS_PER_SLOT;
+        // Ended: the peer left the group, or never answered.
+        let gone: Vec<MacAddr> = self
+            .realtime
+            .iter()
+            .filter(|(a, r)| !r.wanted && (!self.realtime_joined_raw(**a) || (r.sent >= UMI_REPEATS && r.waited(now))))
+            .map(|(a, _)| *a)
+            .collect();
+        for a in gone {
+            self.realtime.remove(&a);
+        }
+        // Answered, or left: a peer that answered and whose frames haven't
+        // named our group for a while has left it, and is asked again.
+        let own = self.config.own_addr;
+        let seen: Vec<(MacAddr, bool, Option<u64>)> = self
+            .realtime
+            .keys()
+            .map(|&a| {
+                let ours = self.peers.get(&a).and_then(|p| p.realtime_group_seen).filter(|(g, _)| Some(*g) == own);
+                (a, self.realtime_joined_raw(a), ours.map(|(_, t)| t))
+            })
+            .collect();
+        for (a, joined, last) in seen {
+            let r = self.realtime.get_mut(&a).expect("just listed");
+            if !r.wanted {
+                continue;
+            }
+            if joined {
+                r.acked = true;
+            } else if r.acked && last.is_none_or(|t| now.saturating_sub(t) >= LEFT_AFTER_US) {
+                r.acked = false;
+                r.sent = 0;
+            }
+        }
         let due: Vec<(MacAddr, bool)> = self
             .realtime
             .iter()
-            .filter(|(a, r)| r.left > 0 && r.last_slot != Some(slot) && self.reachable(**a, aw_seq, channel))
+            .filter(|(a, r)| {
+                let joined = self.realtime_joined_raw(**a);
+                let asks = if r.wanted { !joined && !r.acked } else { joined };
+                asks && r.may_send(now) && self.reachable(**a, aw_seq, channel)
+            })
             .map(|(a, r)| (*a, r.wanted))
             .collect();
         if due.is_empty() {
@@ -750,10 +868,9 @@ impl Engine {
         }
         for (a, _) in &due {
             let r = self.realtime.get_mut(a).expect("just found");
-            r.left -= 1;
-            r.last_slot = Some(slot);
+            r.sent += 1;
+            r.last_sent = Some(now);
         }
-        self.realtime.retain(|_, r| r.wanted || r.left > 0);
         let group = RealtimeGroup::new(tx.addr);
         let self_counter = self.tx.self_counter;
         let numbers: Vec<u16> = due.iter().map(|_| self.tx.next_sequence_number()).collect();
@@ -788,7 +905,14 @@ impl Engine {
     /// peer's own sequence puts it on our channel; multicast goes in the next
     /// window. Packets that can't go out within 2 s are dropped.
     pub fn send_packet(&mut self, now: u64, to: MacAddr, ethertype: u16, payload: Vec<u8>) {
-        self.tx.queue.push_back(Queued { to, ethertype, payload, since: now });
+        self.tx.queue.push_back(Queued { to, ethertype, payload, since: now, llw: false });
+    }
+
+    /// Queues a packet for a peer as Low-Latency Wi-Fi: QoS data on TID 7
+    /// (voice) with RFC 1042 encapsulation, as an iPhone sends to its`llw0`'s
+    /// peer (issue #11). Sent as [Engine::send_packet]'s are.
+    pub fn send_llw(&mut self, now: u64, to: MacAddr, ethertype: u16, payload: Vec<u8>) {
+        self.tx.queue.push_back(Queued { to, ethertype, payload, since: now, llw: true });
     }
 
     fn send_queued(&mut self, now: u64, aw_seq: u16, channel: u8, tx: &TxConfig, out: &mut Vec<Action>) {
@@ -802,14 +926,25 @@ impl Engine {
                 continue;
             }
             let n = self.tx.next_sequence_number();
-            self.tx.data_seq = self.tx.data_seq.wrapping_add(1);
             let mut mpdu = Vec::with_capacity(40 + q.payload.len());
-            Frame::Data {
-                header: awdl_proto::ieee80211::Header::data(tx.addr, q.to, n),
-                data: awdl_proto::data::DataFrame::new(self.tx.data_seq, q.ethertype, &q.payload),
-            }
-            .emit(&mut mpdu);
-            out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind: TxKind::Data });
+            let kind = if q.llw {
+                Frame::Llw {
+                    header: awdl_proto::ieee80211::Header::qos_data(tx.addr, q.to, n, 7),
+                    ethertype: q.ethertype,
+                    payload: (&q.payload[..]).into(),
+                }
+                .emit(&mut mpdu);
+                TxKind::Llw
+            } else {
+                self.tx.data_seq = self.tx.data_seq.wrapping_add(1);
+                Frame::Data {
+                    header: awdl_proto::ieee80211::Header::data(tx.addr, q.to, n),
+                    data: awdl_proto::data::DataFrame::new(self.tx.data_seq, q.ethertype, &q.payload),
+                }
+                .emit(&mut mpdu);
+                TxKind::Data
+            };
+            out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind });
         }
         self.tx.queue = keep;
     }

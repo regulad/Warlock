@@ -32,6 +32,11 @@ pub fn ipv6_dst(packet: &[u8]) -> Option<Ipv6Addr> {
     (packet.len() >= 40 && packet[0] >> 4 == 6).then(|| Ipv6Addr::from(<[u8; 16]>::try_from(&packet[24..40]).unwrap()))
 }
 
+/// The source of an IPv6 packet, `None` if `packet` isn't one.
+pub fn ipv6_src(packet: &[u8]) -> Option<Ipv6Addr> {
+    (packet.len() >= 40 && packet[0] >> 4 == 6).then(|| Ipv6Addr::from(<[u8; 16]>::try_from(&packet[8..24]).unwrap()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

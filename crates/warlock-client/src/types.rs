@@ -265,8 +265,11 @@ pub struct RealtimeState {
     /// Whether Warlock hears the peer.
     pub present: bool,
     /// Whether Warlock has asked the peer to start the group since it last
-    /// appeared; not whether it did.
+    /// appeared, or the peer is in it.
     pub asked: bool,
+    /// Whether the peer says it's in the group (its frames name it).
+    #[serde(default)]
+    pub joined: bool,
 }
 
 /// An entry of `GET /v1/realtime`.

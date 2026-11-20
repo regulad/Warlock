@@ -328,54 +328,144 @@ fn advertised_services_reach_a_listening_engine() {
     assert_eq!(p.services_sui, Some(2));
 }
 
+/// Low-Latency Wi-Fi to us is delivered like AWDL data, from the peer's
+/// address; to someone else, it isn't (issue #11).
+#[test]
+fn llw_to_us_reaches_the_host() {
+    use awdl_core::Event;
+    use awdl_proto::ieee80211::Header;
+
+    let mut engine = Engine::new(Config::active(TxConfig::new(US)));
+    let llw = |to: MacAddr| {
+        let payload: &[u8] = &[0x60, 0, 0, 0, 0, 0, 17, 64];
+        let mut mpdu = Vec::new();
+        Frame::Llw { header: Header::data(IPHONE, to, 7), ethertype: 0x86dd, payload: payload.into() }.emit(&mut mpdu);
+        mpdu
+    };
+    let meta = RxMeta { tsf: 1, channel: 149, rssi_dbm: -40 };
+    let events = engine.on_frame(meta, &llw(US));
+    let packets: Vec<&Event> = events.iter().filter(|e| matches!(e, Event::Packet { .. })).collect();
+    assert_eq!(
+        packets,
+        [&Event::Packet {
+            from: IPHONE,
+            to: US,
+            ethertype: 0x86dd,
+            payload: vec![0x60, 0, 0, 0, 0, 0, 17, 64],
+            llw: true
+        }]
+    );
+    let other = engine.on_frame(meta, &llw(MacAddr([0x02, 0, 0, 0, 0, 0x99])));
+    assert!(!other.iter().any(|e| matches!(e, Event::Packet { .. })));
+}
+
+const PEER: MacAddr = MacAddr([0x02, 0x57, 0x4c, 0x00, 0x00, 0x02]);
+
 /// Two taking-part engines on one simulated air, polled at the times they
 /// ask for: a frame reaches the other engine when it's on the sender's
 /// channel. With no TX latency, so a frame is heard the moment it's built.
-/// Our engine's frames go to `ours`; `channels` are the engines' own, kept
-/// from call to call.
-fn share_air(
-    us: &mut Engine,
-    them: &mut Engine,
-    channels: &mut [u8; 2],
-    now: &mut u64,
-    until: u64,
-    ours: &mut Vec<Sent>,
-) {
-    while *now < until {
-        let actions = [us.poll(*now), them.poll(*now)];
+/// The peer (`them`) can answer a realtime group as an iPhone does: while
+/// `in_group` names one, its action frames carry that group's TLV 31.
+struct Air {
+    us: Engine,
+    them: Engine,
+    channels: [u8; 2],
+    now: u64,
+    in_group: Option<MacAddr>,
+    /// Our frames.
+    sent: Vec<Sent>,
+}
+
+impl Air {
+    /// We follow a peer with a higher metric, after 7 s together.
+    fn new() -> Self {
+        let quick = |addr, metric| {
+            let mut tx = TxConfig::new(addr);
+            tx.self_metric = metric;
+            tx.tx_latency_us = 0;
+            Engine::new(Config::active(tx))
+        };
+        let mut air = Air {
+            us: quick(US, 60),
+            them: quick(PEER, 600),
+            channels: [0; 2],
+            now: 1_000_000,
+            in_group: None,
+            sent: vec![],
+        };
+        air.run_until(8_000_000);
+        assert_eq!((air.us.master(), air.us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)), "we follow");
+        air
+    }
+
+    fn run_until(&mut self, until: u64) {
+        while self.now < until {
+            self.step();
+        }
+    }
+
+    /// Runs until one of our frames passes `f`, within 5 s.
+    fn run_until_sent(&mut self, f: impl Fn(&Sent) -> bool) {
+        let (limit, from) = (self.now + 5_000_000, self.sent.len());
+        while !self.sent[from..].iter().any(&f) {
+            assert!(self.now < limit, "not sent within 5 s");
+            self.step();
+        }
+    }
+
+    fn step(&mut self) {
+        let now = self.now;
+        let actions = [self.us.poll(now), self.them.poll(now)];
         for (i, actions) in actions.into_iter().enumerate() {
             for a in actions {
                 match a {
-                    Action::Hop(c) => channels[i] = c,
-                    Action::Transmit { mpdu, kind, .. } => {
-                        let meta = RxMeta { tsf: *now, channel: channels[i], rssi_dbm: -40 };
-                        if channels[1 - i] == channels[i] {
-                            if i == 0 {
-                                them.on_frame(meta, &mpdu)
-                            } else {
-                                us.on_frame(meta, &mpdu)
-                            };
-                        }
+                    Action::Hop(c) => self.channels[i] = c,
+                    Action::Transmit { mut mpdu, kind, .. } => {
+                        let meta = RxMeta { tsf: now, channel: self.channels[i], rssi_dbm: -40 };
+                        let on_air = self.channels[1 - i] == self.channels[i];
                         if i == 0 {
-                            let source = us.sync_source().map(|p| p.addr);
-                            ours.push(Sent {
-                                tsf: *now,
-                                master: us.master(),
-                                source,
-                                channel: channels[0],
-                                kind,
-                                mpdu,
-                            });
+                            if on_air {
+                                self.them.on_frame(meta, &mpdu);
+                            }
+                            let source = self.us.sync_source().map(|p| p.addr);
+                            let master = self.us.master();
+                            self.sent.push(Sent { tsf: now, master, source, channel: self.channels[0], kind, mpdu });
+                        } else {
+                            if let Some(id) = self.in_group
+                                && matches!(kind, TxKind::Psf | TxKind::Mif)
+                            {
+                                awdl_proto::tlv::TlvBody::RealtimeGroup(awdl_proto::tlv::RealtimeGroup::new(id))
+                                    .emit(&mut mpdu)
+                                    .unwrap();
+                            }
+                            if on_air {
+                                self.us.on_frame(meta, &mpdu);
+                            }
                         }
                     }
                 }
             }
         }
-        *now = [us.next_wakeup(*now), them.next_wakeup(*now)].into_iter().flatten().min().unwrap().max(*now + 1);
+        let next = [self.us.next_wakeup(now), self.them.next_wakeup(now)].into_iter().flatten().min().unwrap();
+        self.now = next.max(now + 1);
+    }
+
+    /// Our UMIs since frame `from`.
+    fn umis(&self, from: usize) -> Vec<&Sent> {
+        self.sent[from..].iter().filter(|s| s.kind == TxKind::Umi).collect()
+    }
+
+    /// The link held: we follow the peer, and it takes us as a valid peer
+    /// that follows it.
+    fn assert_linked(&self) {
+        assert_eq!((self.us.master(), self.us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)));
+        let seen = self.them.peer(US).expect("the peer hears us");
+        assert!(seen.is_valid() && self.now.saturating_sub(seen.last_seen) < 1_000_000);
+        assert_eq!(seen.election.map(|e| e.master), Some(PEER));
     }
 }
 
-/// A frame's UMI code and realtime group TLV.
+/// A frame's destination, UMI code and realtime group TLV.
 fn umi_and_rtg(mpdu: &[u8]) -> (MacAddr, Option<u32>, Option<MacAddr>) {
     let Ok(Some(Frame::Action { header, action })) = parse(mpdu) else { panic!("our frame doesn't parse") };
     let Some(Ok(TlvBody::DataPathState(d))) = action.find(kind::DATA_PATH_STATE).map(|t| t.decode()) else { panic!() };
@@ -386,63 +476,121 @@ fn umi_and_rtg(mpdu: &[u8]) -> (MacAddr, Option<u32>, Option<MacAddr>) {
     (header.addr1, d.umi_code(), rtg)
 }
 
-/// A realtime group: a few start UMIs to the peer alone, in its slots on our
-/// channel, with TLV 31, which our frames then keep while it's wanted; on
-/// release, a few stop UMIs and no TLV. The link, and the peer's view of us,
-/// stay as they were (issue #10).
+/// A realtime group with a peer that answers, as an iPhone does: one start
+/// UMI to it alone, in its slots on our channel, with TLV 31, which our
+/// frames then keep while it's wanted; once its frames name our group, no
+/// more. On release, one stop UMI and no TLV; once its frames stop naming
+/// the group, no more. The link stays as it was (issues #10; trial 20, where
+/// repeated starts restarted an iPhone's LLW setup).
 #[test]
-fn a_realtime_group_starts_and_stops_with_umis() {
+fn a_realtime_group_starts_and_stops_with_one_umi_each() {
     use awdl_proto::tlv::umi;
     use std::collections::BTreeSet;
 
-    const PEER: MacAddr = MacAddr([0x02, 0x57, 0x4c, 0x00, 0x00, 0x02]);
-    let quick = |addr, metric| {
-        let mut tx = TxConfig::new(addr);
-        tx.self_metric = metric;
-        tx.tx_latency_us = 0;
-        Engine::new(Config::active(tx))
-    };
-    let (mut us, mut them) = (quick(US, 60), quick(PEER, 600));
-    let (mut now, mut channels) = (1_000_000u64, [0u8; 2]);
-    let mut sent = Vec::new();
-    share_air(&mut us, &mut them, &mut channels, &mut now, 8_000_000, &mut sent);
-    assert_eq!((us.master(), us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)), "we follow the peer");
-    assert!(sent.iter().all(|s| s.kind != TxKind::Umi));
-    let before = sent.len();
+    let mut air = Air::new();
+    assert!(air.sent.iter().all(|s| s.kind != TxKind::Umi));
+    let before = air.sent.len();
 
-    us.set_realtime_peers(&BTreeSet::from([PEER]));
-    assert!(!us.realtime_asked(PEER));
-    share_air(&mut us, &mut them, &mut channels, &mut now, 12_000_000, &mut sent);
-    assert!(us.realtime_asked(PEER));
-    let starts: Vec<&Sent> = sent[before..].iter().filter(|s| s.kind == TxKind::Umi).collect();
-    assert_eq!(starts.len(), 3, "a few start UMIs, then no more");
-    let sched = us.peer(PEER).unwrap().schedule.unwrap();
-    for s in &starts {
-        assert_eq!(umi_and_rtg(&s.mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_START), Some(US)));
-        assert!(sched.visits(s.channel));
-    }
-    for s in sent[before..].iter().filter(|s| s.kind != TxKind::Umi) {
+    air.us.set_realtime_peers(&BTreeSet::from([PEER]));
+    assert!(!air.us.realtime_asked(PEER));
+    air.run_until_sent(|s| s.kind == TxKind::Umi);
+    assert!(air.us.realtime_asked(PEER) && !air.us.realtime_joined(PEER));
+    // The peer answers from its next frame on.
+    air.in_group = Some(US);
+    air.run_until(air.now + 4_000_000);
+    assert!(air.us.realtime_joined(PEER));
+    let starts = air.umis(before);
+    assert_eq!(starts.len(), 1, "one start UMI, answered");
+    assert_eq!(umi_and_rtg(&starts[0].mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_START), Some(US)));
+    assert!(air.us.peer(PEER).unwrap().schedule.unwrap().visits(starts[0].channel));
+    for s in air.sent[before..].iter().filter(|s| s.kind != TxKind::Umi) {
         assert_eq!(umi_and_rtg(&s.mpdu), (MacAddr::BROADCAST, Some(0), Some(US)), "{:?}", s.kind);
     }
-    let during = sent.len();
+    let during = air.sent.len();
 
-    us.set_realtime_peers(&BTreeSet::new());
-    share_air(&mut us, &mut them, &mut channels, &mut now, 16_000_000, &mut sent);
-    assert!(!us.realtime_asked(PEER));
-    let stops: Vec<&Sent> = sent[during..].iter().filter(|s| s.kind == TxKind::Umi).collect();
-    assert_eq!(stops.len(), 3, "a few stop UMIs, then no more");
-    for s in &stops {
-        assert_eq!(umi_and_rtg(&s.mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_STOP), None));
-    }
-    for s in sent[during..].iter().filter(|s| s.kind != TxKind::Umi) {
+    air.us.set_realtime_peers(&BTreeSet::new());
+    assert!(!air.us.realtime_asked(PEER) && !air.us.realtime_joined(PEER));
+    air.run_until_sent(|s| s.kind == TxKind::Umi);
+    air.in_group = None;
+    air.run_until(air.now + 4_000_000);
+    let stops = air.umis(during);
+    assert_eq!(stops.len(), 1, "one stop UMI, answered");
+    assert_eq!(umi_and_rtg(&stops[0].mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_STOP), None));
+    for s in air.sent[during..].iter().filter(|s| s.kind != TxKind::Umi) {
         assert_eq!(umi_and_rtg(&s.mpdu), (MacAddr::BROADCAST, Some(0), None));
     }
+    air.assert_linked();
+    wireshark_accepts(&air.sent);
+}
 
-    // The link held throughout: we still follow the peer, and it still
-    // takes us as a valid peer that follows it.
-    assert_eq!((us.master(), us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)));
-    let seen = them.peer(US).expect("the peer hears us");
-    assert!(seen.is_valid() && now.saturating_sub(seen.last_seen) < 1_000_000);
-    assert_eq!(seen.election.map(|e| e.master), Some(PEER));
-    wireshark_accepts(&sent);
+/// A packet queued as LLW goes to the peer in its slot as QoS data on TID 7
+/// with RFC 1042 encapsulation, as an iPhone sends its `llw0` (issue #11).
+#[test]
+fn llw_goes_out_as_qos_data_on_tid_7() {
+    let mut air = Air::new();
+    let payload = vec![0x60, 0, 0, 0, 0, 0, 17, 64, 1, 2, 3];
+    air.us.send_llw(air.now, PEER, 0x86dd, payload.clone());
+    air.run_until_sent(|s| s.kind == TxKind::Llw);
+    let s = air.sent.iter().find(|s| s.kind == TxKind::Llw).unwrap();
+    let Ok(Some(Frame::Llw { header, ethertype, payload: got })) = parse(&s.mpdu) else { panic!("not LLW") };
+    assert_eq!((header.destination(), header.source(), header.qos_ctrl), (PEER, US, Some(7)));
+    assert_eq!((ethertype, &*got), (0x86dd, &payload[..]));
+    assert!(air.us.peer(PEER).unwrap().schedule.unwrap().visits(s.channel));
+}
+
+/// A peer that never answers (macOS 11 acts on none of these codes) is
+/// asked 3 times, half a second apart, then left alone; it's never asked to
+/// stop a group it didn't start. A peer that answers and later leaves the
+/// group while it's still wanted is asked again.
+#[test]
+fn a_realtime_peer_is_asked_a_few_times_and_again_if_it_leaves() {
+    use std::collections::BTreeSet;
+
+    let mut air = Air::new();
+    let before = air.sent.len();
+    air.us.set_realtime_peers(&BTreeSet::from([PEER]));
+    air.run_until(air.now + 4_000_000);
+    let starts = air.umis(before);
+    assert_eq!(starts.len(), 3, "three tries, then no more");
+    for w in starts.windows(2) {
+        assert!(w[1].tsf - w[0].tsf >= 500_000, "{} µs apart", w[1].tsf - w[0].tsf);
+    }
+    assert!(air.us.realtime_asked(PEER) && !air.us.realtime_joined(PEER));
+
+    // It joins, then leaves while wanted: asked again, once. A gap of a
+    // frame or two isn't leaving.
+    air.in_group = Some(US);
+    air.run_until(air.now + 1_000_000);
+    assert!(air.us.realtime_joined(PEER));
+    let joined = air.sent.len();
+    air.in_group = None;
+    air.run_until(air.now + 300_000);
+    air.in_group = Some(US);
+    air.run_until(air.now + 1_000_000);
+    assert!(air.umis(joined).is_empty(), "asked again after a short gap");
+    // When its frames last named our group.
+    let left = air.us.peer(PEER).unwrap().realtime_group_seen.unwrap().1;
+    air.in_group = None;
+    air.run_until_sent(|s| s.kind == TxKind::Umi);
+    let asked = air.umis(joined)[0].tsf;
+    assert!(asked - left >= 1_000_000, "asked {} µs after it left", asked - left);
+    air.in_group = Some(US);
+    air.run_until(air.now + 2_000_000);
+    assert_eq!(air.umis(joined).len(), 1);
+    assert!(air.us.realtime_joined(PEER));
+
+    // A group with someone else isn't ours.
+    air.in_group = Some(MacAddr([0x02, 0, 0, 0, 0, 0x99]));
+    air.run_until(air.now + 300_000);
+    assert!(!air.us.realtime_joined(PEER));
+
+    // Released without having started: no stop.
+    let mut air = Air::new();
+    air.us.set_realtime_peers(&BTreeSet::from([PEER]));
+    air.run_until(air.now + 4_000_000);
+    let released = air.sent.len();
+    air.us.set_realtime_peers(&BTreeSet::new());
+    air.run_until(air.now + 3_000_000);
+    assert!(air.umis(released).is_empty(), "a stop for a group never started");
+    air.assert_linked();
 }

@@ -35,7 +35,23 @@ pub enum Frame<'a> {
         /// The subframes, in order.
         msdus: Vec<Msdu<'a>>,
     },
+    /// A data frame on the AWDL BSSID whose body is an RFC 1042 LLC/SNAP
+    /// header and a payload rather than AWDL's: Low-Latency Wi-Fi, what an
+    /// iPhone sends on `llw0` to a peer in a realtime group with it. In
+    /// Koala's trial 20 (2026-11-19), QoS data on TID 7 carrying the
+    /// microphone's audio from the iPhone's `llw0` address.
+    Llw {
+        /// The 802.11 header.
+        header: Header,
+        /// EtherType of the payload (0x86dd, IPv6, in practice).
+        ethertype: u16,
+        /// The payload.
+        payload: Bytes<'a>,
+    },
 }
+
+/// The LLC/SNAP header of RFC 1042 encapsulation, before the EtherType.
+pub const RFC1042: [u8; 6] = [0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00];
 
 /// One subframe of an A-MSDU: its own destination and source, and an AWDL
 /// data body.
@@ -59,7 +75,10 @@ impl Frame<'_> {
     /// The 802.11 header.
     pub fn header(&self) -> &Header {
         match self {
-            Frame::Action { header, .. } | Frame::Data { header, .. } | Frame::Amsdu { header, .. } => header,
+            Frame::Action { header, .. }
+            | Frame::Data { header, .. }
+            | Frame::Amsdu { header, .. }
+            | Frame::Llw { header, .. } => header,
         }
     }
 
@@ -85,6 +104,12 @@ impl Frame<'_> {
                     out.extend_from_slice(&body);
                     out.extend_from_slice(&m.padding);
                 }
+            }
+            Frame::Llw { header, ethertype, payload } => {
+                header.emit(out);
+                out.extend_from_slice(&RFC1042);
+                out.extend_from_slice(&ethertype.to_be_bytes());
+                out.extend_from_slice(payload);
             }
         }
     }
@@ -116,9 +141,21 @@ pub fn parse(mpdu: &[u8]) -> Result<Option<Frame<'_>>, Error> {
         Ok(ActionFrame::parse(body)?.map(|action| Frame::Action { header, action }))
     } else if header.qos_ctrl.is_some_and(|q| q & AMSDU_PRESENT != 0) {
         parse_amsdu(header, body)
+    } else if let Some(data) = DataFrame::parse(body)? {
+        Ok(Some(Frame::Data { header, data }))
     } else {
-        Ok(DataFrame::parse(body)?.map(|data| Frame::Data { header, data }))
+        Ok(parse_llw(header, body))
     }
+}
+
+/// Low-Latency Wi-Fi: RFC 1042 data on the AWDL BSSID. Anything else isn't
+/// ours.
+fn parse_llw(header: Header, body: &[u8]) -> Option<Frame<'_>> {
+    if header.addr3 != crate::AWDL_BSSID || !body.starts_with(&RFC1042) {
+        return None;
+    }
+    let ethertype = u16::from_be_bytes(body.get(6..8)?.try_into().ok()?);
+    Some(Frame::Llw { header, ethertype, payload: Bytes::Borrowed(&body[8..]) })
 }
 
 /// An A-MSDU's subframes: each a destination, a source, a big-endian length
@@ -219,5 +256,27 @@ mod tests {
         cut.extend_from_slice(&[0, 0]);
         cut.extend_from_slice(&[1, 2, 3]);
         assert!(parse(&cut).is_err());
+    }
+
+    /// An iPhone's `llw0` frame, as in trial 20 (QoS data, TID 7, RFC 1042
+    /// IPv6), parses as LLW and re-emits byte for byte; the same body under
+    /// another BSSID isn't ours.
+    #[test]
+    fn llw_frames_parse_and_back() {
+        let mut mpdu = qos_header(false);
+        mpdu[24] = 0x07;
+        let ipv6 = [0x60, 0, 0, 0, 0, 8, 17, 64];
+        mpdu.extend_from_slice(&RFC1042);
+        mpdu.extend_from_slice(&ETHERTYPE_IPV6.to_be_bytes());
+        mpdu.extend_from_slice(&ipv6);
+        let Some(Frame::Llw { header, ethertype, payload }) = parse(&mpdu).unwrap() else { panic!("not LLW") };
+        assert_eq!((header.qos_ctrl.map(|q| q & 0xf), ethertype, &*payload), (Some(7), ETHERTYPE_IPV6, &ipv6[..]));
+        assert_eq!(header.source(), MacAddr([0x76, 0x56, 0x82, 0x58, 0x57, 0x70]));
+        let mut again = Vec::new();
+        Frame::Llw { header, ethertype, payload }.emit(&mut again);
+        assert_eq!(again, mpdu);
+        let mut elsewhere = mpdu.clone();
+        elsewhere[16..22].copy_from_slice(&[0x02, 0, 0, 0, 0, 1]);
+        assert_eq!(parse(&elsewhere), Ok(None));
     }
 }

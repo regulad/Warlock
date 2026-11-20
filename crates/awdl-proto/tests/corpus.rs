@@ -19,7 +19,7 @@ fn every_captured_frame_round_trips() {
     }
     let mut failures = Vec::new();
     let mut per_kind: BTreeMap<u8, (usize, usize)> = BTreeMap::new(); // kind → (seen, decoded)
-    let (mut actions, mut datas) = (0, 0);
+    let (mut actions, mut datas, mut llws) = (0, 0, 0);
 
     for file in &files {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
@@ -42,6 +42,7 @@ fn every_captured_frame_round_trips() {
 
             match &frame {
                 Frame::Data { .. } => datas += 1,
+                Frame::Llw { .. } => llws += 1,
                 Frame::Amsdu { msdus, .. } => datas += msdus.len(),
                 Frame::Action { header, action } => {
                     actions += 1;
@@ -80,7 +81,7 @@ fn every_captured_frame_round_trips() {
         }
     }
 
-    eprintln!("{actions} action frames, {datas} data frames across {} captures", files.len());
+    eprintln!("{actions} action frames, {datas} AWDL data frames, {llws} LLW frames across {} captures", files.len());
     for (k, (seen, decoded)) in &per_kind {
         eprintln!("  TLV {k:>2} {:<24} {seen:>6} seen, {decoded:>6} typed", tlv::kind::name(*k).unwrap_or("?"));
     }

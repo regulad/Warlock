@@ -136,7 +136,13 @@ fn peers() -> Vec<Peer> {
 }
 
 fn state(radio: RadioState) -> State {
-    State { info: info(radio), peers: peers(), advertised: BTreeMap::new(), realtime_asked: Default::default() }
+    State {
+        info: info(radio),
+        peers: peers(),
+        advertised: BTreeMap::new(),
+        realtime_asked: Default::default(),
+        realtime_joined: Default::default(),
+    }
 }
 
 /// The admin pipe that goes with the API's pipe `pipe` in these tests.
@@ -349,16 +355,17 @@ async fn a_realtime_lock_names_its_peer_while_its_connection_lasts() {
     // Addresses are kept lowercase; the peer is heard, but not yet asked.
     let mut lines = client.realtime("02:00:00:00:00:0A", "microphone").await.unwrap();
     let first = next_line(&mut lines, "RealtimeState", Duration::from_secs(1)).await;
-    assert_eq!(first, json!({"peer": mac(10), "present": false, "asked": false}));
+    assert_eq!(first, json!({"peer": mac(10), "present": false, "asked": false, "joined": false}));
     until(&mut daemon, Duration::from_secs(1), |w| w.realtime.contains(&[2, 0, 0, 0, 0, 10])).await;
 
     // The daemon hears the peer and asks it: the stream says so.
     let mut s = daemon.state();
     s.peers[1].address = mac(10);
     s.realtime_asked.insert(mac(10));
+    s.realtime_joined.insert(mac(10));
     daemon.publish(s);
     let next = next_line(&mut lines, "RealtimeState", Duration::from_secs(1)).await;
-    assert_eq!(next, json!({"peer": mac(10), "present": true, "asked": true}));
+    assert_eq!(next, json!({"peer": mac(10), "present": true, "asked": true, "joined": true}));
 
     let (_, list) = client.raw(Method::GET, "/v1/realtime", None).await.unwrap();
     check_list("RealtimeLock", &list);

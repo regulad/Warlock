@@ -306,7 +306,7 @@ fn main() {
             }
             for ev in engine.on_frame(RxMeta { tsf: f.tsf, channel: f.channel, rssi_dbm: f.rssi_dbm }, &f.mpdu) {
                 match ev {
-                    Event::Packet { from, to, ethertype, payload } => {
+                    Event::Packet { from, to, ethertype, payload, .. } => {
                         *packets.entry(from).or_default() += 1;
                         if ethertype == ETHERTYPE_IPV6 && Some(from) == ping_target {
                             if let Some(what) = tcp_reply(&payload) {

@@ -252,6 +252,8 @@ fn ours(frame: &Frame<'_>) -> FrameFields {
                 data_fields(&mut o, &m.data);
             }
         }
+        // Not compared: see `decoding_matches_wireshark`.
+        Frame::Llw { .. } => {}
         Frame::Action { action, .. } => {
             let h = &action.header;
             o.n("awdl.type", awdl_proto::action::AWDL_TYPE);
@@ -471,7 +473,10 @@ fn decoding_matches_wireshark() {
         let theirs = run_tshark(&ts, file);
         let mut mine = BTreeMap::new();
         for (num, mpdu) in common::mpdus(file) {
-            if let Ok(Some(f)) = parse(&mpdu) {
+            // LLW isn't AWDL to Wireshark (it's plain IPv6): not compared.
+            if let Ok(Some(f)) = parse(&mpdu)
+                && !matches!(f, Frame::Llw { .. })
+            {
                 mine.insert(num, ours(&f));
             }
         }

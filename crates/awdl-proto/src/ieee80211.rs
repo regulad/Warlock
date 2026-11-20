@@ -61,6 +61,15 @@ impl Header {
         Self::new(frame_control::DATA, source, destination, sequence_number)
     }
 
+    /// Header of a QoS data frame for traffic identifier `tid` (0–7), with
+    /// the normal acknowledgement policy.
+    pub fn qos_data(source: MacAddr, destination: MacAddr, sequence_number: u16, tid: u8) -> Self {
+        Self {
+            qos_ctrl: Some((tid & 0x7) as u16),
+            ..Self::new(frame_control::QOS_DATA, source, destination, sequence_number)
+        }
+    }
+
     fn new(frame_control: u16, source: MacAddr, destination: MacAddr, seq: u16) -> Self {
         Self {
             frame_control,

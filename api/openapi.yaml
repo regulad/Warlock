@@ -251,8 +251,9 @@ paths:
         frames. The peer needn't be heard yet: Warlock asks it once it is.
         When the last lock on a peer closes, Warlock asks the peer to stop.
 
-        Experimental: the exchange is from static analysis of iOS 27, and
-        `asked` says only that Warlock asked, not that the peer started.
+        Experimental: the exchange is from static analysis of iOS 27,
+        tried with one iPhone (iOS 27.2.1). `joined` says when the peer
+        says it's in the group.
       requestBody:
         required: true
         content:
@@ -591,7 +592,7 @@ components:
     RealtimeState:
       type: object
       description: A line of the realtime stream.
-      required: [peer, present, asked]
+      required: [peer, present, asked, joined]
       properties:
         peer: { $ref: '#/components/schemas/MacAddress' }
         present:
@@ -601,7 +602,12 @@ components:
           type: boolean
           description: |
             Whether Warlock has asked the peer to start the group since it
-            last appeared. Not whether the peer did.
+            last appeared, or the peer is in it.
+        joined:
+          type: boolean
+          description: |
+            Whether the peer says it's in the group: its latest frame names
+            Warlock's group, as an iPhone's do while it's in one.
     RealtimeLock:
       type: object
       required: [peer, reason, owner]

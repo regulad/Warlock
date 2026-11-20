@@ -77,6 +77,61 @@ fn is_mdns(packet: &[u8]) -> bool {
         && (packet[40..42] == 5353u16.to_be_bytes() || packet[42..44] == 5353u16.to_be_bytes())
 }
 
+/// Peers' Low-Latency Wi-Fi addresses (issue #11). An iPhone's `llw0` has
+/// an address of its own, not its EUI-64 link-local (in Koala's trial 20 a
+/// per-session ULA, `fddd:90e5:8ba0::8`), so nothing tells Windows or
+/// Warlock it's an AWDL peer's: Warlock learns it from the LLW the peer
+/// sends, routes it to the adapter so Windows sends what's for it there, and
+/// sends that back as LLW.
+#[derive(Default)]
+struct Llw {
+    peers: BTreeMap<std::net::Ipv6Addr, MacAddr>,
+}
+
+impl Llw {
+    /// Takes in an LLW packet from `from`.
+    fn learn(&mut self, tun: &Tun, from: MacAddr, packet: &[u8]) {
+        let Some(src) = addr::ipv6_src(packet) else { return };
+        // Its link-local reaches it as AWDL already; nor can a group or ::
+        // be a peer's.
+        if addr::mac_for(&src).is_some() || src.is_unspecified() || src.is_multicast() {
+            return;
+        }
+        if self.peers.insert(src, from) == Some(from) {
+            return;
+        }
+        match tun.route_host(src) {
+            Ok(()) => info!(address = %src, peer = %from, "routing a peer's LLW address to the adapter"),
+            Err(e) => warn!("{e}"),
+        }
+    }
+
+    /// The peer whose LLW address `dst` is.
+    fn peer(&self, dst: &std::net::Ipv6Addr) -> Option<MacAddr> {
+        self.peers.get(dst).copied()
+    }
+
+    /// Forgets a peer that left, and its routes.
+    fn forget(&mut self, tun: &Tun, peer: MacAddr) {
+        let gone: Vec<_> = self.peers.iter().filter(|(_, m)| **m == peer).map(|(a, _)| *a).collect();
+        for a in gone {
+            self.peers.remove(&a);
+            if let Err(e) = tun.unroute_host(a) {
+                warn!("{e}");
+            }
+        }
+    }
+
+    /// Forgets every peer, and their routes.
+    fn clear(&mut self, tun: &Tun) {
+        for (a, _) in std::mem::take(&mut self.peers) {
+            if let Err(e) = tun.unroute_host(a) {
+                warn!("{e}");
+            }
+        }
+    }
+}
+
 /// A UMI's destination and code, for the log.
 fn umi_of(mpdu: &[u8]) -> Option<(MacAddr, u32)> {
     let Ok(Some(awdl_proto::Frame::Action { header, action })) = awdl_proto::parse(mpdu) else { return None };
@@ -327,6 +382,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         peers: Vec::new(),
         advertised: BTreeMap::new(),
         realtime_asked: BTreeSet::new(),
+        realtime_joined: BTreeSet::new(),
     };
     let pipes = warlock_api::Pipes { api: warlock_api::PIPE, admin: warlock_api::ADMIN_PIPE };
     let (_server, control) = Server::start(pipes, Security::Service, initial).map_err(|e| {
@@ -396,6 +452,7 @@ impl Run<'_> {
                 peers: Vec::new(),
                 advertised: BTreeMap::new(),
                 realtime_asked: BTreeSet::new(),
+                realtime_joined: BTreeSet::new(),
             });
         }
         info!(?state, "radio");
@@ -515,6 +572,12 @@ impl Run<'_> {
         let mut advertiser = Advertiser::new(self.tun.index, self.tun.address, &self.types());
         // What the control API reports as advertised, by type.
         let mut advertised: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        // Peers' `llw0` addresses, which aren't their link-locals, learned from
+        // their Low-Latency Wi-Fi and routed to the adapter (issue #11).
+        let mut llw = Llw::default();
+        if let Err(e) = self.tun.clear_host_routes() {
+            warn!("adapter routes: {e}");
+        }
         let mut seen_devices = watch.changes();
         let mut last_publish = Instant::now() - PUBLISH;
         let (mut last_report, mut last_enforce) = (Instant::now(), Instant::now());
@@ -583,9 +646,12 @@ impl Run<'_> {
             };
             for ev in events {
                 match ev {
-                    Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload } => {
+                    Event::Packet { from, to, ethertype: ETHERTYPE_IPV6, payload, llw: over_llw } => {
                         if o.log_packets {
-                            info!("to Windows from {from} (to {to}): {}", describe(&payload));
+                            info!("to Windows from {from} (to {to}, LLW {over_llw}): {}", describe(&payload));
+                        }
+                        if over_llw {
+                            llw.learn(&self.tun, from, &payload);
                         }
                         match self.tun.send(&payload) {
                             Ok(()) => self.traffic.to_windows += 1,
@@ -602,6 +668,7 @@ impl Run<'_> {
                     }
                     Event::PeerLost(a) => {
                         info!("PeerLost({a})");
+                        llw.forget(&self.tun, a);
                         self.traffic.announced += write_to_windows(&self.tun, discovery.lost(a), o.log_packets);
                         self.control.event(wire::Event::PeerLost { address: a.to_string() });
                     }
@@ -635,7 +702,13 @@ impl Run<'_> {
                         self.mdns_held += 1;
                         continue;
                     }
-                    let Some(mac) = addr::ipv6_dst(packet).and_then(|d| addr::mac_for(&d)) else {
+                    let dst = addr::ipv6_dst(packet);
+                    if let Some(peer) = dst.and_then(|d| llw.peer(&d)) {
+                        self.traffic.to_air += 1;
+                        engine.send_llw(now, peer, ETHERTYPE_IPV6, packet.to_vec());
+                        continue;
+                    }
+                    let Some(mac) = dst.and_then(|d| addr::mac_for(&d)) else {
                         self.traffic.unroutable += 1;
                         continue;
                     };
@@ -726,6 +799,12 @@ impl Run<'_> {
                         .filter(|&&p| engine.realtime_asked(p))
                         .map(|p| p.to_string())
                         .collect(),
+                    realtime_joined: self
+                        .realtime
+                        .iter()
+                        .filter(|&&p| engine.realtime_joined(p))
+                        .map(|p| p.to_string())
+                        .collect(),
                 });
             }
             if last_enforce.elapsed() >= Duration::from_secs(2) {
@@ -752,6 +831,7 @@ impl Run<'_> {
                 );
             }
         }
+        llw.clear(&self.tun);
         // Goodbyes for the records we announced for peers, while the adapter
         // is still connected.
         write_to_windows(&self.tun, discovery.stop(), o.log_packets);
