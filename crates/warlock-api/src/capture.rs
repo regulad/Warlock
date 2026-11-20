@@ -111,7 +111,7 @@ impl Filter {
 }
 
 /// `aa:bb:cc:dd:ee:ff`, either case.
-fn parse_mac(s: &str) -> Option<[u8; 6]> {
+pub(crate) fn parse_mac(s: &str) -> Option<[u8; 6]> {
     let mut out = [0u8; 6];
     let mut parts = s.split(':');
     for b in &mut out {

@@ -33,7 +33,8 @@ info:
 
     Whatever a program asks Warlock to keep doing lasts exactly as long as
     the request that asked for it. A lock is a request whose response never
-    ends on its own: `POST /v1/advertising` and `POST /v1/holds`. The
+    ends on its own: `POST /v1/advertising`, `POST /v1/holds` and
+    `POST /v1/realtime`. The
     response is a stream of JSON Lines describing the lock's state, sent
     whenever that state changes and at least every 2 seconds.
 
@@ -95,6 +96,9 @@ tags:
   - name: holds
     summary: Keeping AWDL active
     description: Locks that keep Warlock taking part in AWDL while a program uses the link.
+  - name: realtime
+    summary: Realtime groups with peers
+    description: Locks that run a Continuity Real Time Group with a peer, in which an iPhone sends Low-Latency Wi-Fi.
   - name: events
     summary: What happens, as it happens
     description: A stream of changes, for monitoring and `warlockctl`.
@@ -219,6 +223,47 @@ paths:
           content:
             application/jsonl:
               itemSchema: { $ref: '#/components/schemas/HoldState' }
+        '400': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/realtime:
+    get:
+      operationId: listRealtime
+      tags: [realtime]
+      summary: The open realtime locks, and who holds them
+      responses:
+        '200':
+          description: Every open realtime lock.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RealtimeLock' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: realtime
+      tags: [realtime]
+      summary: Run a realtime group with a peer (a lock)
+      description: |
+        While this request is open, Warlock runs a Continuity Real Time
+        Group with the peer: the group in which an iPhone sends Low-Latency
+        Wi-Fi (`llw0`), which carries Continuity Camera's media. Warlock
+        asks the peer to start one with it, and carries the group in its
+        frames. The peer needn't be heard yet: Warlock asks it once it is.
+        When the last lock on a peer closes, Warlock asks the peer to stop.
+
+        Experimental: the exchange is from static analysis of iOS 27, and
+        `asked` says only that Warlock asked, not that the peer started.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RealtimeRequest' }
+      responses:
+        '200':
+          description: The lock lasts until the connection closes.
+          content:
+            application/jsonl:
+              itemSchema: { $ref: '#/components/schemas/RealtimeState' }
         '400': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /v1/events:
@@ -530,6 +575,38 @@ components:
       type: object
       required: [reason, owner]
       properties:
+        reason: { type: string }
+        owner: { $ref: '#/components/schemas/Owner' }
+    RealtimeRequest:
+      type: object
+      required: [peer, reason]
+      properties:
+        peer:
+          description: The peer's AWDL address, as `GET /v1/peers` gives it.
+          $ref: '#/components/schemas/MacAddress'
+        reason:
+          type: string
+          description: Why, for logs and `GET /v1/realtime`.
+          examples: ['microphone']
+    RealtimeState:
+      type: object
+      description: A line of the realtime stream.
+      required: [peer, present, asked]
+      properties:
+        peer: { $ref: '#/components/schemas/MacAddress' }
+        present:
+          type: boolean
+          description: Whether Warlock hears the peer.
+        asked:
+          type: boolean
+          description: |
+            Whether Warlock has asked the peer to start the group since it
+            last appeared. Not whether the peer did.
+    RealtimeLock:
+      type: object
+      required: [peer, reason, owner]
+      properties:
+        peer: { $ref: '#/components/schemas/MacAddress' }
         reason: { type: string }
         owner: { $ref: '#/components/schemas/Owner' }
     Event:

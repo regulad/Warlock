@@ -2,15 +2,15 @@
 //! The engine: the peer table, the election and sync, fed frame by frame.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use awdl_proto::action::{AwdlVersion, subtype};
 use awdl_proto::blockack::AddbaRequest;
 use awdl_proto::dns::DnsName;
-use awdl_proto::tlv::{ChannelSequence, ServiceResponse, TlvBody};
+use awdl_proto::tlv::{ChannelSequence, RealtimeGroup, ServiceResponse, TlvBody, umi};
 use awdl_proto::{Frame, MacAddr, parse};
 
-use crate::active::{self, FollowerView, TxConfig};
+use crate::active::{self, FollowerView, Target, TxConfig};
 use crate::schedule::widen;
 use crate::{
     AW_US, AWS_PER_SLOT, AwClock, AwPosition, ChannelSchedule, ElectionInfo, MasterRank, Observed, OwnClock, SyncClaim,
@@ -102,6 +102,31 @@ pub enum TxKind {
     AddbaResponse,
     /// A data frame carrying a host packet.
     Data,
+    /// A MIF to one peer with a UMI: starting or stopping a realtime group
+    /// ([`Engine::set_realtime_peers`]).
+    Umi,
+}
+
+/// Start UMIs sent to a peer per realtime group, and stop UMIs when it
+/// ends: a few, in case some are lost. iOS 27's driver acts on a start UMI
+/// in any frame whose payload changed, so more would restart nothing.
+const UMI_REPEATS: u8 = 3;
+
+/// A realtime group with one peer: wanted, or ending.
+#[derive(Clone, Copy, Debug)]
+struct Realtime {
+    /// Still wanted; otherwise ending.
+    wanted: bool,
+    /// UMIs left to send it: starts while wanted, stops after.
+    left: u8,
+    /// The slot of our latest UMI to it: one per slot.
+    last_slot: Option<u16>,
+}
+
+impl Realtime {
+    fn start() -> Self {
+        Self { wanted: true, left: UMI_REPEATS, last_slot: None }
+    }
 }
 
 /// How often, µs, a master's election counter advances (an iPhone's, as
@@ -301,6 +326,8 @@ pub struct Engine {
     /// Events from elections run by `poll`, handed out with the next
     /// `on_frame` or `on_tick`.
     pending: Vec<Event>,
+    /// Realtime groups, by peer.
+    realtime: BTreeMap<MacAddr, Realtime>,
 }
 
 impl Engine {
@@ -464,6 +491,15 @@ impl Engine {
         let mut events = Vec::new();
         for a in gone {
             self.peers.remove(&a);
+            // A peer that left has no group with us: start again if it's
+            // back while wanted; there's nothing left to stop.
+            if let Some(r) = self.realtime.get_mut(&a) {
+                if r.wanted {
+                    *r = Realtime::start();
+                } else {
+                    self.realtime.remove(&a);
+                }
+            }
             events.push(Event::PeerLost(a));
         }
         if !events.is_empty() {
@@ -639,6 +675,7 @@ impl Engine {
             return out;
         }
         self.send_queued(now, pos.aw_seq, channel, &tx, &mut out);
+        self.send_umis(now, pos.aw_seq, channel, &tx, &mut out);
         // One MIF per explicit slot; otherwise a PSF when its period is up.
         let slot = pos.aw_seq / AWS_PER_SLOT;
         let kind = if explicit && self.tx.last_mif_slot != Some(slot) {
@@ -654,9 +691,83 @@ impl Engine {
         let self_counter = self.tx.self_counter;
         let view = FollowerView { channel, ..self.follower_view(now).expect("checked above") };
         let st = if kind == TxKind::Mif { subtype::MIF } else { subtype::PSF };
-        let mpdu = active::build(&tx, &view, st, self_counter, n);
+        // While a realtime group is wanted, every frame carries its TLV.
+        let group = self.realtime.values().any(|r| r.wanted).then(|| RealtimeGroup::new(tx.addr));
+        let target = Target { rtg: group.as_ref(), ..Target::BROADCAST };
+        let mpdu = active::build(&tx, &view, st, self_counter, n, &target);
         out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind });
         out
+    }
+
+    /// Runs a Continuity Real Time Group with each of `peers`, the group in
+    /// which an iPhone sends Low-Latency Wi-Fi (issue #10). Each gets a few
+    /// UMIs asking it to start one with us, with a realtime group TLV (31)
+    /// whose ID is our address, in its next slots where it listens on our
+    /// channel; our frames carry the TLV while any group is wanted. A peer
+    /// no longer in `peers` gets UMIs asking it to stop. Without
+    /// `Config::transmit`, nothing.
+    pub fn set_realtime_peers(&mut self, peers: &BTreeSet<MacAddr>) {
+        if self.config.transmit.is_none() {
+            return;
+        }
+        self.realtime.retain(|a, r| {
+            if r.wanted && !peers.contains(a) {
+                // Nothing to stop if we never asked it to start.
+                if r.left == UMI_REPEATS {
+                    return false;
+                }
+                *r = Realtime { wanted: false, left: UMI_REPEATS, last_slot: None };
+            }
+            true
+        });
+        for &a in peers {
+            let r = self.realtime.entry(a).or_insert_with(Realtime::start);
+            if !r.wanted {
+                *r = Realtime::start();
+            }
+        }
+    }
+
+    /// Whether we've asked `peer` to start a realtime group with us and it
+    /// is still wanted: at least one start UMI went out since it was last
+    /// found.
+    pub fn realtime_asked(&self, peer: MacAddr) -> bool {
+        self.realtime.get(&peer).is_some_and(|r| r.wanted && r.left < UMI_REPEATS)
+    }
+
+    /// Sends UMIs to the realtime peers listening on our channel now, one
+    /// per peer per slot: MIFs addressed to them alone.
+    fn send_umis(&mut self, now: u64, aw_seq: u16, channel: u8, tx: &TxConfig, out: &mut Vec<Action>) {
+        let slot = aw_seq / AWS_PER_SLOT;
+        let due: Vec<(MacAddr, bool)> = self
+            .realtime
+            .iter()
+            .filter(|(a, r)| r.left > 0 && r.last_slot != Some(slot) && self.reachable(**a, aw_seq, channel))
+            .map(|(a, r)| (*a, r.wanted))
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        for (a, _) in &due {
+            let r = self.realtime.get_mut(a).expect("just found");
+            r.left -= 1;
+            r.last_slot = Some(slot);
+        }
+        self.realtime.retain(|_, r| r.wanted || r.left > 0);
+        let group = RealtimeGroup::new(tx.addr);
+        let self_counter = self.tx.self_counter;
+        let numbers: Vec<u16> = due.iter().map(|_| self.tx.next_sequence_number()).collect();
+        let Some(view) = self.follower_view(now) else { return };
+        let view = FollowerView { channel, ..view };
+        for (&(to, start), n) in due.iter().zip(numbers) {
+            let target = if start {
+                Target { to, umi: umi::CONTINUITY_REALTIME_GROUP_START, rtg: Some(&group) }
+            } else {
+                Target { to, umi: umi::CONTINUITY_REALTIME_GROUP_STOP, rtg: None }
+            };
+            let mpdu = active::build(tx, &view, subtype::MIF, self_counter, n, &target);
+            out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind: TxKind::Umi });
+        }
     }
 
     /// Sets the service records we advertise in our MIFs, and the host name
@@ -686,18 +797,7 @@ impl Engine {
             if now.saturating_sub(q.since) > PACKET_MAX_WAIT_US {
                 continue;
             }
-            // Unicast goes only in a slot the peer names explicitly. In a
-            // slot its sequence leaves empty it may still be on the channel
-            // (its PSFs say so), but it doesn't take unicast: an Apple TV
-            // received every ping we sent in its explicit 149 slots and none
-            // of those in the empty ones after them.
-            let reachable = q.to.is_multicast()
-                || self
-                    .peers
-                    .get(&q.to)
-                    .and_then(|p| p.schedule)
-                    .is_some_and(|s| s.is_explicit(aw_seq) && s.channel_at(aw_seq) == Some(channel));
-            if !reachable {
+            if !self.reachable(q.to, aw_seq, channel) {
                 keep.push_back(q);
                 continue;
             }
@@ -712,6 +812,21 @@ impl Engine {
             out.push(Action::Transmit { mpdu, rate_500kbps: tx.rate_500kbps, kind: TxKind::Data });
         }
         self.tx.queue = keep;
+    }
+
+    /// Whether a frame to `to` sent now, on `channel` in AW `aw_seq`,
+    /// reaches it. Multicast always does. Unicast goes only in a slot the
+    /// peer names explicitly: in a slot its sequence leaves empty it may
+    /// still be on the channel (its PSFs say so), but it doesn't take
+    /// unicast. An Apple TV received every ping we sent in its explicit 149
+    /// slots and none of those in the empty ones after them.
+    fn reachable(&self, to: MacAddr, aw_seq: u16, channel: u8) -> bool {
+        to.is_multicast()
+            || self
+                .peers
+                .get(&to)
+                .and_then(|p| p.schedule)
+                .is_some_and(|s| s.is_explicit(aw_seq) && s.channel_at(aw_seq) == Some(channel))
     }
 
     /// When to call [`Engine::poll`] next, if something is due before the

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use awdl_core::{Action, Config, Engine, Event, Peer, RxMeta, TxConfig, TxKind};
 use awdl_proto::MacAddr;
-use awdl_proto::tlv::Rdata;
+use awdl_proto::tlv::{Rdata, TlvBody, kind};
 use tracing::{info, warn};
 use warlock_api::types::{self as wire, RadioState};
 use warlock_api::{Frame as CapturedFrame, FrameKind, Security, Server};
@@ -75,6 +75,13 @@ fn is_mdns(packet: &[u8]) -> bool {
         && packet[0] >> 4 == 6
         && packet[6] == 17
         && (packet[40..42] == 5353u16.to_be_bytes() || packet[42..44] == 5353u16.to_be_bytes())
+}
+
+/// A UMI's destination and code, for the log.
+fn umi_of(mpdu: &[u8]) -> Option<(MacAddr, u32)> {
+    let Ok(Some(awdl_proto::Frame::Action { header, action })) = awdl_proto::parse(mpdu) else { return None };
+    let Ok(TlvBody::DataPathState(d)) = action.find(kind::DATA_PATH_STATE)?.decode() else { return None };
+    Some((header.addr1, d.umi_code()?))
 }
 
 /// What a frame is to captures: AWDL if Warlock reads it, otherwise other
@@ -292,6 +299,8 @@ struct Run<'a> {
     tun: Tun,
     /// The service types programs hold advertising locks on.
     locked_types: BTreeSet<String>,
+    /// The peers programs hold realtime locks on.
+    realtime: BTreeSet<MacAddr>,
     traffic: wire::Traffic,
     mdns_held: u64,
     /// The system's sleeps and resumes.
@@ -313,7 +322,12 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         awdl: wire::Awdl { master: None, peers: 0 },
         traffic: None,
     };
-    let initial = warlock_api::State { info: info.clone(), peers: Vec::new(), advertised: BTreeMap::new() };
+    let initial = warlock_api::State {
+        info: info.clone(),
+        peers: Vec::new(),
+        advertised: BTreeMap::new(),
+        realtime_asked: BTreeSet::new(),
+    };
     let pipes = warlock_api::Pipes { api: warlock_api::PIPE, admin: warlock_api::ADMIN_PIPE };
     let (_server, control) = Server::start(pipes, Security::Service, initial).map_err(|e| {
         format!("can't serve the control API on {} and {} (is Warlock running already?): {e}", pipes.api, pipes.admin)
@@ -339,6 +353,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         own,
         tun,
         locked_types: BTreeSet::new(),
+        realtime: BTreeSet::new(),
         traffic: wire::Traffic::default(),
         mdns_held: 0,
         power,
@@ -380,18 +395,20 @@ impl Run<'_> {
                 info: self.info.clone(),
                 peers: Vec::new(),
                 advertised: BTreeMap::new(),
+                realtime_asked: BTreeSet::new(),
             });
         }
         info!(?state, "radio");
         self.control.event(wire::Event::RadioChanged { radio: self.info.radio.clone() });
     }
 
-    /// Takes in what locks ask for; the service types to watch, if they changed.
-    fn wanted_types(&mut self) -> Option<Vec<String>> {
-        let wants = self.control.wants()?;
-        info!(types = ?wants.types, holds = wants.holds, "locks");
+    /// Takes in what locks ask for; whether it changed.
+    fn take_wants(&mut self) -> bool {
+        let Some(wants) = self.control.wants() else { return false };
+        self.realtime = wants.realtime.into_iter().map(MacAddr).collect();
+        info!(types = ?wants.types, holds = wants.holds, realtime = ?self.realtime, "locks");
         self.locked_types = wants.types;
-        Some(self.types())
+        true
     }
 
     /// Ours plus what locks ask for.
@@ -418,7 +435,7 @@ impl Run<'_> {
                 }
                 info!("the system woke");
             }
-            self.wanted_types();
+            self.take_wants();
             match claim_adapter() {
                 Ok(Some(found)) => return Some(found),
                 Ok(None) if !said => {
@@ -493,6 +510,7 @@ impl Run<'_> {
             band_change_settle_us: radio.band_change_settle().as_micros() as u64,
             ..Config::active(tx)
         });
+        engine.set_realtime_peers(&self.realtime);
         let mut discovery = Discovery::new(MTU as usize);
         let mut advertiser = Advertiser::new(self.tun.index, self.tun.address, &self.types());
         // What the control API reports as advertised, by type.
@@ -635,6 +653,11 @@ impl Run<'_> {
                             if matches!(a, Action::Transmit { kind: TxKind::AddbaResponse, .. }) {
                                 info!("answered a Block Ack setup");
                             }
+                            if let Action::Transmit { kind: TxKind::Umi, mpdu, .. } = &a
+                                && let Some((to, code)) = umi_of(mpdu)
+                            {
+                                info!(%to, code = format_args!("{code:#010x}"), channel = radio.channel(), "sent a UMI");
+                            }
                             if let Action::Transmit { mpdu, .. } = &a
                                 && self.control.capturing()
                             {
@@ -669,8 +692,9 @@ impl Run<'_> {
                 }
             }
             self.traffic.announced += write_to_windows(&self.tun, discovery.refresh(Instant::now()), o.log_packets);
-            if let Some(types) = self.wanted_types() {
-                advertiser.set_types(&types);
+            if self.take_wants() {
+                advertiser.set_types(&self.types());
+                engine.set_realtime_peers(&self.realtime);
             }
             if let Some(a) = advertiser.poll(Instant::now()) {
                 info!(instances = ?a.instances, host = ?a.host, "advertising");
@@ -696,6 +720,12 @@ impl Run<'_> {
                     info: self.info.clone(),
                     peers: engine.peers().map(|p| api::peer(p, tsf)).collect(),
                     advertised: advertised.clone(),
+                    realtime_asked: self
+                        .realtime
+                        .iter()
+                        .filter(|&&p| engine.realtime_asked(p))
+                        .map(|p| p.to_string())
+                        .collect(),
                 });
             }
             if last_enforce.elapsed() >= Duration::from_secs(2) {

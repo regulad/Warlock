@@ -177,7 +177,13 @@ fn main() {
     // Advertisement experiments, from the environment (see TxConfig).
     let mut tx = TxConfig::new(own);
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    tx.infra_channel = env("WARLOCK_INFRA_CHANNEL").map(|v| v.parse().expect("WARLOCK_INFRA_CHANNEL"));
+    // A channel, or `master` for the master's (what a Mac following an
+    // iPhone sent); unset, TxConfig's default of none.
+    match env("WARLOCK_INFRA_CHANNEL").as_deref() {
+        None => {}
+        Some("master") => tx.infra_channel = None,
+        Some(v) => tx.infra_channel = Some(v.parse().expect("WARLOCK_INFRA_CHANNEL")),
+    }
     tx.datapath_ext = env("WARLOCK_DATAPATH_EXT").is_some();
     tx.ht_40mhz = env("WARLOCK_HT40").is_some();
     tx.hostname = env("WARLOCK_HOSTNAME");

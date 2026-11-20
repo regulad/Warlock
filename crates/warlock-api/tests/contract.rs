@@ -136,7 +136,7 @@ fn peers() -> Vec<Peer> {
 }
 
 fn state(radio: RadioState) -> State {
-    State { info: info(radio), peers: peers(), advertised: BTreeMap::new() }
+    State { info: info(radio), peers: peers(), advertised: BTreeMap::new(), realtime_asked: Default::default() }
 }
 
 /// The admin pipe that goes with the API's pipe `pipe` in these tests.
@@ -344,6 +344,35 @@ async fn a_hold_lasts_as_long_as_its_connection_and_beats() {
 }
 
 #[tokio::test]
+async fn a_realtime_lock_names_its_peer_while_its_connection_lasts() {
+    let (_server, mut daemon, client, _) = serve(RadioState::Up);
+    // Addresses are kept lowercase; the peer is heard, but not yet asked.
+    let mut lines = client.realtime("02:00:00:00:00:0A", "microphone").await.unwrap();
+    let first = next_line(&mut lines, "RealtimeState", Duration::from_secs(1)).await;
+    assert_eq!(first, json!({"peer": mac(10), "present": false, "asked": false}));
+    until(&mut daemon, Duration::from_secs(1), |w| w.realtime.contains(&[2, 0, 0, 0, 0, 10])).await;
+
+    // The daemon hears the peer and asks it: the stream says so.
+    let mut s = daemon.state();
+    s.peers[1].address = mac(10);
+    s.realtime_asked.insert(mac(10));
+    daemon.publish(s);
+    let next = next_line(&mut lines, "RealtimeState", Duration::from_secs(1)).await;
+    assert_eq!(next, json!({"peer": mac(10), "present": true, "asked": true}));
+
+    let (_, list) = client.raw(Method::GET, "/v1/realtime", None).await.unwrap();
+    check_list("RealtimeLock", &list);
+    let typed = client.realtime_locks().await.unwrap();
+    assert_eq!((typed[0].peer.as_str(), typed[0].reason.as_str()), (mac(10).as_str(), "microphone"));
+    assert_eq!(typed[0].owner.pid, std::process::id());
+
+    drop(lines);
+    let took = until(&mut daemon, HEARTBEAT + Duration::from_secs(1), |w| w.realtime.is_empty()).await;
+    eprintln!("realtime lock released {took:?} after its connection closed");
+    assert_eq!(client.realtime_locks().await.unwrap(), vec![]);
+}
+
+#[tokio::test]
 async fn locks_on_one_type_add_up() {
     let (_server, mut daemon, client, _) = serve(RadioState::Up);
     let a = client.advertise("_x._tcp").await.unwrap();
@@ -367,6 +396,9 @@ async fn bad_requests_get_400() {
         ("/v1/advertising", br#"{"kind": "_rdlink._tcp"}"#),
         ("/v1/advertising", b"not json"),
         ("/v1/holds", b"{}"),
+        ("/v1/realtime", br#"{"peer": "02:00:00:00:00", "reason": "x"}"#),
+        ("/v1/realtime", br#"{"peer": "02:00:00:00:00:0g", "reason": "x"}"#),
+        ("/v1/realtime", br#"{"peer": "02:00:00:00:00:01"}"#),
     ] {
         let (status, v) = client.raw(Method::POST, path, Some(body)).await.unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {}", String::from_utf8_lossy(body));

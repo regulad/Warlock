@@ -88,7 +88,9 @@ warlockctl peer ADDRESS          one of them, with its services
 warlockctl events                what happens, as it happens
 warlockctl advertise TYPE        advertise a service type (e.g. _x._tcp) until Ctrl+C
 warlockctl hold REASON           keep AWDL up until Ctrl+C
-warlockctl advertising | holds   who is advertising or holding what
+warlockctl realtime ADDRESS      run a realtime group with a peer until Ctrl+C (experimental)
+warlockctl advertising | holds | realtime
+                                 who is advertising, holding or running what
 warlockctl capture -w FILE       the radio's 802.11 frames as pcapng until Ctrl+C
 ```
 

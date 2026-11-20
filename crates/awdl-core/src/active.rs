@@ -9,7 +9,11 @@
 //!   receive at 20 MHz;
 //! - the sync source's channel sequence, copied verbatim (jedbillyb reports
 //!   that copying the peer's sequence works with iOS);
-//! - no extended data-path block, whose trailing bytes we can't explain yet.
+//! - no extended data-path block, whose trailing bytes we can't explain yet;
+//! - no infrastructure network and no AirPlay solo mode, which Warlock
+//!   doesn't have (issues #4, #7);
+//! - to one peer, a UMI and a realtime group TLV (31) when a realtime
+//!   group is wanted with it (issues #5, #10).
 //!
 //! See `docs/awdl-field-observations.md`.
 
@@ -18,7 +22,8 @@ use awdl_proto::dns::DnsName;
 use awdl_proto::ieee80211::Header;
 use awdl_proto::tlv::{
     Arpa, Channel, ChannelSequence, ChannelSequenceTlv, DataPathExt, DataPathState, ElectionParams, ElectionParamsV2,
-    HtCapabilities, InfraInfo, ServiceParams, ServiceResponse, SyncParams, SyncTree, TlvBody, VersionTlv, device_class,
+    HtCapabilities, InfraInfo, RealtimeGroup, ServiceParams, ServiceResponse, SyncParams, SyncTree, TlvBody,
+    VersionTlv, device_class,
 };
 use awdl_proto::{Bytes, MacAddr};
 
@@ -45,9 +50,10 @@ pub struct TxConfig {
     pub tx_latency_us: u32,
     /// PSF period, TU.
     pub psf_interval_tu: u16,
-    /// The data path state's infrastructure channel. `None` advertises the
-    /// master's channel (what a Mac following an iPhone sent); `Some(0)` says
-    /// "no infrastructure network", as an iOS 27 iPhone does.
+    /// The data path state's infrastructure channel. `Some(0)`, the default,
+    /// says "no infrastructure network", as an iOS 27 iPhone without one
+    /// does: Warlock has none (issue #7). `None` advertises the master's
+    /// channel, what a Mac following an iPhone sent; an experiment.
     pub infra_channel: Option<u16>,
     /// Add the data path state's extension block the way an iOS 27 iPhone
     /// does: log trigger, RLFC (the master counter) and the AW and update
@@ -99,7 +105,7 @@ impl TxConfig {
             rate_500kbps: 12,
             tx_latency_us: 1000,
             psf_interval_tu: 110,
-            infra_channel: None,
+            infra_channel: Some(0),
             datapath_ext: false,
             ht_40mhz: false,
             hostname: None,
@@ -131,6 +137,23 @@ pub(crate) struct FollowerView<'a> {
     pub sequence_legacy: &'a ChannelSequence<'static>,
     pub sequence_tlv18: Option<&'a ChannelSequence<'static>>,
     pub country: [u8; 3],
+}
+
+/// Who a frame is for, and what it asks of them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Target<'a> {
+    /// Everyone, or one peer.
+    pub to: MacAddr,
+    /// The UMI code for the data path state's unicast options
+    /// ([`awdl_proto::tlv::umi`]); 0 asks nothing.
+    pub umi: u32,
+    /// A realtime group TLV (31) to carry.
+    pub rtg: Option<&'a RealtimeGroup<'static>>,
+}
+
+impl Target<'static> {
+    /// Everyone, asking nothing.
+    pub const BROADCAST: Self = Self { to: MacAddr::BROADCAST, umi: 0, rtg: None };
 }
 
 /// Our HT capabilities: 2 streams (MCS 0–15), short GI at 20 MHz, SM power
@@ -229,6 +252,7 @@ pub(crate) fn build(
     kind: u8,
     self_counter: u32,
     sequence_number: u16,
+    dest: &Target<'_>,
 ) -> Vec<u8> {
     // tx_counter counts to the start of the next *slot* (a 4-AW extended
     // AW), not the next AW: in every capture, the AW starting at a claimed
@@ -243,7 +267,7 @@ pub(crate) fn build(
     // our claims about 1.2 ms late, the radio's TX latency, as a Mac saw.
     let tx_counter = next_slot.saturating_sub(v.now).div_ceil(TU_US) as u16;
     let target = next_slot.saturating_sub(tx_counter as u64 * TU_US);
-    let header = Header::action(cfg.addr, MacAddr::BROADCAST, sequence_number);
+    let header = Header::action(cfg.addr, dest.to, sequence_number);
     let action = ActionHeader {
         version: AwdlVersion { major: 1, minor: 0 },
         subtype: kind,
@@ -298,7 +322,11 @@ pub(crate) fn build(
         trailing: Bytes::Borrowed(&[]),
     };
     let data_path = DataPathState {
-        other_flags: 0x0c20,
+        // 0x0800, UMI supported: Warlock sends UMIs (`dest.umi`), though
+        // it acts on none it receives (issue #5). 0x0020, dual-band, is
+        // still the accepted Mac's, its meaning unknown (issue #6). Not
+        // 0x0400, AirPlay solo mode, which Warlock doesn't do (issue #4).
+        other_flags: 0x0820,
         country_code: Some(v.country),
         social_channels: Some(7),
         infra: Some(InfraInfo {
@@ -308,7 +336,10 @@ pub(crate) fn build(
         infra_address: Some(cfg.addr),
         awdl_address: None,
         umi: None,
-        unicast_options: Some(Bytes::Borrowed(&[0, 0, 0, 0])),
+        // Where macOS 11's driver reads them: no AWDL address or UMI field
+        // (0x0004, 0x0010) before them, nor RSDB's (0x0008), whose length
+        // varies.
+        unicast_options: Some(Bytes::Owned(dest.umi.to_le_bytes().to_vec())),
         // The iPhone's extension flags are 0x19fd; the field-carrying bits
         // follow from the fields set here.
         ext: cfg.datapath_ext.then_some(DataPathExt {
@@ -329,7 +360,8 @@ pub(crate) fn build(
     };
     let services: Vec<TlvBody<'_>> =
         if mif { cfg.services.iter().cloned().map(TlvBody::ServiceResponse).collect() } else { Vec::new() };
-    let extra: Vec<&TlvBody<'_>> = arpa.iter().chain(services.iter()).collect();
+    let rtg = dest.rtg.map(|g| TlvBody::RealtimeGroup(g.clone()));
+    let extra: Vec<&TlvBody<'_>> = rtg.iter().chain(arpa.iter()).chain(services.iter()).collect();
     let bodies = [
         TlvBody::SyncParams(sync),
         TlvBody::ElectionParams(election),

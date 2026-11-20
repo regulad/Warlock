@@ -12,6 +12,8 @@
 //!   holds                the open holds, and who holds them
 //!   advertise TYPE       advertise a service type (e.g. _rdlink._tcp) until Ctrl+C
 //!   hold REASON          keep AWDL active until Ctrl+C
+//!   realtime             the open realtime locks, and who holds them
+//!   realtime ADDRESS     run a realtime group with a peer until Ctrl+C
 //!   events               follow events until Ctrl+C
 //!   capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w FILE|-]
 //!                        capture the radio's frames as pcapng until Ctrl+C
@@ -35,7 +37,8 @@ use std::time::{Duration, Instant};
 use warlock_client::{CaptureFilter, CaptureKind, Client, ClientError, Lines};
 
 const USAGE: &str = "usage: warlockctl [--pipe NAME] info|peers|peer ADDRESS|advertising|holds|advertise TYPE|hold \
-                     REASON|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w FILE|-]";
+                     REASON|realtime [ADDRESS]|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w \
+                     FILE|-]";
 
 fn print(v: &impl serde::Serialize) {
     println!("{}", serde_json::to_string_pretty(v).expect("JSON"));
@@ -134,6 +137,8 @@ async fn run(client: &Client, command: &str, arg: Option<&str>) -> Result<(), Cl
         ("holds", None) => print(&client.holds().await?),
         ("advertise", Some(t)) => follow(client.advertise(t).await?).await?,
         ("hold", Some(reason)) => follow(client.hold(reason).await?).await?,
+        ("realtime", None) => print(&client.realtime_locks().await?),
+        ("realtime", Some(peer)) => follow(client.realtime(peer, "warlockctl").await?).await?,
         ("events", None) => follow(client.events().await?).await?,
         _ => unreachable!("checked in main"),
     }
@@ -168,8 +173,10 @@ async fn main() -> ExitCode {
     }
     let client = Client::new(pipe.unwrap_or_else(|| warlock_client::PIPE.into()));
     let (command, arg) = match args.as_slice() {
-        [c] if ["info", "peers", "advertising", "holds", "events"].contains(&c.as_str()) => (c.clone(), None),
-        [c, a] if ["peer", "advertise", "hold"].contains(&c.as_str()) => (c.clone(), Some(a.clone())),
+        [c] if ["info", "peers", "advertising", "holds", "realtime", "events"].contains(&c.as_str()) => {
+            (c.clone(), None)
+        }
+        [c, a] if ["peer", "advertise", "hold", "realtime"].contains(&c.as_str()) => (c.clone(), Some(a.clone())),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

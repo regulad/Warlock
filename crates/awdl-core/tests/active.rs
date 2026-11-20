@@ -327,3 +327,122 @@ fn advertised_services_reach_a_listening_engine() {
     assert!(p.services.is_empty());
     assert_eq!(p.services_sui, Some(2));
 }
+
+/// Two taking-part engines on one simulated air, polled at the times they
+/// ask for: a frame reaches the other engine when it's on the sender's
+/// channel. With no TX latency, so a frame is heard the moment it's built.
+/// Our engine's frames go to `ours`; `channels` are the engines' own, kept
+/// from call to call.
+fn share_air(
+    us: &mut Engine,
+    them: &mut Engine,
+    channels: &mut [u8; 2],
+    now: &mut u64,
+    until: u64,
+    ours: &mut Vec<Sent>,
+) {
+    while *now < until {
+        let actions = [us.poll(*now), them.poll(*now)];
+        for (i, actions) in actions.into_iter().enumerate() {
+            for a in actions {
+                match a {
+                    Action::Hop(c) => channels[i] = c,
+                    Action::Transmit { mpdu, kind, .. } => {
+                        let meta = RxMeta { tsf: *now, channel: channels[i], rssi_dbm: -40 };
+                        if channels[1 - i] == channels[i] {
+                            if i == 0 {
+                                them.on_frame(meta, &mpdu)
+                            } else {
+                                us.on_frame(meta, &mpdu)
+                            };
+                        }
+                        if i == 0 {
+                            let source = us.sync_source().map(|p| p.addr);
+                            ours.push(Sent {
+                                tsf: *now,
+                                master: us.master(),
+                                source,
+                                channel: channels[0],
+                                kind,
+                                mpdu,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        *now = [us.next_wakeup(*now), them.next_wakeup(*now)].into_iter().flatten().min().unwrap().max(*now + 1);
+    }
+}
+
+/// A frame's UMI code and realtime group TLV.
+fn umi_and_rtg(mpdu: &[u8]) -> (MacAddr, Option<u32>, Option<MacAddr>) {
+    let Ok(Some(Frame::Action { header, action })) = parse(mpdu) else { panic!("our frame doesn't parse") };
+    let Some(Ok(TlvBody::DataPathState(d))) = action.find(kind::DATA_PATH_STATE).map(|t| t.decode()) else { panic!() };
+    let rtg = action.find(kind::REALTIME_GROUP).map(|t| match t.decode() {
+        Ok(TlvBody::RealtimeGroup(g)) => g.rtg_id,
+        other => panic!("{other:?}"),
+    });
+    (header.addr1, d.umi_code(), rtg)
+}
+
+/// A realtime group: a few start UMIs to the peer alone, in its slots on our
+/// channel, with TLV 31, which our frames then keep while it's wanted; on
+/// release, a few stop UMIs and no TLV. The link, and the peer's view of us,
+/// stay as they were (issue #10).
+#[test]
+fn a_realtime_group_starts_and_stops_with_umis() {
+    use awdl_proto::tlv::umi;
+    use std::collections::BTreeSet;
+
+    const PEER: MacAddr = MacAddr([0x02, 0x57, 0x4c, 0x00, 0x00, 0x02]);
+    let quick = |addr, metric| {
+        let mut tx = TxConfig::new(addr);
+        tx.self_metric = metric;
+        tx.tx_latency_us = 0;
+        Engine::new(Config::active(tx))
+    };
+    let (mut us, mut them) = (quick(US, 60), quick(PEER, 600));
+    let (mut now, mut channels) = (1_000_000u64, [0u8; 2]);
+    let mut sent = Vec::new();
+    share_air(&mut us, &mut them, &mut channels, &mut now, 8_000_000, &mut sent);
+    assert_eq!((us.master(), us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)), "we follow the peer");
+    assert!(sent.iter().all(|s| s.kind != TxKind::Umi));
+    let before = sent.len();
+
+    us.set_realtime_peers(&BTreeSet::from([PEER]));
+    assert!(!us.realtime_asked(PEER));
+    share_air(&mut us, &mut them, &mut channels, &mut now, 12_000_000, &mut sent);
+    assert!(us.realtime_asked(PEER));
+    let starts: Vec<&Sent> = sent[before..].iter().filter(|s| s.kind == TxKind::Umi).collect();
+    assert_eq!(starts.len(), 3, "a few start UMIs, then no more");
+    let sched = us.peer(PEER).unwrap().schedule.unwrap();
+    for s in &starts {
+        assert_eq!(umi_and_rtg(&s.mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_START), Some(US)));
+        assert!(sched.visits(s.channel));
+    }
+    for s in sent[before..].iter().filter(|s| s.kind != TxKind::Umi) {
+        assert_eq!(umi_and_rtg(&s.mpdu), (MacAddr::BROADCAST, Some(0), Some(US)), "{:?}", s.kind);
+    }
+    let during = sent.len();
+
+    us.set_realtime_peers(&BTreeSet::new());
+    share_air(&mut us, &mut them, &mut channels, &mut now, 16_000_000, &mut sent);
+    assert!(!us.realtime_asked(PEER));
+    let stops: Vec<&Sent> = sent[during..].iter().filter(|s| s.kind == TxKind::Umi).collect();
+    assert_eq!(stops.len(), 3, "a few stop UMIs, then no more");
+    for s in &stops {
+        assert_eq!(umi_and_rtg(&s.mpdu), (PEER, Some(umi::CONTINUITY_REALTIME_GROUP_STOP), None));
+    }
+    for s in sent[during..].iter().filter(|s| s.kind != TxKind::Umi) {
+        assert_eq!(umi_and_rtg(&s.mpdu), (MacAddr::BROADCAST, Some(0), None));
+    }
+
+    // The link held throughout: we still follow the peer, and it still
+    // takes us as a valid peer that follows it.
+    assert_eq!((us.master(), us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)));
+    let seen = them.peer(US).expect("the peer hears us");
+    assert!(seen.is_valid() && now.saturating_sub(seen.last_seen) < 1_000_000);
+    assert_eq!(seen.election.map(|e| e.master), Some(PEER));
+    wireshark_accepts(&sent);
+}

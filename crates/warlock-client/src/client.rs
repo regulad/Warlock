@@ -192,6 +192,18 @@ impl Client {
         self.lock("/v1/holds", &HoldRequest { reason: reason.into() }).await
     }
 
+    /// `GET /v1/realtime`.
+    pub async fn realtime_locks(&self) -> Result<Vec<RealtimeLock>, ClientError> {
+        self.get("/v1/realtime").await
+    }
+
+    /// `POST /v1/realtime`: runs a realtime group with `peer` (an AWDL
+    /// address) for as long as the returned stream is kept. Its lines are
+    /// [`RealtimeState`]s.
+    pub async fn realtime(&self, peer: &str, reason: &str) -> Result<Lines, ClientError> {
+        self.lock("/v1/realtime", &RealtimeRequest { peer: peer.into(), reason: reason.into() }).await
+    }
+
     /// `GET /v1/events`. Its lines are [`Event`]s.
     pub async fn events(&self) -> Result<Lines, ClientError> {
         self.raw_stream(Method::GET, "/v1/events", None).await

@@ -249,6 +249,34 @@ pub struct Hold {
     pub owner: Owner,
 }
 
+/// `POST /v1/realtime`'s body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealtimeRequest {
+    /// The peer's AWDL address.
+    pub peer: String,
+    /// Why, for logs and `GET /v1/realtime`.
+    pub reason: String,
+}
+
+/// A line of the realtime stream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealtimeState {
+    pub peer: String,
+    /// Whether Warlock hears the peer.
+    pub present: bool,
+    /// Whether Warlock has asked the peer to start the group since it last
+    /// appeared; not whether it did.
+    pub asked: bool,
+}
+
+/// An entry of `GET /v1/realtime`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealtimeLock {
+    pub peer: String,
+    pub reason: String,
+    pub owner: Owner,
+}
+
 /// A line of `GET /v1/events`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]

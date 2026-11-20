@@ -219,11 +219,12 @@ Pinned decisions:
     - keeps a spare instance listening, so concurrent clients don't get `ERROR_PIPE_BUSY`.
   - **Locks (Parker, 2026-11-18; replaces the WebSocket session decided 2026-11-17):** whatever an app asks Warlock to keep doing lasts exactly as long as the request that asked for it. A lock is a plain HTTP request whose response never ends on its own:
     - `POST /v1/advertising {type}`: the service type is advertised in our frames (registration itself stays with Windows; `docs/service-discovery.md`);
-    - `POST /v1/holds {reason}`: an activity hold ("I'm using AWDL now": the link kept active).
+    - `POST /v1/holds {reason}`: an activity hold ("I'm using AWDL now": the link kept active);
+    - `POST /v1/realtime {peer, reason}` (2026-11-19, issue #10): a Continuity Real Time Group with a peer, so an iPhone sends Low-Latency Wi-Fi. Warlock sends the peer a few UMIs (`0x17000000`) with TLV 31 in its slots, keeps TLV 31 in its frames while any lock is open, and sends a few stop UMIs (`0x18000000`) when the last closes. Experimental: from static analysis of iOS 27.2.1, untested on an iPhone.
 
     The response streams the lock's state as JSON Lines (OpenAPI 3.2 `itemSchema`), on every change and at least every 2 s. That heartbeat is how a vanished client is noticed: a write to a closed pipe fails at once. When the connection closes, whether the app exits cleanly or crashes, the lock is released, so nothing can leak. Precedent: systemd's inhibitor locks are a file descriptor whose closing releases them. `GetNamedPipeClientProcessId` names the owning process in logs and `warlockctl`.
   - Why not a WebSocket: with only locks to hold, a session protocol was more machinery than needed. Each lock as its own request needs no message protocol, needs only HTTP over a named pipe from clients (what Docker clients already do), and fits in one OpenAPI document.
-  - Plain HTTP endpoints, mostly for `warlockctl`: `GET /v1/info`, `/v1/peers`, `/v1/advertising`, `/v1/holds`; `GET /v1/events` streams events for as long as it's open, holding nothing. One error model (Docker's `{"message"}`).
+  - Plain HTTP endpoints, mostly for `warlockctl`: `GET /v1/info`, `/v1/peers`, `/v1/advertising`, `/v1/holds`, `/v1/realtime`; `GET /v1/events` streams events for as long as it's open, holding nothing. One error model (Docker's `{"message"}`).
   - No capture endpoint (Parker, 2026-11-18): capture on the "Warlock AWDL" adapter with Wireshark. *Reversed 2026-11-19:* `GET /v1/capture` and a Wireshark extcap plugin (W6).
   - Browsing needs nothing in the API: Warlock writes peers' TLV records onto its adapter as mDNS, and apps browse with Windows' own DNS-SD (`docs/service-discovery.md`).
   - The data plane stays the Wintun NIC; the API is control only.
