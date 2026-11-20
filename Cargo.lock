@@ -51,7 +51,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awdl-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "awdl-proto",
  "warlock-capture",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "awdl-proto"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "warlock-capture",
 ]
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "devourer-sys"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cmake",
  "libusb1-sys",
@@ -1273,7 +1273,7 @@ dependencies = [
 
 [[package]]
 name = "warlock"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "awdl-core",
  "awdl-proto",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "warlock-api"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "warlock-capture"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "pcap-file",
  "radiotap",
@@ -1319,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "warlock-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "http",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "warlock-msi"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "sha2",
  "windows-sys",
@@ -1341,14 +1341,14 @@ dependencies = [
 
 [[package]]
 name = "warlock-msi-ca"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "windows-sys",
 ]
 
 [[package]]
 name = "warlock-radio"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "awdl-core",
  "awdl-proto",
@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "warlock-tun"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "sha2",
  "windows",
@@ -1373,14 +1373,14 @@ dependencies = [
 
 [[package]]
 name = "warlock-usb"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "windows-sys",
 ]
 
 [[package]]
 name = "warlockctl"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
