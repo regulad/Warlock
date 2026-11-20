@@ -7,7 +7,7 @@ openapi: 3.2.0
 info:
   title: Warlock admin API
   # Warlock's version, as api/openapi.yaml's (a test keeps them equal).
-  version: 0.1.3
+  version: 0.2.0
   license:
     name: GPL-2.0-only OR AGPL-3.0-or-later
     identifier: GPL-2.0-only OR AGPL-3.0-or-later
