@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! Warlock's own PSFs and MIFs, as a follower.
+//! Warlock's own PSFs and MIFs, as master and as a follower.
 //!
 //! The TLV set and fixed values are modelled on a macOS 11 Mac following an
 //! iOS 27 iPhone in our captures, a peer iOS 27 demonstrably accepts (it
@@ -7,8 +7,10 @@
 //! - our own address;
 //! - HT capabilities for 20 MHz only, and no VHT container, because we
 //!   receive at 20 MHz;
-//! - the sync source's channel sequence, copied verbatim (jedbillyb reports
-//!   that copying the peer's sequence works with iOS);
+//! - our own channel sequence, built the way Apple devices build theirs, on
+//!   the social channels, whoever we follow (see
+//!   [`SocialChannels::idle_plan`]); a peer's only inside a realtime group
+//!   with it (issue #15);
 //! - no extended data-path block, whose trailing bytes we can't explain yet;
 //! - no infrastructure network and no AirPlay solo mode, which Warlock
 //!   doesn't have (issues #4, #7);
@@ -28,6 +30,7 @@ use awdl_proto::tlv::{
 use awdl_proto::{Bytes, MacAddr};
 
 use crate::TU_US;
+use crate::schedule::SocialChannels;
 
 /// What Warlock announces about itself, and how it transmits.
 #[derive(Clone, Debug)]
@@ -65,11 +68,14 @@ pub struct TxConfig {
     /// A host name for an ARPA TLV in MIFs (`<name>.local`), as an iPhone
     /// sends one.
     pub hostname: Option<String>,
-    /// Our channel sequence while we're master: a primary channel per slot,
-    /// 0 for an empty slot, which repeats the one before. Encoded the way
-    /// Apple devices encode theirs (see [`master_sequences`]). The default
-    /// is an idle iPhone's: 6 in slots 0 and 8, 149 in slots 2 and 10.
-    pub master_sequence: [u8; 16],
+    /// The AWDL social channels we use. Our channel sequence, as master and
+    /// as a follower, is Apple's idle plan on them, its free slots kept on
+    /// the 5 GHz one ([`SocialChannels::idle_plan`], [`SocialChannels::kept`]).
+    pub social: SocialChannels,
+    /// A plan to use in place of the idle one: a primary channel per slot, 0
+    /// for a free slot, which is kept the same way. An experiment; `None` by
+    /// default.
+    pub plan_override: Option<[u8; 16]>,
     /// On becoming master, start a new AW grid rather than carry on the one
     /// we were following. An experiment; off by default.
     pub master_fresh_grid: bool,
@@ -109,7 +115,8 @@ impl TxConfig {
             datapath_ext: false,
             ht_40mhz: false,
             hostname: None,
-            master_sequence: [6, 0, 149, 0, 0, 0, 0, 0, 6, 0, 149, 0, 0, 0, 0, 0],
+            social: SocialChannels::DEFAULT,
+            plan_override: None,
             master_fresh_grid: false,
             tlv_overrides: Vec::new(),
             aw_seq_offset: 0,
@@ -117,6 +124,16 @@ impl TxConfig {
             services: Vec::new(),
             services_sui: 0,
         }
+    }
+
+    /// Our plan: Apple's idle one on our social channels, or the override.
+    pub fn plan(&self) -> [u8; 16] {
+        self.plan_override.unwrap_or_else(|| self.social.idle_plan())
+    }
+
+    /// Our channel sequence: the plan, its free slots kept.
+    pub fn sequence(&self) -> [u8; 16] {
+        self.social.kept(self.plan())
     }
 }
 
@@ -234,12 +251,12 @@ fn opclass_channel(primary: u8, forty: bool) -> Channel {
     Channel::OpClass { number: primary, opclass }
 }
 
-/// Our sequence as master, as sent: legacy (embedded in the sync
-/// parameters) and opclass (TLV 18), four slots per step, empty slots
-/// repeating the channel before them.
-pub(crate) fn master_sequences(cfg: &TxConfig) -> (ChannelSequence<'static>, ChannelSequence<'static>) {
+/// Our sequence as sent: legacy (embedded in the sync parameters) and
+/// opclass (TLV 18), four slots per step, with Apple's fill ("repeat
+/// current"), though every slot names its channel.
+pub(crate) fn own_sequences(cfg: &TxConfig) -> (ChannelSequence<'static>, ChannelSequence<'static>) {
     let encode = |f: fn(u8, bool) -> Channel| {
-        let slots: Vec<Channel> = cfg.master_sequence.iter().map(|&c| f(c, cfg.ht_40mhz)).collect();
+        let slots: Vec<Channel> = cfg.sequence().iter().map(|&c| f(c, cfg.ht_40mhz)).collect();
         ChannelSequence::new(0, 3, 0xffff, &slots).expect("16 slots, one encoding")
     };
     (encode(legacy_channel), encode(opclass_channel))

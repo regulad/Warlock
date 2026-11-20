@@ -15,11 +15,60 @@ use crate::{AWS_PER_SLOT, SLOTS};
 /// Fill value meaning "an empty slot repeats the current channel".
 const FILL_REPEAT: u16 = 0xffff;
 
+/// The AWDL social channels: where Apple devices meet, whatever else they
+/// do. macOS 11's `IO80211AWDLPeerManager::configureValidAWDLChannels` picks
+/// 6 on 2.4 GHz and 149 on 5 GHz, with 44 as the 5 GHz alternative where
+/// 149 isn't allowed (minintosh, US, 2026-11-20: "social channel 2G: 6 on
+/// 5G: 149 5G Alt: 44").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SocialChannels {
+    /// The 2.4 GHz one.
+    pub two_ghz: u8,
+    /// The 5 GHz one.
+    pub five_ghz: u8,
+}
+
+impl SocialChannels {
+    /// 6 and 149, as in the US.
+    pub const DEFAULT: Self = Self { two_ghz: 6, five_ghz: 149 };
+
+    /// Apple's idle schedule on these channels, as a plan: a primary channel
+    /// per slot, 0 for a slot left free.
+    ///
+    /// Apple devices build their sequence from a table of slot types per
+    /// schedule state, whatever peer they follow: iOS 27.2.1's
+    /// `_channelSeqSlotTypes` (IO80211DriverKit, 56 states) and macOS 11's
+    /// (IO80211Family, 34 states). Their `Idle` rows agree: the 5 GHz
+    /// social channel in slots 0–2 and 9–10, the 2.4 GHz one in slot 8, and
+    /// every other slot off AWDL (on the device's infrastructure network, or
+    /// with AirPlay services there). Their discovery, idle, low-power and
+    /// data rows all keep 6 in slot 8 and 149 in slots 2 and 10: where
+    /// devices that aren't synced to each other meet. A Mac logged exactly
+    /// this sequence as `Idle` (`docs/awdl-field-observations.md`, "How Apple
+    /// devices choose their channel sequence").
+    pub fn idle_plan(self) -> [u8; SLOTS] {
+        let (s2, s5) = (self.two_ghz, self.five_ghz);
+        [s5, s5, s5, 0, 0, 0, 0, 0, s2, s5, s5, 0, 0, 0, 0, 0]
+    }
+
+    /// The sequence a plan gives with each free slot kept on the 5 GHz social
+    /// channel and named there. A free slot is ours to spend away from AWDL;
+    /// until something does, we stay on the social channel, where we hear
+    /// other clusters, and say so: peers send us unicast only in slots we
+    /// name (`docs/awdl-field-observations.md`, "Unicast only in explicit
+    /// slots"), and naming only the plan's slots kept an iPhone's replies
+    /// waiting up to ~1 s.
+    pub fn kept(self, plan: [u8; SLOTS]) -> [u8; SLOTS] {
+        plan.map(|c| if c == 0 { self.five_ghz } else { c })
+    }
+}
+
 /// The same sequence with every slot the fill repeats written out
 /// explicitly, in the same encoding: where its sender is, made available for
-/// unicast. A follower advertises this, since it hops the repeats too: a peer
-/// sends us unicast only in our explicit slots, and an iPhone held its reply
-/// ~420 ms for one when we advertised a master's sparse sequence verbatim.
+/// unicast. We advertise this when we take a peer's sequence (only inside a
+/// realtime group, now), since we hop the repeats too: a peer sends us
+/// unicast only in our explicit slots, and an iPhone held its reply ~420 ms
+/// for one when we advertised a master's sparse sequence verbatim.
 /// Unchanged when the fill isn't "repeat current" or every slot is empty.
 pub fn widen(seq: &ChannelSequence<'_>) -> ChannelSequence<'static> {
     let channels: Vec<_> = seq.channels().collect();
@@ -132,6 +181,23 @@ mod tests {
         assert_eq!(s.channel_at(4 * 9 + 1), Some(6)); // slot 9 empty: repeats slot 8
         assert_eq!(s.channel_at(64), Some(120)); // wraps after 16 slots
         assert!(s.visits(6) && !s.visits(44));
+    }
+
+    #[test]
+    fn the_idle_plan_is_apples_and_free_slots_stay_on_the_5_ghz_channel() {
+        let plan = SocialChannels::DEFAULT.idle_plan();
+        assert_eq!(plan, [149, 149, 149, 0, 0, 0, 0, 0, 6, 149, 149, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            SocialChannels::DEFAULT.kept(plan),
+            [149, 149, 149, 149, 149, 149, 149, 149, 6, 149, 149, 149, 149, 149, 149, 149]
+        );
+        // Kept on the social channel, not left to repeat the slot before:
+        // the free slot after a 6 is 149.
+        let plan = [6, 0, 0, 0, 0, 0, 0, 0, 6, 0, 149, 0, 0, 0, 0, 0];
+        assert_eq!(SocialChannels::DEFAULT.kept(plan)[1], 149);
+        // Where 149 isn't allowed, 44.
+        let alt = SocialChannels { two_ghz: 6, five_ghz: 44 };
+        assert_eq!(alt.kept(alt.idle_plan()).iter().filter(|&&c| c == 44).count(), 15);
     }
 
     #[test]

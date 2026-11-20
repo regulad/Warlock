@@ -188,11 +188,12 @@ fn main() {
     tx.ht_40mhz = env("WARLOCK_HT40").is_some();
     tx.hostname = env("WARLOCK_HOSTNAME");
     // At 40 MHz we receive 40 MHz: say so in our HT capabilities and our
-    // sequence as master.
+    // sequence.
     tx.ht_40mhz = env("WARLOCK_HT40").is_some() || width == 40;
-    if let Some(v) = env("WARLOCK_MASTER_SEQ") {
-        let slots: Vec<u8> = v.split(',').map(|c| c.trim().parse().expect("WARLOCK_MASTER_SEQ")).collect();
-        tx.master_sequence = slots.try_into().expect("WARLOCK_MASTER_SEQ: 16 channels");
+    // A plan in place of Apple's idle one: 16 channels, 0 for a free slot.
+    if let Some(v) = env("WARLOCK_PLAN") {
+        let slots: Vec<u8> = v.split(',').map(|c| c.trim().parse().expect("WARLOCK_PLAN")).collect();
+        tx.plan_override = Some(slots.try_into().expect("WARLOCK_PLAN: 16 channels"));
     }
     tx.master_fresh_grid = env("WARLOCK_FRESH_GRID").is_some();
     if let Some(m) = env("WARLOCK_SELF_METRIC") {
@@ -222,14 +223,14 @@ fn main() {
         }
     }
     println!(
-        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, metric {}, sequence as master \
-         {:?}{}, version {}/{}, TLV overrides {:?}",
+        "advertising: infra channel {:?}, data path ext {}, HT40 {}, host name {:?}, metric {}, sequence {:?}{}, \
+         version {}/{}, TLV overrides {:?}",
         tx.infra_channel,
         tx.datapath_ext,
         tx.ht_40mhz,
         tx.hostname,
         tx.self_metric,
-        tx.master_sequence,
+        tx.sequence(),
         if tx.master_fresh_grid { " (fresh grid)" } else { "" },
         tx.version,
         tx.device_class,

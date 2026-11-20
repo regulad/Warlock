@@ -288,7 +288,8 @@ pub struct Peer {
     /// See `sequence_legacy`.
     pub sequence_tlv18: Option<ChannelSequence<'static>>,
     /// Both, with the repeated slots written out ([`crate::schedule::widen`]):
-    /// what we advertise while following it.
+    /// what we advertise while we take its sequence, inside a realtime group
+    /// with it.
     pub sequences_widened: Option<(ChannelSequence<'static>, Option<ChannelSequence<'static>>)>,
     /// Its country code (data path state).
     pub country: Option<[u8; 3]>,
@@ -341,7 +342,7 @@ impl Peer {
     }
 }
 
-/// Our channel sequence as master, as sent and as a schedule.
+/// Our channel sequence, as sent and as a schedule.
 #[derive(Clone, Debug)]
 struct OwnSequence {
     legacy: ChannelSequence<'static>,
@@ -358,7 +359,7 @@ pub struct Engine {
     source: Option<MacAddr>,
     outbox: Vec<Action>,
     tx: TxState,
-    /// Our sequence, for when we're master.
+    /// Our sequence, as master and as a follower (see `sequence_source`).
     own_sequence: Option<OwnSequence>,
     /// Our AW grid while we're master.
     own_clock: Option<OwnClock>,
@@ -375,7 +376,7 @@ impl Engine {
     /// An engine with no peers.
     pub fn new(config: Config) -> Self {
         let own_sequence = config.transmit.as_ref().map(|tx| {
-            let (legacy, tlv18) = active::master_sequences(tx);
+            let (legacy, tlv18) = active::own_sequences(tx);
             let schedule = ChannelSchedule::from_sequence(&legacy).expect("16 slots");
             OwnSequence { legacy, tlv18, schedule }
         });
@@ -986,19 +987,41 @@ impl Engine {
         }
     }
 
-    /// Our AW position, the channel our sequence (as master) or the sync
-    /// source's puts us on at `now`, and whether that slot names it
-    /// explicitly.
+    /// Our AW position, the channel our sequence (or `sequence_source`'s)
+    /// puts us on at `now`, and whether that slot names it explicitly.
     fn schedule_at(&self, now: u64) -> Option<(AwPosition, u8, bool)> {
         let pos = self.position(now)?;
-        let sched =
-            if self.is_master() { self.own_sequence.as_ref()?.schedule } else { self.sync_source()?.schedule? };
+        let sched = match self.sequence_source() {
+            Some(src) => src.schedule?,
+            None => self.own_sequence.as_ref()?.schedule,
+        };
         Some((pos, sched.channel_at(pos.aw_seq)?, sched.is_explicit(pos.aw_seq)))
     }
 
+    /// The peer whose channel sequence we take in place of our own: the one
+    /// we sync to, while it's in our realtime group. Otherwise none: as Apple
+    /// devices do, we follow a master's timing but keep our own channels
+    /// (issue #15).
+    ///
+    /// Inside a realtime group, an iPhone builds the group's sequence itself
+    /// (iOS 27.2.1's `RealTimeGroup` state has no slot template; its
+    /// `composeRTGChannelSequence` makes one): in Koala's trial 20, 149 in
+    /// all 16 slots, which Warlock took as it then took every sync source's,
+    /// and the iPhone's Low-Latency Wi-Fi reached us. Whether Apple's other
+    /// members compose the group's sequence or take it is not yet known; until
+    /// it is, this is the one place we copy a peer's.
+    fn sequence_source(&self) -> Option<&Peer> {
+        if self.is_master() {
+            return None;
+        }
+        let src = self.sync_source()?;
+        self.realtime_joined(src.addr).then_some(src)
+    }
+
     /// The cluster as our frames describe it: as master, ourselves and our
-    /// own grid and sequence; otherwise we follow the sync source, one hop
-    /// further from the master than it is.
+    /// own grid; otherwise we follow the sync source's grid, one hop further
+    /// from the master than it is. Our own sequence either way, but for
+    /// `sequence_source`'s.
     fn follower_view(&self, now: u64) -> Option<FollowerView<'_>> {
         if self.is_master() {
             let tx = self.config.transmit.as_ref()?;
@@ -1026,6 +1049,17 @@ impl Engine {
         let src = self.sync_source()?;
         let e = src.election?;
         let pos = self.position(now)?;
+        let (sequence_legacy, sequence_tlv18) = match self.sequence_source() {
+            // Its sequence, with the repeats we hop too made explicit.
+            Some(s) => {
+                let (legacy, tlv18) = s.sequences_widened.as_ref()?;
+                (legacy, tlv18.as_ref())
+            }
+            None => {
+                let own = self.own_sequence.as_ref()?;
+                (&own.legacy, Some(&own.tlv18))
+            }
+        };
         Some(FollowerView {
             now,
             channel: src.channel,
@@ -1037,9 +1071,8 @@ impl Engine {
             sync_parent: src.addr,
             aw_seq: pos.aw_seq,
             next_boundary: src.clock.next_boundary(now)?,
-            // Its sequence, with the repeats we hop too made explicit.
-            sequence_legacy: &src.sequences_widened.as_ref()?.0,
-            sequence_tlv18: src.sequences_widened.as_ref()?.1.as_ref(),
+            sequence_legacy,
+            sequence_tlv18,
             country: src.country.unwrap_or(*b"US\0"),
         })
     }

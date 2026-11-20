@@ -400,6 +400,75 @@ Widening didn't stop the iPhone from talking to us, contrary to the "pin"
 warning in prior-art.md (that one was about pinning one channel in all 16
 slots).
 
+Since issue #15, Warlock no longer takes the master's sequence (see the
+next section). It advertises its own, with every slot it's on named the
+same way.
+
+## How Apple devices choose their channel sequence (2026-11-20)
+
+An iPhone scanning a Koala QR code never found Warlock: Warlock was
+following an Apple TV (3rd generation) that stays on 44 in all 16 slots, and
+had copied that sequence, while the iPhone and a Mac met on 6, 149 and their
+infrastructure channel 120 and never visit 44 (issue #15). Static analysis
+of macOS 11.7's IO80211Family (x86_64) and iOS 27.2.1's IO80211DriverKit
+(the DriverKit shared cache of 24B156) shows how Apple devices build theirs.
+
+- **A template per schedule state.** `IO80211AWDLPeerManager::
+  setChannelSequenceByState` fills the 16 slots from a row of slot types
+  for the current schedule state: macOS 11's table is at `0x11f080` (34
+  states, copied into the peer manager by its constructor), iOS 27.2.1's is
+  `_channelSeqSlotTypes` (56 states). Slot types include off AWDL, "master
+  channel 1" (the 2.4 GHz social channel, 6), "master channel 2" (the 5 GHz
+  one, 149, else 6), the infrastructure channel under conditions (else off),
+  and, in realtime states, preferred and negotiated data channels. The
+  social channels come from `configureValidAWDLChannels`: on minintosh,
+  `social channel 2G: 6 on 5G: 149 5G Alt: 44 country code: US` and
+  `strategy:AwdlStateMachine master channel 1=>6 master channel 2=>149`.
+- **No slot type is "the master's channel".** A follower takes its master's
+  timing and builds its channels from the same templates as a master: in
+  `mac-iphone149.pcapng` the iPhone, master, sent `118 0 151 0 0 0 0 0 6 0
+  151 …` (its infrastructure channel 120 in slot 0) while the Mac and an
+  iOS device following it sent their own, without 118. Copying a peer's
+  sequence happens only in `followPeerChannelSequence`: when AirPlaying to a
+  peer whose data path state sets flag `0x0080` ("follow channel sequence",
+  read in macOS 11's `parseAwdlDataPathTLVAndTakeAction`), and on iOS 27
+  also in a ranging follow mode. Inside a realtime group, iOS 27's
+  `RealTimeGroup` row is empty: `composeRTGChannelSequence` builds that
+  sequence, which hasn't been analysed yet.
+- **The templates are what the devices log** (5 GHz social channel 149,
+  2.4 GHz 6, `-` off AWDL):
+
+  | State | Template | Logged |
+  |---|---|---|
+  | `Idle` (both) | `149 149 149 - - - - - 6 149 149 - - - - -`¹ | a Mac: `[149 149 149 0 0 0 0 0 6 149 149 0 0 0 0 0] Idle` |
+  | `Low Power` (macOS 11) | `149 - - - - - - - 6 149 149 - - - - -`¹ | a Mac: `[149 0 0 0 0 0 0 0 6 149 149 0 0 0 0 0] Low Power` |
+  | `Discovery` (both) | `149 149 149 149 - - - - 6 149 149 149 - - - -`¹ | an iOS device, on air: `151 151 151 151 0 0 0 0 6 151 151 151 0 0 0 0` |
+  | 31 (iOS 27), "Infra BE RealTime + No Cached Peers + LP" | `infra - 149 - - - - - 6 - 149 - - - - -` | the iPhone, alone: `[120 0 149 0 0 0 0 0 6 0 149 0 0 0 0 0]` |
+
+  ¹ Slots 6–7 and 14–15 hold the infrastructure channel only with AirPlay
+  services.
+- **Where unsynced devices meet.** The discovery, idle, low-power and data
+  rows all keep 6 in slot 8 and 149 in slots 2 and 10.
+- **Empty means off AWDL**, on the infrastructure network, though the fill
+  is "repeat current" (`0xffff`): minintosh logged `AWDL ON:[infra(120)
+  60%]` with 10 of 16 slots empty and `infra(120) 72%` with 12. That's why
+  Apple devices take no unicast there ("Unicast only in explicit slots").
+- **The social channel map says which social channels a device can use,
+  not which it visits.** Every iPhone and Mac in our captures sends `0x0007`
+  (6, 44 and 149), though none of their sequences visits 44.
+
+So Warlock now builds its sequence the same way, as master and as a
+follower: Apple's `Idle` plan on its social channels, 6 and 149
+(`SocialChannels::idle_plan`). Warlock has no infrastructure network, so
+its free slots stay on 149 and are named there (`SocialChannels::kept`):
+`149 ×8, 6, 149 ×7`. Peers send unicast only in named slots, and naming
+only the plan's would bring back the waits measured above. A free slot is
+the place for anything Warlock later does away from AWDL (a visit to
+another channel, say), which would leave it empty. Inside a realtime group
+with the peer it syncs to, Warlock still takes that peer's sequence, as it
+did every sync source's before: an iPhone's group sequence (149 in all 16
+slots in Koala's trial 20) carried its Low-Latency Wi-Fi to us.
+
 ## Waking AWDL over Bluetooth LE (2026-11-17)
 
 Apple devices bring AWDL up when a nearby device asks over Bluetooth LE, in

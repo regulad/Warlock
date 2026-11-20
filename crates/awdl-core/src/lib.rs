@@ -33,7 +33,7 @@ pub use active::TxConfig;
 pub use clock::{AwClock, AwPosition, Observed, OwnClock, SyncClaim};
 pub use election::{ElectionInfo, MasterRank};
 pub use engine::{Action, Config, Engine, Event, Peer, RxMeta, TxKind};
-pub use schedule::ChannelSchedule;
+pub use schedule::{ChannelSchedule, SocialChannels};
 
 /// One time unit, in µs.
 pub const TU_US: u64 = 1024;

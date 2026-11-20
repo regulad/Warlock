@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! Active mode on replayed captures: an engine configured to transmit is fed
-//! a capture with an iPhone master and polled at the times it asks for. Its
-//! hops must follow the master's sequence, it must send one MIF per slot and
-//! PSFs at their period, and its frames must parse back and pass Wireshark's
-//! dissector cleanly. Needs the local corpus (and tshark for the last check).
+//! a capture with an iPhone master and polled at the times it asks for. It
+//! must keep its own sequence (Apple's idle plan on 6 and 149) whoever it
+//! follows, send one MIF per slot and PSFs at their period, and its frames
+//! must parse back and pass Wireshark's dissector cleanly. Needs the local
+//! corpus (and tshark for the last check).
 
 use std::path::Path;
 use std::process::Command;
@@ -15,6 +16,19 @@ use awdl_proto::{Frame, MacAddr, parse};
 
 const US: MacAddr = MacAddr([0x02, 0x57, 0x4c, 0x00, 0x00, 0x01]);
 const IPHONE: MacAddr = MacAddr([0x76, 0x56, 0x82, 0x58, 0x57, 0x70]);
+/// An Apple TV (3rd generation) that stays on 44 in every slot.
+const ATV3: MacAddr = MacAddr([0xb6, 0x59, 0x4e, 0xbd, 0xed, 0xa5]);
+/// Our default sequence: Apple's idle plan on 6 and 149, its free slots
+/// kept on 149.
+const OURS: [u8; 16] = [149, 149, 149, 149, 149, 149, 149, 149, 6, 149, 149, 149, 149, 149, 149, 149];
+
+/// The primary channel per slot of a frame's sequence, as its sync
+/// parameters carry it.
+fn advertised(mpdu: &[u8]) -> Vec<u8> {
+    let Ok(Some(Frame::Action { action, .. })) = parse(mpdu) else { panic!("our frame doesn't parse") };
+    let Some(Ok(TlvBody::SyncParams(sp))) = action.find(kind::SYNC_PARAMS).map(|t| t.decode()) else { panic!() };
+    sp.channel_sequence.channels().map(|c| c.primary()).collect()
+}
 
 struct Sent {
     tsf: u64,
@@ -98,21 +112,26 @@ fn follows_an_iphone_master_and_sends_well_formed_frames() {
         hops.len(),
         hops[..hops.len().min(6)].iter().map(|h| h.1).collect::<Vec<_>>()
     );
-    // One MIF per explicit slot of the master's sequence (which changes over
-    // the capture, so allow a wide margin).
-    let sched = src.schedule.unwrap();
-    let explicit = span / slot_us * sched.explicit_slots() as f64 / 16.0;
+    // One MIF per explicit slot of ours: all 16 (the capture's gaps, where
+    // the clock isn't locked, leave some out).
+    let explicit = span / slot_us;
     assert!(
-        (mifs.len() as f64) > 0.5 * explicit && (mifs.len() as f64) < 2.0 * explicit,
+        (mifs.len() as f64) > 0.5 * explicit && (mifs.len() as f64) <= 1.05 * explicit,
         "{} MIFs for ~{explicit:.0} explicit slots",
         mifs.len()
     );
     // PSFs at about 110 TU (each AW window carries at most one frame).
     let psf_rate = psfs.len() as f64 / (span / (110.0 * TU_US as f64));
     assert!(psf_rate > 0.5 && psf_rate <= 1.05, "PSF rate {psf_rate:.2} of nominal");
-    // We hop only between channels in the master's sequence.
+    // We hop only between our social channels, and advertise our own
+    // sequence, never the master's: its infrastructure channel, 120, is in
+    // its sequence and in neither of ours.
+    assert!(src.schedule.unwrap().visits(120));
     for (_, c) in &hops {
-        assert!(sched.visits(*c), "hopped to {c}, which the master never visits");
+        assert!(*c == 6 || *c == 149, "hopped to {c}");
+    }
+    for s in sent.iter().filter(|s| s.kind != TxKind::AddbaResponse) {
+        assert_eq!(advertised(&s.mpdu), OURS);
     }
 
     // Our frames parse, and say what a follower of the iPhone should.
@@ -208,12 +227,13 @@ fn a_lone_engine_becomes_master_on_its_own_grid() {
     assert!(sent[0].tsf >= 1_000_000 + 2_000_000, "sent at {} before listening 2 s", sent[0].tsf);
     // Our default sequence: 6 and 149, nothing else.
     assert!(hops.iter().all(|&(_, c)| c == 6 || c == 149), "{hops:?}");
+    assert!(sent.iter().all(|s| advertised(&s.mpdu) == OURS));
     let span = (sent.last().unwrap().tsf - sent[0].tsf) as f64;
     let slot_us = 4.0 * 16.0 * TU_US as f64;
     let (mifs, psfs) =
         (sent.iter().filter(|s| s.kind == TxKind::Mif).count(), sent.iter().filter(|s| s.kind == TxKind::Psf).count());
-    // 4 explicit slots of 16.
-    let explicit = span / slot_us * 4.0 / 16.0;
+    // Every slot names its channel.
+    let explicit = span / slot_us;
     assert!((mifs as f64 - explicit).abs() <= 2.0, "{mifs} MIFs for {explicit:.1} explicit slots");
     let psf_rate = psfs as f64 / (span / (110.0 * TU_US as f64));
     assert!(psf_rate > 0.8 && psf_rate <= 1.05, "PSF rate {psf_rate:.2} of nominal");
@@ -372,30 +392,40 @@ struct Air {
     channels: [u8; 2],
     now: u64,
     in_group: Option<MacAddr>,
+    /// We're polled from this TSF on; before it, we only listen.
+    us_from: u64,
     /// Our frames.
     sent: Vec<Sent>,
+}
+
+/// A taking-part engine's settings, with a metric and no TX latency.
+fn quick(addr: MacAddr, metric: u32) -> TxConfig {
+    let mut tx = TxConfig::new(addr);
+    tx.self_metric = metric;
+    tx.tx_latency_us = 0;
+    tx
 }
 
 impl Air {
     /// We follow a peer with a higher metric, after 7 s together.
     fn new() -> Self {
-        let quick = |addr, metric| {
-            let mut tx = TxConfig::new(addr);
-            tx.self_metric = metric;
-            tx.tx_latency_us = 0;
-            Engine::new(Config::active(tx))
-        };
-        let mut air = Air {
-            us: quick(US, 60),
-            them: quick(PEER, 600),
-            channels: [0; 2],
-            now: 1_000_000,
-            in_group: None,
-            sent: vec![],
-        };
+        let mut air = Air::with(quick(US, 60), quick(PEER, 600));
         air.run_until(8_000_000);
         assert_eq!((air.us.master(), air.us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)), "we follow");
         air
+    }
+
+    /// Two engines, both polled from the start, on no channel yet.
+    fn with(us: TxConfig, them: TxConfig) -> Self {
+        Air {
+            us: Engine::new(Config::active(us)),
+            them: Engine::new(Config::active(them)),
+            channels: [0; 2],
+            now: 1_000_000,
+            in_group: None,
+            us_from: 0,
+            sent: vec![],
+        }
     }
 
     fn run_until(&mut self, until: u64) {
@@ -415,7 +445,14 @@ impl Air {
 
     fn step(&mut self) {
         let now = self.now;
-        let actions = [self.us.poll(now), self.them.poll(now)];
+        // Time passes for each, as the daemon ticks its engine between
+        // frames: silent peers drop out.
+        if now >= self.us_from {
+            self.us.on_tick(now);
+        }
+        self.them.on_tick(now);
+        let ours = if now >= self.us_from { self.us.poll(now) } else { Vec::new() };
+        let actions = [ours, self.them.poll(now)];
         for (i, actions) in actions.into_iter().enumerate() {
             for a in actions {
                 match a {
@@ -446,7 +483,8 @@ impl Air {
                 }
             }
         }
-        let next = [self.us.next_wakeup(now), self.them.next_wakeup(now)].into_iter().flatten().min().unwrap();
+        let ours = if now >= self.us_from { self.us.next_wakeup(now) } else { Some(self.us_from) };
+        let next = [ours, self.them.next_wakeup(now)].into_iter().flatten().min().unwrap();
         self.now = next.max(now + 1);
     }
 
@@ -593,4 +631,99 @@ fn a_realtime_peer_is_asked_a_few_times_and_again_if_it_leaves() {
     air.run_until(air.now + 3_000_000);
     assert!(air.umis(released).is_empty(), "a stop for a group never started");
     air.assert_linked();
+}
+
+/// An Apple TV (3rd generation) leads a cluster of its own on 44 in every
+/// slot, where no iPhone or Mac goes (issue #15). We hear it first, the radio
+/// having come up on 44, and follow its grid; but as Apple devices do, we
+/// keep our own channels rather than its, so we're on 6 and 149 throughout.
+/// Not hearing it there, we drop it and lead on our own, where iPhones and
+/// Macs hear us.
+#[test]
+fn following_a_master_that_stays_on_44_we_keep_our_channels_and_then_lead() {
+    let mut atv = quick(PEER, 80);
+    atv.plan_override = Some([44; 16]);
+    let mut air = Air::with(quick(US, 60), atv);
+    // It leads from 3 s; we listen on 44 from then, and run from 4 s.
+    air.channels[0] = 44;
+    air.us_from = 4_000_000;
+    air.run_until(5_000_000);
+    assert_eq!((air.us.master(), air.us.sync_source().map(|p| p.addr)), (Some(PEER), Some(PEER)), "we follow");
+    assert!(air.them.peer(US).is_none(), "it never hears us");
+    air.run_until(12_000_000);
+    assert!(air.us.is_master() && air.us.peer(PEER).is_none(), "we lead once it's gone");
+    let following: Vec<&Sent> = air.sent.iter().filter(|s| s.master == Some(PEER)).collect();
+    assert!(!following.is_empty());
+    for s in &air.sent {
+        assert!(s.channel == 6 || s.channel == 149, "sent on {}", s.channel);
+        assert_eq!(advertised(&s.mpdu), OURS);
+    }
+    wireshark_accepts(&air.sent);
+}
+
+/// The same, with that Apple TV's own frames (`atv44.pcapng`): fed every
+/// one, we follow it throughout, and still hop and advertise only our own
+/// channels.
+#[test]
+fn follows_an_apple_tv_on_44_without_taking_its_channel() {
+    let Some(dir) = warlock_capture::corpus_dir() else {
+        eprintln!("skipping: no capture corpus");
+        return;
+    };
+    let file = dir.join("atv44.pcapng");
+    if !file.exists() {
+        eprintln!("skipping: {} missing", file.display());
+        return;
+    }
+    let (sent, hops, engine) = run(&file);
+    assert_eq!(engine.master(), Some(ATV3));
+    let tv = engine.peer(ATV3).unwrap().schedule.unwrap();
+    assert!(tv.visits(44) && !tv.visits(149) && !tv.visits(6));
+    let following = sent.iter().filter(|s| s.master == Some(ATV3)).count();
+    eprintln!("{following} of {} frames sent following the TV; {} hops", sent.len(), hops.len());
+    assert!(following > 0);
+    for (_, c) in &hops {
+        assert!(*c == 6 || *c == 149, "hopped to {c}");
+    }
+    for s in sent.iter().filter(|s| s.kind != TxKind::AddbaResponse) {
+        assert_eq!(advertised(&s.mpdu), OURS);
+    }
+    wireshark_accepts(&sent);
+}
+
+/// Inside a realtime group with the peer we sync to, we take its sequence:
+/// an iPhone's (149 in every slot, Koala's trial 20) reached us that way
+/// before. Before it answers, and once the group is released, our own.
+#[test]
+fn inside_a_realtime_group_we_take_the_peers_sequence() {
+    use std::collections::BTreeSet;
+
+    let mut iphone = quick(PEER, 600);
+    iphone.plan_override = Some([149; 16]);
+    let mut air = Air::with(quick(US, 60), iphone);
+    air.run_until(8_000_000);
+    air.assert_linked();
+    let outside = air.sent.len();
+    air.us.set_realtime_peers(&BTreeSet::from([PEER]));
+    air.run_until_sent(|s| s.kind == TxKind::Umi);
+    assert!(air.sent[outside..].iter().all(|s| advertised(&s.mpdu) == OURS));
+
+    air.in_group = Some(US);
+    air.run_until(air.now + 1_000_000);
+    assert!(air.us.realtime_joined(PEER));
+    let inside = air.sent.len();
+    air.run_until(air.now + 1_000_000);
+    assert!(air.sent.len() > inside);
+    for s in &air.sent[inside..] {
+        assert_eq!((advertised(&s.mpdu), s.channel), (vec![149; 16], 149));
+    }
+
+    air.us.set_realtime_peers(&BTreeSet::new());
+    air.run_until_sent(|s| s.kind == TxKind::Umi);
+    air.in_group = None;
+    let released = air.sent.len();
+    air.run_until(air.now + 1_000_000);
+    assert!(air.sent[released..].iter().all(|s| advertised(&s.mpdu) == OURS));
+    air.assert_linked();
+    wireshark_accepts(&air.sent);
 }
