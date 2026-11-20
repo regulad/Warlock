@@ -225,23 +225,32 @@ fn ascii(b: &[u8]) -> String {
     b.iter().map(|&c| if c < 0x80 { c as char } else { '\u{fffd}' }).collect()
 }
 
+/// Our values for one AWDL data body, as Wireshark names them.
+fn data_fields(o: &mut Ours, data: &awdl_proto::data::DataFrame<'_>) {
+    o.hex("awdl_data.header", &awdl_proto::data::MAGIC);
+    o.n("awdl_data.seq", data.seq);
+    match data.long_ext() {
+        Some(l) => {
+            o.hex("awdl_data.header", l.open);
+            for t in &l.tlvs {
+                tlv_fields(o, t);
+            }
+            o.hex("awdl_data.header", l.close);
+        }
+        None => o.hex("awdl_data.header", &data.ext),
+    }
+    o.n("awdl_data.ethertype", data.ethertype);
+}
+
 fn ours(frame: &Frame<'_>) -> FrameFields {
     let mut o = Ours::default();
     match frame {
-        Frame::Data { data, .. } => {
-            o.hex("awdl_data.header", &awdl_proto::data::MAGIC);
-            o.n("awdl_data.seq", data.seq);
-            match data.long_ext() {
-                Some(l) => {
-                    o.hex("awdl_data.header", l.open);
-                    for t in &l.tlvs {
-                        tlv_fields(&mut o, t);
-                    }
-                    o.hex("awdl_data.header", l.close);
-                }
-                None => o.hex("awdl_data.header", &data.ext),
+        Frame::Data { data, .. } => data_fields(&mut o, data),
+        // Wireshark dissects each subframe's AWDL data in turn.
+        Frame::Amsdu { msdus, .. } => {
+            for m in msdus {
+                data_fields(&mut o, &m.data);
             }
-            o.n("awdl_data.ethertype", data.ethertype);
         }
         Frame::Action { action, .. } => {
             let h = &action.header;

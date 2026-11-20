@@ -42,6 +42,7 @@ fn every_captured_frame_round_trips() {
 
             match &frame {
                 Frame::Data { .. } => datas += 1,
+                Frame::Amsdu { msdus, .. } => datas += msdus.len(),
                 Frame::Action { header, action } => {
                     actions += 1;
                     if !action.trailer().is_empty() {

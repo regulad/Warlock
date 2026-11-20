@@ -395,6 +395,12 @@ Pinned decisions:
        - On a Mac, `llw0` is a standing interface with `awdl0`'s MAC and link-local address.
        - A Continuity Capture stream adds a per-session ULA on it, `fd…::N`.
        - The iPhone sends to the MAC the host gave it, with no neighbour discovery.
+     - **Trial 19 (2026-11-19), with this capture running** (Koala's `docs/guest-pairing.md`):
+       - **No `llw0` frame reached the air:** the iPhone never attached an LLW peer for Warlock, and kept its audio. LLW isn't a different encapsulation of the AWDL data Warlock carries.
+       - **What the iPhone did send:** AWDL data as QoS Data (TID 6 for its gPTP, TID 0 for TCP), and 41 frames as A-MSDUs, which Warlock dropped (fixed, below).
+       - **Two TLVs Warlock doesn't send:** 17 (HT/VHT capabilities) and an unknown 33. 98 of its action frames also end with 2 bytes after the TLVs, kept as a trailer.
+       - **Static analysis of iOS 27.2.1:** the driver attaches an LLW peer (over AWDL or NAN) only when `wifip2pd` sets `LLW_PARAMS` for a "Continuity Real Time Group", and here none started. What starts one for a peer is being traced.
+     - **A-MSDUs (2026-11-19):** Warlock's Block Ack responses allow A-MSDUs (`0x1003`), yet `awdl-proto` refused them. It now parses one as `Frame::Amsdu`, a list of `Msdu`s (destination, source, AWDL data, padding kept), and the engine delivers each subframe as a data frame. Trial 19's capture agrees with Wireshark subframe by subframe (3,498 frames compared) and re-emits byte for byte.
   5. **An LLW interface in Warlock** beside AWDL, as on a Mac: a second adapter carrying LLW both ways. That includes reaching a peer's LLW ULA, which isn't derived from its MAC. Designed once 4 says what LLW needs.
 - **K1:** Rapport pair-setup/verify validated against the real Apple TV's `_companion-link._tcp` on the LAN (pyatv-style PIN pairing; no AWDL needed — can run in parallel with W1–W3).
 - **K2 (moment of truth):** the iPhone scans our QR and completes guest pair-setup with Koala over Warlock.

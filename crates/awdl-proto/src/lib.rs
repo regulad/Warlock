@@ -8,7 +8,9 @@
 //!   Indication Frame (MIF), whose [`tlv`]s carry AWDL's synchronization,
 //!   election, channel-sequence and service-discovery state;
 //! - [`Frame::Data`]: an AWDL data frame, which carries an EtherType payload
-//!   (IPv6 in practice) behind AWDL's LLC/SNAP encapsulation.
+//!   (IPv6 in practice) behind AWDL's LLC/SNAP encapsulation;
+//! - [`Frame::Amsdu`]: a QoS data frame aggregating several AWDL data bodies
+//!   (an A-MSDU), each a [`Msdu`].
 //!
 //! Parsing borrows from the input. Variable-length fields are
 //! [`Cow`](alloc::borrow::Cow)s, so the same types are used to build frames.
@@ -53,7 +55,7 @@ pub mod tlv;
 mod wire;
 
 pub use error::Error;
-pub use frame::{Frame, parse};
+pub use frame::{Frame, Msdu, parse};
 pub use mac::MacAddr;
 
 /// Apple's IEEE OUI, which AWDL uses in its action frames and LLC/SNAP header.

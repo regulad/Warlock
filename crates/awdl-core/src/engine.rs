@@ -356,6 +356,23 @@ impl Engine {
                     });
                 }
             }
+            // Each subframe as a data frame of its own, to its own address.
+            Frame::Amsdu { msdus, .. } => {
+                if let Some(p) = self.peers.get_mut(&src) {
+                    p.last_seen = meta.tsf;
+                    p.data_frames += msdus.len() as u32;
+                }
+                for m in msdus {
+                    if m.da.is_multicast() || Some(m.da) == self.config.own_addr {
+                        events.push(Event::Packet {
+                            from: src,
+                            to: m.da,
+                            ethertype: m.data.ethertype,
+                            payload: m.data.payload.to_vec(),
+                        });
+                    }
+                }
+            }
             Frame::Action { action, .. } => {
                 if !self.peers.contains_key(&src) {
                     events.push(Event::PeerFound(src));
