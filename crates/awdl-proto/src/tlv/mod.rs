@@ -13,14 +13,16 @@
 mod datapath;
 mod election;
 mod misc;
+mod rtg;
 mod service;
 mod sync;
 
 use alloc::vec::Vec;
 
-pub use datapath::{DataPathExt, DataPathState, InfraInfo, ext_flags, flags as data_path_flags};
+pub use datapath::{DataPathExt, DataPathState, InfraInfo, ext_flags, flags as data_path_flags, umi};
 pub use election::{ElectionParams, ElectionParamsV2, PrivateElection};
 pub use misc::{Arpa, HtCapabilities, Ieee80211Container, SyncTree, VersionTlv, device_class};
+pub use rtg::RealtimeGroup;
 pub use service::{Rdata, ServiceParams, ServiceResponse, rr_type, ssth_member};
 pub use sync::{Channel, ChannelSequence, ChannelSequenceTlv, SyncParams, encoding};
 
@@ -78,6 +80,8 @@ pub mod kind {
     pub const NAN_SYNC: u8 = 23;
     /// Election parameters v2.
     pub const ELECTION_PARAMS_V2: u8 = 24;
+    /// Realtime group (a Continuity Real Time Group; not in Wireshark).
+    pub const REALTIME_GROUP: u8 = 31;
 
     /// A short name for a type, if it's known.
     pub fn name(kind: u8) -> Option<&'static str> {
@@ -105,6 +109,7 @@ pub mod kind {
             BLOOM_FILTER => "bloom filter",
             NAN_SYNC => "NAN sync",
             ELECTION_PARAMS_V2 => "election params v2",
+            REALTIME_GROUP => "realtime group",
             _ => return None,
         })
     }
@@ -137,6 +142,7 @@ impl<'a> Tlv<'a> {
             kind::SYNC_TREE => TlvBody::SyncTree(SyncTree::parse(v)),
             kind::VERSION => TlvBody::Version(VersionTlv::parse(v)?),
             kind::ELECTION_PARAMS_V2 => TlvBody::ElectionParamsV2(ElectionParamsV2::parse(v)?),
+            kind::REALTIME_GROUP => TlvBody::RealtimeGroup(RealtimeGroup::parse(v)?),
             k => TlvBody::Unknown { kind: k, value: Bytes::Borrowed(v) },
         })
     }
@@ -177,6 +183,8 @@ pub enum TlvBody<'a> {
     Version(VersionTlv<'a>),
     /// Type 24.
     ElectionParamsV2(ElectionParamsV2<'a>),
+    /// Type 31.
+    RealtimeGroup(RealtimeGroup<'a>),
     /// Any type without a decoder, kept raw.
     Unknown {
         /// Type number.
@@ -202,6 +210,7 @@ impl TlvBody<'_> {
             TlvBody::SyncTree(_) => kind::SYNC_TREE,
             TlvBody::Version(_) => kind::VERSION,
             TlvBody::ElectionParamsV2(_) => kind::ELECTION_PARAMS_V2,
+            TlvBody::RealtimeGroup(_) => kind::REALTIME_GROUP,
             TlvBody::Unknown { kind, .. } => *kind,
         }
     }
@@ -221,6 +230,7 @@ impl TlvBody<'_> {
             TlvBody::SyncTree(t) => t.emit(out),
             TlvBody::Version(t) => t.emit(out),
             TlvBody::ElectionParamsV2(t) => t.emit(out),
+            TlvBody::RealtimeGroup(t) => t.emit(out),
             TlvBody::Unknown { value, .. } => {
                 out.put(value);
                 Ok(())

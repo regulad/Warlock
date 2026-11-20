@@ -57,6 +57,37 @@ pub mod ext_flags {
     pub(super) const WITH_FIELDS: u16 = LOG_TRIGGER | RLFC | COUNTERS;
 }
 
+/// Unicast Master Indication (UMI) codes: what a device asks of one peer in
+/// the unicast options of a data path state it sends that peer, a u32 in
+/// little-endian. Zero asks nothing. From static analysis of iOS 27.2.1
+/// (24B156): names from `wifip2pd`'s `UnicastMasterIndicationOptions`,
+/// actions from the driver (issues #5, #10). macOS 11's driver
+/// (`IO80211AWDLPeer::parseAwdlDataPathTLVAndTakeAction`) acts on options
+/// with no bit of `0xa20` set, as all of these are.
+pub mod umi {
+    /// Start Universal Control.
+    pub const UNIVERSAL_CONTROL_START: u32 = 0x0100_0000;
+    /// Start a remote camera session.
+    pub const REMOTE_CAMERA_START: u32 = 0x0b00_0000;
+    /// Start a TV remote camera session.
+    pub const TV_REMOTE_CAMERA_START: u32 = 0x0d00_0000;
+    /// Start Sidecar.
+    pub const SIDECAR_START: u32 = 0x1000_0000;
+    /// Start a remote screen.
+    pub const REMOTE_SCREEN_START: u32 = 0x1100_0000;
+    /// Start spatial streaming.
+    pub const SPATIAL_STREAMING_START: u32 = 0x1300_0000;
+    /// Start a Mac virtual display.
+    pub const MAC_VIRTUAL_DISPLAY_START: u32 = 0x1500_0000;
+    /// Start a Continuity Real Time Group with the sender; the receiver then
+    /// sets up Low-Latency Wi-Fi with it. Sent with a realtime group TLV (31).
+    pub const CONTINUITY_REALTIME_GROUP_START: u32 = 0x1700_0000;
+    /// Stop that group.
+    pub const CONTINUITY_REALTIME_GROUP_STOP: u32 = 0x1800_0000;
+    /// Start an MP remote camera session.
+    pub const MP_REMOTE_CAMERA_START: u32 = 0x4000_0000;
+}
+
 /// The infrastructure network the sender is associated with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InfraInfo {
@@ -119,7 +150,8 @@ pub struct DataPathState<'a> {
     pub awdl_address: Option<MacAddr>,
     /// UMI.
     pub umi: Option<u16>,
-    /// Unicast options (u16 length on the wire).
+    /// Unicast options (u16 length on the wire): a UMI code ([`umi`],
+    /// [`DataPathState::umi_code`]) in the frames iOS and macOS send.
     pub unicast_options: Option<Bytes<'a>>,
     /// The extended part.
     pub ext: Option<DataPathExt>,
@@ -178,6 +210,18 @@ impl<'a> DataPathState<'a> {
             ext,
             trailing: Bytes::Borrowed(r.rest()),
         })
+    }
+
+    /// The unicast options as a UMI code ([`umi`]), when they're the four
+    /// bytes iOS sends.
+    pub fn umi_code(&self) -> Option<u32> {
+        let o: &[u8] = self.unicast_options.as_deref()?;
+        Some(u32::from_le_bytes(o.try_into().ok()?))
+    }
+
+    /// Sets the unicast options to a UMI code ([`umi`]); 0 asks nothing.
+    pub fn set_umi_code(&mut self, code: u32) {
+        self.unicast_options = Some(Bytes::Owned(code.to_le_bytes().to_vec()));
     }
 
     /// The flags field as emitted: `other_flags` plus a bit per present field.
@@ -241,5 +285,38 @@ impl<'a> DataPathState<'a> {
         }
         out.put(&self.trailing);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A UMI goes where macOS 11's driver reads it: after the country code,
+    /// social channels and infrastructure fields, a u16 length 4, then the
+    /// code in little-endian.
+    #[test]
+    fn a_umi_code_sits_after_the_infrastructure_fields() {
+        let mut d = DataPathState {
+            other_flags: 0x0800,
+            country_code: Some(*b"US\0"),
+            social_channels: Some(7),
+            infra: Some(InfraInfo { bssid: MacAddr::default(), channel: 0 }),
+            infra_address: Some(MacAddr([2, 0, 0, 0, 0, 1])),
+            awdl_address: None,
+            umi: None,
+            unicast_options: None,
+            ext: None,
+            trailing: Bytes::Borrowed(&[]),
+        };
+        assert_eq!(d.umi_code(), None);
+        d.set_umi_code(umi::CONTINUITY_REALTIME_GROUP_START);
+        let mut v = Vec::new();
+        d.emit(&mut v).unwrap();
+        assert_eq!(u16::from_le_bytes([v[0], v[1]]), 0x1b03);
+        // flags 2, country 3, social 2, BSSID and channel 8, address 6
+        assert_eq!(&v[21..], &[4, 0, 0, 0, 0, 0x17]);
+        let back = DataPathState::parse(&v).unwrap();
+        assert_eq!(back.umi_code(), Some(umi::CONTINUITY_REALTIME_GROUP_START));
     }
 }

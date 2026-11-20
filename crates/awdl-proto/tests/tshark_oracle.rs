@@ -436,6 +436,8 @@ fn tlv_fields(o: &mut Ours, t: &Tlv<'_>) {
             }
         }
         TlvBody::HtCapabilities(h) => o.padding(&h.trailing),
+        // Wireshark has no dissector for it and shows the raw value.
+        TlvBody::RealtimeGroup(_) => o.hex("awdl.tag.data", t.value),
         TlvBody::Unknown { value, .. } => o.hex("awdl.tag.data", value),
     }
 }
