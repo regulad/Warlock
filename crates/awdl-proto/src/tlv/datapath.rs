@@ -16,8 +16,20 @@ use alloc::vec::Vec;
 use crate::wire::{Put, Reader, len_u16};
 use crate::{Bytes, Error, MacAddr};
 
-/// Data path state flags that introduce a field.
+/// Data path state flags: those that introduce a field, and named ones that
+/// don't.
 pub mod flags {
+    /// Follow channel sequence: a device AirPlaying to the sender should hop
+    /// the sender's channel sequence rather than its own. Introduces no
+    /// field. macOS 11.7's `IO80211AWDLPeer::parseAwdlDataPathTLVAndTakeAction`
+    /// tests this bit, keeps it per peer and logs "updated to set follow
+    /// channel sequence bit" or "cleared follow channel sequence bit";
+    /// `followPeerChannelSequence` copies the sequence of a peer that sets it
+    /// while AirPlaying to it (`docs/awdl-field-observations.md`, "How Apple
+    /// devices choose their channel sequence"). No device in our captures
+    /// sets it, an Apple TV receiving AirPlay from an iPhone included.
+    pub const FOLLOW_CHANNEL_SEQUENCE: u16 = 0x0080;
+
     /// Infrastructure BSSID and channel follow.
     pub const INFRA_BSSID_CHANNEL: u16 = 0x0001;
     /// Infrastructure address follows.
@@ -133,9 +145,10 @@ impl DataPathExt {
 /// Data path state (type 12).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataPathState<'a> {
-    /// Flags that introduce no field (e.g. 0x0020 dual-band, 0x0400 AirPlay
-    /// solo mode). The bits in [`flags`] aren't stored: they follow from
-    /// which fields are present. See [`DataPathState::wire_flags`].
+    /// Flags that introduce no field (e.g. 0x0020 dual-band,
+    /// [`flags::FOLLOW_CHANNEL_SEQUENCE`], 0x0400 AirPlay solo mode). The
+    /// bits that introduce a field aren't stored: they follow from which
+    /// fields are present. See [`DataPathState::wire_flags`].
     pub other_flags: u16,
     /// Country code, e.g. `b"US\0"`.
     pub country_code: Option<[u8; 3]>,
@@ -210,6 +223,12 @@ impl<'a> DataPathState<'a> {
             ext,
             trailing: Bytes::Borrowed(r.rest()),
         })
+    }
+
+    /// Whether the sender asks a device AirPlaying to it to follow its channel
+    /// sequence ([`flags::FOLLOW_CHANNEL_SEQUENCE`]).
+    pub fn follow_channel_sequence(&self) -> bool {
+        self.other_flags & flags::FOLLOW_CHANNEL_SEQUENCE != 0
     }
 
     /// The unicast options as a UMI code ([`umi`]), when they're the four
@@ -318,5 +337,17 @@ mod tests {
         assert_eq!(&v[21..], &[4, 0, 0, 0, 0, 0x17]);
         let back = DataPathState::parse(&v).unwrap();
         assert_eq!(back.umi_code(), Some(umi::CONTINUITY_REALTIME_GROUP_START));
+        assert!(!back.follow_channel_sequence());
+    }
+
+    /// The follow bit introduces no field, and is kept as sent.
+    #[test]
+    fn the_follow_channel_sequence_bit_is_read_and_kept() {
+        let v = [0x80, 0x00];
+        let d = DataPathState::parse(&v).unwrap();
+        assert!(d.follow_channel_sequence());
+        let mut out = Vec::new();
+        d.emit(&mut out).unwrap();
+        assert_eq!(out, v);
     }
 }

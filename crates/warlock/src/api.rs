@@ -92,6 +92,7 @@ pub fn peer(p: &Peer, now: Option<u64>) -> types::Peer {
         since_last_frame_ms: now.map_or(0, |n| n.saturating_sub(p.last_seen) / 1000),
         frames: types::Frames { psf: p.psfs, mif: p.mifs, data: p.data_frames },
         sequence: p.schedule.as_ref().map(|s| s.slots.to_vec()),
+        follow_channel_sequence: p.follow_channel_sequence,
         services: services(p),
     }
 }

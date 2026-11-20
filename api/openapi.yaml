@@ -430,7 +430,7 @@ components:
           enum: [20, 40]
     Peer:
       type: object
-      required: [address, ipv6, channel, rssi_dbm, since_last_frame_ms, frames, services]
+      required: [address, ipv6, channel, rssi_dbm, since_last_frame_ms, frames, follow_channel_sequence, services]
       properties:
         address:
           $ref: '#/components/schemas/MacAddress'
@@ -477,6 +477,13 @@ components:
           items: { type: integer }
           minItems: 16
           maxItems: 16
+        follow_channel_sequence:
+          type: boolean
+          description: |
+            Whether its latest data path state sets the follow channel
+            sequence bit (`0x0080`), asking a device that AirPlays to it to
+            hop its channel sequence. Warlock doesn't AirPlay, and doesn't
+            act on it.
         services:
           $ref: '#/components/schemas/ServiceSet'
     ServiceSet:

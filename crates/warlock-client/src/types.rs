@@ -126,6 +126,10 @@ pub struct Peer {
     pub frames: Frames,
     /// Its channel in each of the 16 slots; 0 for none.
     pub sequence: Option<Vec<u8>>,
+    /// Whether it asks a device AirPlaying to it to follow its channel
+    /// sequence (data path state flag `0x0080`). Warlock doesn't act on it.
+    #[serde(default)]
+    pub follow_channel_sequence: bool,
     pub services: ServiceSet,
 }
 

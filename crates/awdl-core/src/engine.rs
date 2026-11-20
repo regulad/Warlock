@@ -293,6 +293,12 @@ pub struct Peer {
     pub sequences_widened: Option<(ChannelSequence<'static>, Option<ChannelSequence<'static>>)>,
     /// Its country code (data path state).
     pub country: Option<[u8; 3]>,
+    /// Whether its latest data path state asks a device AirPlaying to it to
+    /// follow its channel sequence
+    /// ([`awdl_proto::tlv::datapath::flags::FOLLOW_CHANNEL_SEQUENCE`]), as
+    /// macOS 11's driver keeps it per peer. Warlock doesn't AirPlay, so
+    /// nothing acts on it (issue #16).
+    pub follow_channel_sequence: bool,
     /// The realtime group its latest action frame names (TLV 31's ID),
     /// if any: while in a group, an iPhone puts it in every frame.
     pub realtime_group: Option<MacAddr>,
@@ -325,6 +331,7 @@ impl Peer {
             sequence_tlv18: None,
             sequences_widened: None,
             country: None,
+            follow_channel_sequence: false,
             realtime_group: None,
             realtime_group_seen: None,
         }
@@ -491,7 +498,10 @@ impl Engine {
                             from_tlv18 = ChannelSchedule::from_sequence(&c.sequence);
                             p.sequence_tlv18 = Some(c.sequence.into_owned());
                         }
-                        Ok(TlvBody::DataPathState(d)) => p.country = d.country_code.or(p.country),
+                        Ok(TlvBody::DataPathState(d)) => {
+                            p.country = d.country_code.or(p.country);
+                            p.follow_channel_sequence = d.follow_channel_sequence();
+                        }
                         Ok(TlvBody::ElectionParamsV2(e)) => v2 = Some(ElectionInfo::from_v2(&e)),
                         Ok(TlvBody::ElectionParams(e)) => v1 = Some(ElectionInfo::from_v1(&e)),
                         Ok(TlvBody::Version(v)) => p.version = Some((v.version, v.device_class)),
@@ -1010,6 +1020,11 @@ impl Engine {
     /// and the iPhone's Low-Latency Wi-Fi reached us. Whether Apple's other
     /// members compose the group's sequence or take it is not yet known; until
     /// it is, this is the one place we copy a peer's.
+    ///
+    /// Apple devices also take the sequence of a peer they AirPlay to when
+    /// it sets the follow channel sequence bit
+    /// ([`Peer::follow_channel_sequence`]). Warlock doesn't AirPlay, so it
+    /// doesn't; an AirPlay sender would add that case here (issue #16).
     fn sequence_source(&self) -> Option<&Peer> {
         if self.is_master() {
             return None;

@@ -108,6 +108,7 @@ fn peers() -> Vec<Peer> {
         since_last_frame_ms: 12,
         frames: Frames { psf: 10, mif: 20, data: 30 },
         sequence: Some(vec![149, 0, 0, 0, 0, 0, 0, 0, 6, 0, 149, 0, 0, 0, 0, 0]),
+        follow_channel_sequence: true,
         services: ServiceSet {
             update: Some(7),
             records: vec![
@@ -130,6 +131,7 @@ fn peers() -> Vec<Peer> {
         since_last_frame_ms: 4000,
         frames: Frames::default(),
         sequence: None,
+        follow_channel_sequence: false,
         services: ServiceSet::default(),
     };
     vec![full, bare]

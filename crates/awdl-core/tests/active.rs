@@ -727,3 +727,33 @@ fn inside_a_realtime_group_we_take_the_peers_sequence() {
     air.assert_linked();
     wireshark_accepts(&air.sent);
 }
+
+/// A master that sets the follow channel sequence bit (data path flag
+/// `0x0080`): we note it, and since we aren't AirPlaying to it, keep our own
+/// sequence, as Apple devices do (issue #16).
+#[test]
+fn a_master_asking_to_be_followed_is_noted_and_not_followed() {
+    let mut tv = quick(PEER, 600);
+    tv.plan_override = Some([149; 16]);
+    // Flags 0x0180: follow channel sequence, and a country code.
+    tv.tlv_overrides = vec![(kind::DATA_PATH_STATE, Some(vec![0x80, 0x01, b'U', b'S', 0]))];
+    let mut air = Air::with(quick(US, 60), tv);
+    air.run_until(8_000_000);
+    air.assert_linked();
+    assert_eq!(air.us.sync_source().map(|p| p.addr), Some(PEER));
+    assert!(air.us.peer(PEER).unwrap().follow_channel_sequence);
+    let following: Vec<&Sent> = air.sent.iter().filter(|s| s.master == Some(PEER)).collect();
+    assert!(!following.is_empty());
+    for s in following {
+        assert_eq!(advertised(&s.mpdu), OURS);
+    }
+    // Our own data path state doesn't set it: we don't ask to be followed.
+    let ours = air.sent.iter().find_map(|s| {
+        let Ok(Some(Frame::Action { action, .. })) = parse(&s.mpdu) else { return None };
+        match action.find(kind::DATA_PATH_STATE)?.decode() {
+            Ok(TlvBody::DataPathState(d)) => Some(d.follow_channel_sequence()),
+            _ => None,
+        }
+    });
+    assert_eq!(ours, Some(false));
+}

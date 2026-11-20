@@ -435,6 +435,16 @@ of macOS 11.7's IO80211Family (x86_64) and iOS 27.2.1's IO80211DriverKit
   also in a ranging follow mode. Inside a realtime group, iOS 27's
   `RealTimeGroup` row is empty: `composeRTGChannelSequence` builds that
   sequence, which hasn't been analysed yet.
+- **No device in our captures sets the follow bit.** None of the 13
+  captures in `captures/air` (2026-11-20) has a data path state with
+  `0x0080`, including the two where the iPhone AirPlays to the Apple TV.
+  There the TV switches `0x0400` (AirPlay solo mode) on and off (`0x0363`,
+  `0x0763`), and the iPhone, AirPlaying, sends its own sequence with the
+  TV's channel in half its slots, `151 151 151 151 46 46 46 46 …` (149 and
+  44 at 40 MHz), while the TV sends `46` in all 16 slots or `6 151 151 0 0 0
+  46 46 6 151 151 0 0 0 46 46`. Warlock keeps the bit per peer
+  (`Peer::follow_channel_sequence`) but doesn't AirPlay, so it doesn't
+  follow anyone for it (issue #16).
 - **The templates are what the devices log** (5 GHz social channel 149,
   2.4 GHz 6, `-` off AWDL):
 
