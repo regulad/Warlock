@@ -774,7 +774,8 @@ impl Engine {
     /// frames stop naming it for [`LEFT_AFTER_US`]). Our
     /// frames carry the TLV while any group is wanted. A peer no longer in
     /// `peers` is asked to stop the same way, until its frames no longer
-    /// name our group. Without `Config::transmit`, nothing.
+    /// name our group. Without `Config::transmit`, nothing. The daemon passes
+    /// at most one peer: the API runs one at a time.
     pub fn set_realtime_peers(&mut self, peers: &BTreeSet<MacAddr>) {
         if self.config.transmit.is_none() {
             return;

@@ -469,14 +469,30 @@ impl App {
     }
 
     fn acquire(&self, kind: Kind, what: String, peer: String, client: Client) -> Guard {
+        self.try_acquire(kind, what, peer, client).expect("only realtime locks are refused")
+    }
+
+    /// Takes a lock. A realtime lock is refused, with the peer held, while
+    /// another peer's is open: Warlock runs one realtime peer at a time
+    /// (Parker, 2026-11-19), as an Apple host runs one Continuity Real Time
+    /// Group peer. The check and the insert are under one mutex, so two
+    /// requests can't both win.
+    fn try_acquire(&self, kind: Kind, what: String, peer: String, client: Client) -> Result<Guard, String> {
         let owner = Owner { pid: client.pid.unwrap_or(0), image: client.image(), since: rfc3339(SystemTime::now()) };
-        info!(?kind, what, peer, pid = owner.pid, image = owner.image, "lock taken");
         let mut locks = self.locks.lock().unwrap();
+        if let Kind::Realtime = kind
+            && let Some(held) = locks.realtime.values().find(|l| l.peer != peer)
+        {
+            let held = held.peer.clone();
+            info!(peer, held, pid = owner.pid, image = owner.image, "realtime lock refused: another peer's is open");
+            return Err(held);
+        }
+        info!(?kind, what, peer, pid = owner.pid, image = owner.image, "lock taken");
         let id = locks.next_id;
         locks.next_id += 1;
         locks.of(kind).insert(id, Lock { what, peer, owner });
         self.wants.send_replace(locks.wants());
-        Guard { id, kind, locks: self.locks.clone(), wants: self.wants.clone() }
+        Ok(Guard { id, kind, locks: self.locks.clone(), wants: self.wants.clone() })
     }
 
     async fn advertise(&self, client: Client, request: Request<Incoming>) -> Response<Body> {
@@ -515,7 +531,13 @@ impl App {
             return error(StatusCode::BAD_REQUEST, message);
         };
         let peer = mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
-        let guard = self.acquire(Kind::Realtime, request.reason, peer.clone(), client);
+        let guard = match self.try_acquire(Kind::Realtime, request.reason, peer.clone(), client) {
+            Ok(g) => g,
+            Err(held) => {
+                let message = format!("a realtime group with {held} is open; Warlock runs one peer at a time");
+                return error(StatusCode::CONFLICT, message);
+            }
+        };
         jsonl(lock_stream(guard, self.state.clone(), move |s| RealtimeState {
             present: s.peers.iter().any(|p| p.address == peer),
             asked: s.realtime_asked.contains(&peer),

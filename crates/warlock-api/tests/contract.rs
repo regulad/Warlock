@@ -379,6 +379,38 @@ async fn a_realtime_lock_names_its_peer_while_its_connection_lasts() {
     assert_eq!(client.realtime_locks().await.unwrap(), vec![]);
 }
 
+/// One realtime peer at a time: while a lock on a peer is open, another
+/// peer's request gets 409, and the same peer's shares it (Parker,
+/// 2026-11-19).
+#[tokio::test]
+async fn realtime_locks_hold_one_peer_at_a_time() {
+    let (_server, mut daemon, client, _) = serve(RadioState::Up);
+    let a = client.realtime(&mac(10), "first").await.unwrap();
+    let b = client.realtime(&mac(10).to_ascii_uppercase(), "same peer").await.unwrap();
+    until(&mut daemon, Duration::from_secs(1), |w| w.realtime.len() == 1).await;
+    assert_eq!(client.realtime_locks().await.unwrap().len(), 2);
+
+    let other = format!(r#"{{"peer": "{}", "reason": "another"}}"#, mac(11));
+    let (status, v) = client.raw(Method::POST, "/v1/realtime", Some(other.as_bytes())).await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT);
+    check("Error", &v);
+    assert!(v["message"].as_str().unwrap().contains(&mac(10)), "{v}");
+    let Err(ClientError::Api { status, .. }) = client.realtime(&mac(11), "typed").await else { panic!("accepted") };
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(daemon.wants_now().realtime, [[2, 0, 0, 0, 0, 10]].into());
+
+    // Held while either lock lasts; then another peer may take it.
+    drop(a);
+    tokio::time::sleep(HEARTBEAT + Duration::from_millis(500)).await;
+    let (status, _) = client.raw(Method::POST, "/v1/realtime", Some(other.as_bytes())).await.unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "one lock on the peer is still open");
+    drop(b);
+    until(&mut daemon, HEARTBEAT + Duration::from_secs(1), |w| w.realtime.is_empty()).await;
+    let mut c = client.realtime(&mac(11), "now free").await.unwrap();
+    let first = next_line(&mut c, "RealtimeState", Duration::from_secs(1)).await;
+    assert_eq!(first["peer"], json!(mac(11)));
+}
+
 #[tokio::test]
 async fn locks_on_one_type_add_up() {
     let (_server, mut daemon, client, _) = serve(RadioState::Up);

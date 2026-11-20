@@ -251,6 +251,10 @@ paths:
         frames. The peer needn't be heard yet: Warlock asks it once it is.
         When the last lock on a peer closes, Warlock asks the peer to stop.
 
+        One peer at a time, as an Apple host runs one Continuity Real Time
+        Group peer: while any lock on a peer is open, a request for another
+        peer gets 409. Requests for the same peer share its group.
+
         Experimental: the exchange is from static analysis of iOS 27,
         tried with one iPhone (iOS 27.2.1). `joined` says when the peer
         says it's in the group.
@@ -266,6 +270,11 @@ paths:
             application/jsonl:
               itemSchema: { $ref: '#/components/schemas/RealtimeState' }
         '400': { $ref: '#/components/responses/Error' }
+        '409':
+          description: A lock on another peer is open; its message names that peer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         default: { $ref: '#/components/responses/Error' }
   /v1/events:
     get:
