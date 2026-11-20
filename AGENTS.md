@@ -38,3 +38,24 @@ to avoid that as much as possible").
 - **Identity claims** (the AWDL version and device class), which Warlock may
   have to make to be accepted at all, are the exception to argue in
   `PLAN.md`, not by default.
+
+## Track pending work in GitHub issues
+
+Pending work goes into issues on
+[regulad/Warlock](https://github.com/regulad/Warlock/issues) where it can, one
+task per issue, so several people can take tasks at once (Parker,
+2026-11-19). `PLAN.md` keeps the design, the decisions and what was found, and
+links the issues; it isn't the to-do list.
+
+- A commit that completes an issue says so (`Fixes #N`).
+- An issue, pull request or comment an agent drafts is posted only after
+  Parker has reviewed it, and ends with a rule and his footer:
+  `*Drafted by Claude (`claude-opus-5-5`); reviewed and signed off by
+  @regulad.*`, naming the model that drafted it.
+
+## Show drafts in quote blocks
+
+When showing Parker a snippet of code, formatted data, or prose drafted for
+submission (an issue, a commit message, release notes, a pull request, a
+comment), put each in its own Markdown quote block, so what would be
+submitted stands apart from the conversation around it (Parker, 2026-11-19).
