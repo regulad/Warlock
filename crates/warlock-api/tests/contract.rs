@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! The server against its contract, `api/openapi.yaml`: every response body
-//! and every line of every stream it sends is validated against the schema
-//! the contract gives for it, and the locks behave as the contract says.
-//! Each test serves its own pipe, with this test standing in for the daemon.
+//! The server against its contracts, `api/openapi.yaml` (the API's pipe) and
+//! `api/admin.yaml` (the admin pipe): every response body and every line of
+//! every stream it sends is validated against the schema the contract gives
+//! for it, and the locks behave as the contract says. Each test serves its
+//! own pair of pipes, with this test standing in for the daemon.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -12,19 +13,28 @@ use std::time::{Duration, Instant};
 use http::{Method, StatusCode};
 use jsonschema::{Draft, Registry};
 use serde_json::{Value, json};
-use warlock_api::{Daemon, HEARTBEAT, OPERATIONS, Security, Server, State};
+use warlock_api::{ADMIN_OPERATIONS, Daemon, HEARTBEAT, OPERATIONS, Pipes, Security, Server, State};
 use warlock_client::types::*;
 use warlock_client::{Client, ClientError, Lines};
 
 const CONTRACT: &str = "urn:warlock:openapi";
 
+fn load(file: &str) -> Value {
+    let path = format!("{}/../../api/{file}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    serde_norway::from_str(&text).unwrap_or_else(|e| panic!("{path} isn't YAML: {e}"))
+}
+
+/// `api/openapi.yaml`, the API's pipe.
 fn document() -> &'static Value {
     static DOC: OnceLock<Value> = OnceLock::new();
-    DOC.get_or_init(|| {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../api/openapi.yaml");
-        let text = std::fs::read_to_string(path).expect("api/openapi.yaml");
-        serde_norway::from_str(&text).expect("the contract is YAML")
-    })
+    DOC.get_or_init(|| load("openapi.yaml"))
+}
+
+/// `api/admin.yaml`, the admin pipe. Its schemas are the main contract's.
+fn admin_document() -> &'static Value {
+    static DOC: OnceLock<Value> = OnceLock::new();
+    DOC.get_or_init(|| load("admin.yaml"))
 }
 
 fn registry() -> &'static Registry<'static> {
@@ -129,11 +139,18 @@ fn state(radio: RadioState) -> State {
     State { info: info(radio), peers: peers(), advertised: BTreeMap::new() }
 }
 
-/// A server on a pipe of its own.
+/// The admin pipe that goes with the API's pipe `pipe` in these tests.
+fn admin(pipe: &str) -> String {
+    format!("{pipe}-admin")
+}
+
+/// A server on a pair of pipes of its own, and a client of its API pipe
+/// (whose name comes last; [`admin`] gives the other).
 fn serve(radio: RadioState) -> (Server, Daemon, Client, String) {
     static N: AtomicU32 = AtomicU32::new(0);
     let pipe = format!(r"\\.\pipe\warlock-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
-    let (server, daemon) = Server::start(&pipe, Security::Default, state(radio)).expect("serve");
+    let pipes = Pipes { api: &pipe, admin: &admin(&pipe) };
+    let (server, daemon) = Server::start(pipes, Security::Default, state(radio)).expect("serve");
     (server, daemon, Client::new(&pipe), pipe)
 }
 
@@ -171,27 +188,59 @@ fn a_body_that_breaks_the_contract_fails_the_check() {
     check("Peer", &peer);
 }
 
-/// The contract carries Warlock's version, the workspace's (PLAN.md,
+/// Both contracts carry Warlock's version, the workspace's (PLAN.md,
 /// "Versioning").
 #[test]
-fn the_contract_has_warlocks_version() {
+fn the_contracts_have_warlocks_version() {
     assert_eq!(document()["info"]["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(admin_document()["info"]["version"], json!(env!("CARGO_PKG_VERSION")));
 }
 
-#[test]
-fn every_operation_in_the_contract_is_served() {
+/// A contract's operations, as sorted (method, path).
+fn documented(doc: &Value) -> Vec<(String, String)> {
     let mut documented: Vec<(String, String)> = Vec::new();
-    for (path, item) in document()["paths"].as_object().unwrap() {
+    for (path, item) in doc["paths"].as_object().unwrap() {
         for method in item.as_object().unwrap().keys() {
             if ["get", "put", "post", "delete", "patch", "head", "options", "query"].contains(&method.as_str()) {
                 documented.push((method.clone(), path.clone()));
             }
         }
     }
-    let mut served: Vec<(String, String)> = OPERATIONS.iter().map(|(m, p)| (m.to_string(), p.to_string())).collect();
     documented.sort();
-    served.sort();
-    assert_eq!(served, documented);
+    documented
+}
+
+fn sorted(operations: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = operations.iter().map(|(m, p)| (m.to_string(), p.to_string())).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn every_operation_in_the_contracts_is_served() {
+    assert_eq!(sorted(&OPERATIONS), documented(document()));
+    assert_eq!(sorted(&ADMIN_OPERATIONS), documented(admin_document()));
+}
+
+/// Each pipe serves its own contract and nothing of the other's: capture
+/// is only on the admin pipe (0.2.0), and the admin pipe has nothing else.
+#[tokio::test]
+async fn each_pipe_serves_only_its_contract() {
+    let (_server, _daemon, client, pipe) = serve(RadioState::Up);
+    let admin = Client::new(admin(&pipe));
+    let (status, v) = client.raw(Method::GET, "/v1/capture", None).await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND, "capture on the API's pipe");
+    check("Error", &v);
+    for (method, path) in OPERATIONS {
+        let path = path.replace("{address}", &mac(2));
+        let method = Method::from_bytes(method.to_ascii_uppercase().as_bytes()).unwrap();
+        let (status, v) = admin.raw(method.clone(), &path, None).await.unwrap();
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path} on the admin pipe");
+        check("Error", &v);
+    }
+    let (status, v) = admin.raw(Method::POST, "/v1/capture", None).await.unwrap();
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    check("Error", &v);
 }
 
 #[tokio::test]
@@ -372,7 +421,8 @@ async fn until_capturing(daemon: &Daemon, open: bool) {
 async fn a_capture_streams_the_frames_it_asks_for_while_open() {
     use warlock_api::{Frame, FrameKind};
     use warlock_client::{CaptureFilter, CaptureKind};
-    let (_server, daemon, client, _) = serve(RadioState::Up);
+    let (_server, daemon, _, pipe) = serve(RadioState::Up);
+    let client = Client::new(admin(&pipe));
     assert!(!daemon.capturing());
     let filter = CaptureFilter { peers: vec![mac(1)], kind: Some(CaptureKind::Other), tx: false };
     let mut chunks = client.capture(&filter).await.unwrap();
@@ -400,7 +450,8 @@ async fn a_capture_streams_the_frames_it_asks_for_while_open() {
 
 #[tokio::test]
 async fn a_capture_with_a_bad_query_gets_400() {
-    let (_server, daemon, client, _) = serve(RadioState::Up);
+    let (_server, daemon, _, pipe) = serve(RadioState::Up);
+    let client = Client::new(admin(&pipe));
     for query in ["?peer=02:00:00", "?kind=most", "?tx=yes", "?channel=6"] {
         let (status, v) = client.raw(Method::GET, &format!("/v1/capture{query}"), None).await.unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
@@ -422,7 +473,11 @@ async fn streams_end_when_warlock_stops() {
 #[tokio::test]
 async fn only_one_server_per_pipe() {
     let (_server, _daemon, _client, pipe) = serve(RadioState::Up);
-    assert!(Server::start(&pipe, Security::Default, state(RadioState::Up)).is_err());
+    let again = |api: &str, admin: &str| Server::start(Pipes { api, admin }, Security::Default, state(RadioState::Up));
+    assert!(again(&pipe, &admin(&pipe)).is_err());
+    // Either pipe taken is enough to refuse.
+    assert!(again(&pipe, &format!("{pipe}-other")).is_err());
+    assert!(again(&format!("{pipe}-other"), &admin(&pipe)).is_err());
 }
 
 #[tokio::test]

@@ -314,10 +314,11 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         traffic: None,
     };
     let initial = warlock_api::State { info: info.clone(), peers: Vec::new(), advertised: BTreeMap::new() };
-    let (_server, control) = Server::start(warlock_api::PIPE, Security::Service, initial).map_err(|e| {
-        format!("can't serve the control API on {} (is Warlock running already?): {e}", warlock_api::PIPE)
+    let pipes = warlock_api::Pipes { api: warlock_api::PIPE, admin: warlock_api::ADMIN_PIPE };
+    let (_server, control) = Server::start(pipes, Security::Service, initial).map_err(|e| {
+        format!("can't serve the control API on {} and {} (is Warlock running already?): {e}", pipes.api, pipes.admin)
     })?;
-    info!(pipe = warlock_api::PIPE, "control API up");
+    info!(pipe = pipes.api, admin = pipes.admin, "control API up");
 
     // The adapter, disconnected until a radio is up.
     let wintun = dll::load(&dll::ensure(&dll::default_root())?)?;

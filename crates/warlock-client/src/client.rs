@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR AGPL-3.0-or-later
 //! The client, for `warlockctl`, Warlock's tests and other programs. Any
-//! HTTP client on the pipe works as well (`api/openapi.yaml`).
+//! HTTP client on the pipes works as well (`api/openapi.yaml`,
+//! `api/admin.yaml`).
 //!
 //! Each call opens its own connection, as locks need: a lock lasts as long
 //! as its [`Lines`] (and so its connection) is kept. Needs a Tokio runtime.
@@ -24,8 +25,8 @@ use crate::types::*;
 /// What can go wrong.
 #[derive(Debug)]
 pub enum ClientError {
-    /// Opening the pipe failed: Warlock isn't running, or we may not use it.
-    Connect(io::Error),
+    /// Opening `pipe` failed: Warlock isn't running, or we may not use it.
+    Connect { pipe: String, source: io::Error },
     /// HTTP failed.
     Http(hyper::Error),
     /// Warlock answered with an error.
@@ -37,13 +38,21 @@ pub enum ClientError {
 impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ClientError::Connect(e) if e.kind() == io::ErrorKind::NotFound => {
-                write!(f, "Warlock isn't running (no pipe)")
+            ClientError::Connect { pipe, source } if source.kind() == io::ErrorKind::NotFound => {
+                if pipe == crate::ADMIN_PIPE {
+                    write!(f, "Warlock isn't running, or is older than 0.2.0 (no {pipe})")
+                } else {
+                    write!(f, "Warlock isn't running (no {pipe})")
+                }
             }
-            ClientError::Connect(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                write!(f, "not allowed to use Warlock: run as an administrator or join the warlock-users group")
+            ClientError::Connect { pipe, source } if source.kind() == io::ErrorKind::PermissionDenied => {
+                if pipe == crate::ADMIN_PIPE {
+                    write!(f, "not allowed to capture: run as an administrator or join the warlock-admin group")
+                } else {
+                    write!(f, "not allowed to use Warlock: run as an administrator or join the warlock-users group")
+                }
             }
-            ClientError::Connect(e) => write!(f, "can't reach Warlock: {e}"),
+            ClientError::Connect { pipe, source } => write!(f, "can't reach Warlock on {pipe}: {source}"),
             ClientError::Http(e) => write!(f, "HTTP: {e}"),
             ClientError::Api { status, message } => write!(f, "{status}: {message}"),
             ClientError::Json(e) => write!(f, "unexpected JSON: {e}"),
@@ -75,7 +84,8 @@ pub struct Client {
 }
 
 impl Client {
-    /// A client of the pipe `name` (normally [`crate::PIPE`]).
+    /// A client of the pipe `name`: normally [`crate::PIPE`], or
+    /// [`crate::ADMIN_PIPE`] for [`Client::capture`].
     pub fn new(name: impl Into<String>) -> Self {
         Self { pipe: name.into() }
     }
@@ -93,7 +103,7 @@ impl Client {
                 Err(e) if e.raw_os_error() == Some(PIPE_BUSY) && Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Err(e) => return Err(ClientError::Connect(e)),
+                Err(source) => return Err(ClientError::Connect { pipe: self.pipe.clone(), source }),
             }
         };
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(pipe)).await?;
@@ -187,8 +197,9 @@ impl Client {
         self.raw_stream(Method::GET, "/v1/events", None).await
     }
 
-    /// `GET /v1/capture`: the radio's frames as a pcapng stream, for as long
-    /// as the returned [`Chunks`] is kept.
+    /// `GET /v1/capture` (`api/admin.yaml`): the radio's frames as a pcapng
+    /// stream, for as long as the returned [`Chunks`] is kept. Only on
+    /// [`crate::ADMIN_PIPE`]; the API's pipe answers 404.
     pub async fn capture(&self, filter: &CaptureFilter) -> Result<Chunks, ClientError> {
         let response = self.send(Method::GET, &format!("/v1/capture{}", filter.query()), None).await?;
         let status = response.status();

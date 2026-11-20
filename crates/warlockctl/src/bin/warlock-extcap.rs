@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! warlock-extcap: Warlock's radio as a Wireshark capture interface, "Warlock
-//! radio (802.11)", through Wireshark's extcap interface. It reads the
-//! control API's `GET /v1/capture` (`api/openapi.yaml`) and writes the
-//! pcapng to the pipe Wireshark gives it.
+//! radio (802.11)", through Wireshark's extcap interface. It reads the admin
+//! API's `GET /v1/capture` (`api/admin.yaml`, on `\\.\pipe\warlock-admin`)
+//! and writes the pcapng to the pipe Wireshark gives it.
 //!
 //! Wireshark runs it from its `extcap` folder, where the MSI puts it if asked
 //! (PLAN.md, W6):
@@ -14,8 +14,8 @@
 //! warlock-extcap --extcap-interface warlock --capture --fifo PIPE [--peer MACS] [--kind awdl|other|all] [--tx]
 //! ```
 //!
-//! Like `warlockctl`, it needs Administrator or the `warlock-users` group;
-//! Wireshark shows what went wrong from its standard error.
+//! Like `warlockctl capture`, it needs Administrator or the `warlock-admin`
+//! group; Wireshark shows what went wrong from its standard error.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -113,7 +113,7 @@ fn filter(args: &Args) -> Result<CaptureFilter, String> {
 /// Streams the capture into Wireshark's pipe until either end closes.
 async fn capture(fifo: &str, filter: CaptureFilter) -> Result<(), String> {
     let mut out = OpenOptions::new().write(true).open(fifo).map_err(|e| format!("can't open {fifo}: {e}"))?;
-    let mut chunks = Client::new(warlock_client::PIPE).capture(&filter).await.map_err(|e| e.to_string())?;
+    let mut chunks = Client::new(warlock_client::ADMIN_PIPE).capture(&filter).await.map_err(|e| e.to_string())?;
     while let Some(chunk) = chunks.next().await {
         let chunk = chunk.map_err(|e| e.to_string())?;
         if out.write_all(&chunk).and_then(|()| out.flush()).is_err() {

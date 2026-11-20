@@ -9,7 +9,7 @@ use std::ptr::{null, null_mut};
 use std::time::Duration;
 
 use tracing::info;
-use warlock_api::USERS_GROUP;
+use warlock_api::{ADMIN_GROUP, USERS_GROUP};
 use windows_service::service::{
     ServiceAccess, ServiceAction, ServiceActionType, ServiceFailureActions, ServiceFailureResetPeriod,
 };
@@ -34,50 +34,61 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
+/// Warlock's local groups, with their comments: who may open which of the
+/// API's pipes (`warlock_api`'s `pipe` module).
+const GROUPS: [(&str, &str); 2] = [
+    (USERS_GROUP, "Members may use Warlock's control API (warlockctl), like docker-users"),
+    (ADMIN_GROUP, "Members may also capture Warlock's radio (warlockctl capture, the Wireshark plugin)"),
+];
+
 /// After the service is installed and before it starts: registers Warlock's
-/// events, so the service's land in the Event Log, creates the local group
-/// allowed to use the control API ([`USERS_GROUP`]), if it isn't there, and
-/// sets the service's failure actions. With `--undo` (the MSI's rollback of a
-/// fresh install), removes the group and the events' registration instead.
-/// With `--member SID`, after that, adds the account with that SID to the
-/// group: the installer's "add me" checkbox, with the SID of the account
-/// that ran it.
+/// events, so the service's land in the Event Log, creates Warlock's local
+/// groups ([`GROUPS`]) that aren't there, and sets the service's failure
+/// actions. With `--undo` (the MSI's rollback of a fresh install), removes
+/// the groups and the events' registration instead. With `--member GROUP
+/// SID`, after that, adds the account with that SID to one of the groups:
+/// the installer's "add me" checkboxes, with the SID of the account that
+/// ran it.
 pub fn setup(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args {
         [] => {
             events::install()?;
             info!("events registered");
-            create_group()?;
+            for (group, comment) in GROUPS {
+                create_group(group, comment)?;
+            }
             failure_actions()
         }
         [undo] if undo == "--undo" => {
-            let group = remove_group();
+            let groups = remove_groups();
             let _ = events::uninstall();
-            group
+            groups
         }
-        [member, sid] if member == "--member" => add_member(sid),
-        _ => Err("usage: warlock setup [--undo | --member SID]".into()),
+        [member, group, sid] if member == "--member" && GROUPS.iter().any(|(g, _)| g == group) => {
+            add_member(group, sid)
+        }
+        _ => Err(format!("usage: warlock setup [--undo | --member {USERS_GROUP}|{ADMIN_GROUP} SID]").into()),
     }
 }
 
-/// Adds the account `sid` (`S-1-5-21-…`) to [`USERS_GROUP`]; already being
-/// in it is fine. It counts from that account's next sign-in, when Windows
-/// builds its token afresh.
-fn add_member(sid: &str) -> Result<(), Box<dyn Error>> {
+/// Adds the account `sid` (`S-1-5-21-…`) to `group`; already being in it is
+/// fine. It counts from that account's next sign-in, when Windows builds its
+/// token afresh.
+fn add_member(group: &str, sid: &str) -> Result<(), Box<dyn Error>> {
     let mut psid: PSID = null_mut();
     // SAFETY: a NUL-terminated string, and an out pointer.
     if unsafe { ConvertStringSidToSidW(wide(sid).as_ptr(), &mut psid) } == 0 {
-        return Err(format!("adding {sid:?} to the {USERS_GROUP} group: that isn't a SID").into());
+        return Err(format!("adding {sid:?} to the {group} group: that isn't a SID").into());
     }
     let member = LOCALGROUP_MEMBERS_INFO_0 { lgrmi0_sid: psid };
     // SAFETY: a valid level-0 entry whose SID outlives the call.
-    let rc = unsafe { NetLocalGroupAddMembers(null(), wide(USERS_GROUP).as_ptr(), 0, (&raw const member).cast(), 1) };
+    let rc = unsafe { NetLocalGroupAddMembers(null(), wide(group).as_ptr(), 0, (&raw const member).cast(), 1) };
     // SAFETY: allocated by ConvertStringSidToSidW.
     unsafe { LocalFree(psid) };
     match rc {
-        0 => info!(group = USERS_GROUP, sid, "member added"),
-        ALREADY_MEMBER => info!(group = USERS_GROUP, sid, "already a member"),
-        rc => return Err(format!("adding {sid} to the {USERS_GROUP} group: error {rc}").into()),
+        0 => info!(group, sid, "member added"),
+        ALREADY_MEMBER => info!(group, sid, "already a member"),
+        rc => return Err(format!("adding {sid} to the {group} group: error {rc}").into()),
     }
     Ok(())
 }
@@ -100,24 +111,24 @@ fn failure_actions() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn create_group() -> Result<(), Box<dyn Error>> {
-    let mut name = wide(USERS_GROUP);
-    let mut comment = wide("Members may use Warlock's control API (warlockctl), like docker-users");
-    let group = LOCALGROUP_INFO_1 { lgrpi1_name: name.as_mut_ptr(), lgrpi1_comment: comment.as_mut_ptr() };
+fn create_group(group: &str, comment: &str) -> Result<(), Box<dyn Error>> {
+    let mut name = wide(group);
+    let mut comment = wide(comment);
+    let info = LOCALGROUP_INFO_1 { lgrpi1_name: name.as_mut_ptr(), lgrpi1_comment: comment.as_mut_ptr() };
     let mut bad_field = 0;
     // SAFETY: a valid level-1 structure whose strings outlive the call.
-    let rc = unsafe { NetLocalGroupAdd(null(), 1, (&raw const group).cast(), &mut bad_field) };
+    let rc = unsafe { NetLocalGroupAdd(null(), 1, (&raw const info).cast(), &mut bad_field) };
     match rc {
-        0 => info!(group = USERS_GROUP, "created"),
-        rc if GROUP_EXISTS.contains(&rc) => info!(group = USERS_GROUP, "already there"),
-        rc => return Err(format!("creating the {USERS_GROUP} group: error {rc}").into()),
+        0 => info!(group, "created"),
+        rc if GROUP_EXISTS.contains(&rc) => info!(group, "already there"),
+        rc => return Err(format!("creating the {group} group: error {rc}").into()),
     }
     Ok(())
 }
 
 /// Before the files go, on an uninstall that isn't an upgrade: gives the
 /// adapter back to Windows' own driver, if Warlock had it, removes the
-/// group, and last, unregisters the events. Any may fail without stopping
+/// groups, and last, unregisters the events. Any may fail without stopping
 /// the uninstall.
 pub fn teardown() -> Result<(), Box<dyn Error>> {
     let mut problems = Vec::new();
@@ -129,7 +140,7 @@ pub fn teardown() -> Result<(), Box<dyn Error>> {
         Ok(_) => {}
         Err(e) => problems.push(format!("looking for the adapter: {e}")),
     }
-    if let Err(e) = remove_group() {
+    if let Err(e) = remove_groups() {
         problems.push(e.to_string());
     }
     for p in &problems {
@@ -141,13 +152,17 @@ pub fn teardown() -> Result<(), Box<dyn Error>> {
     if problems.is_empty() { Ok(()) } else { Err(problems.join("; ").into()) }
 }
 
-fn remove_group() -> Result<(), Box<dyn Error>> {
-    // SAFETY: a NUL-terminated name.
-    let rc = unsafe { NetLocalGroupDel(null(), wide(USERS_GROUP).as_ptr()) };
-    match rc {
-        0 => info!(group = USERS_GROUP, "removed"),
-        rc if NO_GROUP.contains(&rc) => {}
-        rc => return Err(format!("removing the {USERS_GROUP} group: error {rc}").into()),
+/// Removes every group of [`GROUPS`] that's there, trying each.
+fn remove_groups() -> Result<(), Box<dyn Error>> {
+    let mut problems = Vec::new();
+    for (group, _) in GROUPS {
+        // SAFETY: a NUL-terminated name.
+        let rc = unsafe { NetLocalGroupDel(null(), wide(group).as_ptr()) };
+        match rc {
+            0 => info!(group, "removed"),
+            rc if NO_GROUP.contains(&rc) => {}
+            rc => problems.push(format!("removing the {group} group: error {rc}")),
+        }
     }
-    Ok(())
+    if problems.is_empty() { Ok(()) } else { Err(problems.join("; ").into()) }
 }

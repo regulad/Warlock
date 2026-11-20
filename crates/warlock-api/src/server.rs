@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! The API server: `api/openapi.yaml` over HTTP/1.1 on a named pipe, served
-//! by hyper. (Not axum: it depends on `sync_wrapper`, which is Apache-2.0
-//! only and so can't go into a GPL-2.0 program; `deny.toml`.)
+//! The API server: HTTP/1.1 on two named pipes, served by hyper. (Not axum:
+//! it depends on `sync_wrapper`, which is Apache-2.0 only and so can't go
+//! into a GPL-2.0 program; `deny.toml`.)
+//!
+//! - The API's pipe serves `api/openapi.yaml`.
+//! - The admin pipe serves `api/admin.yaml`: captures. Who may open each is
+//!   its access list's business (`crate::pipe`), so the routes a pipe
+//!   serves are all the server decides (Parker, 2026-11-19).
 //!
 //! The daemon's engine runs on its own thread; the server runs on a Tokio
 //! runtime of its own. They meet in three channels:
@@ -11,8 +16,9 @@
 //! - [`Wants`], published by the server (`watch`): the service types and
 //!   holds that open locks ask for, which the daemon acts on.
 //!
-//! A fourth, captures (`crate::capture`), carries radio frames to
-//! `GET /v1/capture` streams, queued per capture so the radio never waits.
+//! A fourth, captures (`crate::capture`), carries radio frames to the admin
+//! pipe's `GET /v1/capture` streams, queued per capture so the radio never
+//! waits.
 //!
 //! A lock (`POST /v1/advertising`, `POST /v1/holds`) is registered for as
 //! long as its response stream exists. Hyper drops the stream when the
@@ -42,7 +48,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tracing::{debug, info, warn};
 
 use crate::capture::{Captures, Filter, Frame as RadioFrame};
-use crate::pipe::{Client, PipeListener, Security};
+use crate::pipe::{Client, PipeListener, Security, Surface};
 use warlock_client::types::*;
 
 /// The longest a lock stream goes without a line.
@@ -134,10 +140,17 @@ impl Drop for Server {
     }
 }
 
+/// The two pipes' names: normally [`crate::PIPE`] and [`crate::ADMIN_PIPE`].
+#[derive(Clone, Copy, Debug)]
+pub struct Pipes<'a> {
+    pub api: &'a str,
+    pub admin: &'a str,
+}
+
 impl Server {
-    /// Serves the API on the pipe `name`, reporting `initial` until the
-    /// daemon publishes. Fails if the pipe exists already.
-    pub fn start(name: &str, security: Security, initial: State) -> io::Result<(Server, Daemon)> {
+    /// Serves the API on `pipes`, reporting `initial` until the daemon
+    /// publishes. Fails if either pipe exists already.
+    pub fn start(pipes: Pipes, security: Security, initial: State) -> io::Result<(Server, Daemon)> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("warlock-api")
@@ -145,10 +158,11 @@ impl Server {
             .build()?;
         let bound = {
             let _entered = runtime.enter();
-            PipeListener::bind(name, security)
+            PipeListener::bind(pipes.api, Surface::Api, security)
+                .and_then(|api| Ok((api, PipeListener::bind(pipes.admin, Surface::Admin, security)?)))
         };
-        let mut listener = match bound {
-            Ok(l) => l,
+        let listeners = match bound {
+            Ok((api, admin)) => [(api, Surface::Api), (admin, Surface::Admin)],
             Err(e) => {
                 // Dropping a runtime blocks, which panics if the caller is async.
                 runtime.shutdown_background();
@@ -166,29 +180,32 @@ impl Server {
             wants: Arc::new(wants_tx),
             captures: captures.clone(),
         };
-        runtime.spawn(async move {
-            loop {
-                let (pipe, client) = listener.accept().await;
-                let app = app.clone();
-                tokio::spawn(async move {
-                    let service = service_fn(move |request| {
-                        let app = app.clone();
-                        async move { Ok::<_, Infallible>(app.handle(client, request).await) }
+        for (mut listener, surface) in listeners {
+            let app = app.clone();
+            runtime.spawn(async move {
+                loop {
+                    let (pipe, client) = listener.accept().await;
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let service = service_fn(move |request| {
+                            let app = app.clone();
+                            async move { Ok::<_, Infallible>(app.handle(surface, client, request).await) }
+                        });
+                        if let Err(e) = http1::Builder::new().serve_connection(TokioIo::new(pipe), service).await {
+                            // A lock's client hanging up ends its connection this way.
+                            debug!("connection ended: {e}");
+                        }
                     });
-                    if let Err(e) = http1::Builder::new().serve_connection(TokioIo::new(pipe), service).await {
-                        // A lock's client hanging up ends its connection this way.
-                        debug!("connection ended: {e}");
-                    }
-                });
-            }
-        });
+                }
+            });
+        }
         Ok((Server { runtime: Some(runtime) }, Daemon { state: state_tx, events, wants: wants_rx, captures }))
     }
 }
 
-/// Every operation in `api/openapi.yaml`, as (method, path): the contract
-/// test checks this against the document.
-pub const OPERATIONS: [(&str, &str); 9] = [
+/// Every operation in `api/openapi.yaml`, the API's pipe, as (method,
+/// path): the contract test checks this against the document.
+pub const OPERATIONS: [(&str, &str); 8] = [
     ("get", "/v1/info"),
     ("get", "/v1/peers"),
     ("get", "/v1/peers/{address}"),
@@ -197,8 +214,10 @@ pub const OPERATIONS: [(&str, &str); 9] = [
     ("get", "/v1/holds"),
     ("post", "/v1/holds"),
     ("get", "/v1/events"),
-    ("get", "/v1/capture"),
 ];
+
+/// Every operation in `api/admin.yaml`, the admin pipe, likewise.
+pub const ADMIN_OPERATIONS: [(&str, &str); 1] = [("get", "/v1/capture")];
 
 /// A capture's media type: pcapng, as Wireshark names it.
 pub const PCAPNG: &str = "application/x-pcapng";
@@ -342,7 +361,24 @@ async fn body<T: DeserializeOwned>(request: Request<Incoming>) -> Result<T, Stri
 }
 
 impl App {
-    async fn handle(self, client: Client, request: Request<Incoming>) -> Response<Body> {
+    async fn handle(self, surface: Surface, client: Client, request: Request<Incoming>) -> Response<Body> {
+        match surface {
+            Surface::Api => self.api(client, request).await,
+            Surface::Admin => self.admin(client, request),
+        }
+    }
+
+    /// The admin pipe's routes (`api/admin.yaml`).
+    fn admin(&self, client: Client, request: Request<Incoming>) -> Response<Body> {
+        match (request.method(), request.uri().path()) {
+            (&Method::GET, "/v1/capture") => self.capture(client, request.uri().query()),
+            (_, "/v1/capture") => not_allowed("GET"),
+            _ => error(StatusCode::NOT_FOUND, "no such endpoint".into()),
+        }
+    }
+
+    /// The API pipe's routes (`api/openapi.yaml`).
+    async fn api(&self, client: Client, request: Request<Incoming>) -> Response<Body> {
         let path = request.uri().path().to_string();
         let method = request.method().clone();
         if let Some(address) = path.strip_prefix("/v1/peers/").filter(|a| !a.is_empty() && !a.contains('/')) {
@@ -359,8 +395,7 @@ impl App {
             (Method::GET, "/v1/holds") => self.holds(),
             (Method::POST, "/v1/holds") => self.hold(client, request).await,
             (Method::GET, "/v1/events") => self.events(),
-            (Method::GET, "/v1/capture") => self.capture(client, request.uri().query()),
-            (_, "/v1/info" | "/v1/peers" | "/v1/events" | "/v1/capture") => not_allowed("GET"),
+            (_, "/v1/info" | "/v1/peers" | "/v1/events") => not_allowed("GET"),
             (_, "/v1/advertising" | "/v1/holds") => not_allowed("GET, POST"),
             _ => error(StatusCode::NOT_FOUND, "no such endpoint".into()),
         }

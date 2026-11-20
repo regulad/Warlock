@@ -4,9 +4,10 @@
 //!
 //! - Licences: the licence page ([`crate::licence`]). It asks nothing: the
 //!   GPL and the AGPL don't need accepting to install or run a program.
-//! - Install folder: where Warlock goes, with a folder browser, what its
-//!   service will do, and two options: adding the account installing to
-//!   `warlock-users`, and the Wireshark plugin.
+//! - Install folder: where Warlock goes, with a folder browser, and what its
+//!   service will do.
+//! - Options: adding the account installing to `warlock-users`, to
+//!   `warlock-admin` below it, and the Wireshark plugin.
 //! - Progress, then Done, Cancelled or Failed; a confirmation before
 //!   cancelling; the error dialog Windows Installer reports through.
 //! - Repair or remove, when the package is opened again on a PC that has it.
@@ -237,9 +238,9 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.events(d, "Next", &[("NewDialog", "InstallDirDlg")]);
     ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
 
-    // Install folder, then Install.
+    // Install folder, then Next.
     let d = "InstallDirDlg";
-    ui.dialog(d, WIDTH, HEIGHT, MODAL, "FolderLabel", s("Install"), s("Cancel"));
+    ui.dialog(d, WIDTH, HEIGHT, MODAL, "FolderLabel", s("Next"), s("Cancel"));
     ui.page(d, "Install folder", "Where Warlock's programs go.");
     // A line of text is about 12.3 units high and 4.1 units a character
     // (measured on this page, 2026-11-19): a checkbox's label fits one line,
@@ -255,7 +256,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
         None,
         Some("ChangeFolder"),
     );
-    ui.button(d, "ChangeFolder", (20, 91, 66, 17), BUTTON, "&Change...", "JoinUsers");
+    ui.button(d, "ChangeFolder", (20, 91, 66, 17), BUTTON, "&Change...", "Back");
     ui.text(
         d,
         "ServiceNote",
@@ -263,26 +264,35 @@ pub fn tables(licence: &str) -> Vec<Table> {
         "Warlock installs the Warlock service, which starts with Windows. While Warlock is installed, it takes every \
          supported USB Wi-Fi adapter it finds away from Windows' Wi-Fi driver; uninstalling gives them back.",
     );
-    // The account installing joins warlock-users, unticked by default; it
-    // counts from that account's next sign-in. Already a member: ticked and
-    // greyed out, saying so.
-    ui.control(
-        d,
-        "JoinUsers",
-        "CheckBox",
-        (20, 164, 330, 14),
-        BUTTON,
-        Some(crate::JOIN_USERS_PROPERTY),
-        Some("Add &me ([LogonUser]) to warlock-users"),
-        Some("WiresharkPlugin"),
-    );
-    let member = crate::MEMBER_PROPERTY;
-    ui.condition.row(vec![s(d), s("JoinUsers"), s("Disable"), s(member)]);
-    ui.condition.row(vec![s(d), s("JoinUsers"), s("Enable"), s(&format!("NOT {member}"))]);
-    let note = (34, 178, 316, 12);
-    let not_member = format!("NOT {member}");
-    ui.shown_if(d, "JoinUsersNote", note, "To use Warlock without elevation, from your next sign-in.", &not_member);
-    ui.shown_if(d, "JoinUsersMember", note, "You're already in warlock-users.", member);
+    ui.button(d, "Back", BACK, BUTTON, "&Back", "Next");
+    ui.button(d, "Next", NEXT, BUTTON, "&Next", "Cancel");
+    ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "FolderLabel");
+    ui.events(d, "ChangeFolder", &[("SpawnDialog", "BrowseDlg")]);
+    ui.events(d, "Back", &[("NewDialog", "LicenseDlg")]);
+    ui.events(d, "Next", &[("SetTargetPath", "INSTALLDIR"), ("NewDialog", "OptionsDlg")]);
+    ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
+
+    // Options, then Install: the groups (warlock-admin below warlock-users,
+    // Parker, 2026-11-19) and the Wireshark plugin. Their own page, since
+    // three checkboxes and their notes don't fit under the folder.
+    let d = "OptionsDlg";
+    ui.dialog(d, WIDTH, HEIGHT, MODAL, crate::GROUPS[0].control, s("Install"), s("Cancel"));
+    ui.page(d, "Options", "What else Warlock sets up for you.");
+    // Each group: unticked by default; ticked and greyed out, saying so, when
+    // the account installing is already a member. The admin group's purpose
+    // takes two lines.
+    let places = [(56, 12), (92, 26)];
+    let next = [crate::GROUPS[1].control, "WiresharkPlugin"];
+    for ((g, (y, note_height)), next) in crate::GROUPS.iter().zip(places).zip(next) {
+        ui.control(d, g.control, "CheckBox", (20, y, 330, 14), BUTTON, Some(g.join), Some(g.label), Some(next));
+        ui.condition.row(vec![s(d), s(g.control), s("Disable"), s(g.member)]);
+        ui.condition.row(vec![s(d), s(g.control), s("Enable"), s(&format!("NOT {}", g.member))]);
+        let note = (34, y + 14, 316, note_height);
+        let not_member = format!("NOT {}", g.member);
+        ui.shown_if(d, &format!("{}Note", g.control), note, g.purpose, &not_member);
+        let already = format!("You're already in {}.", g.name);
+        ui.shown_if(d, &format!("{}Member", g.control), (34, y + 14, 316, 12), &already, g.member);
+    }
     // The optional Wireshark plugin (PLAN.md, W6): unticked unless already
     // installed, and greyed out, saying why in place of what it is, when
     // Wireshark wasn't found.
@@ -290,7 +300,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
         d,
         "WiresharkPlugin",
         "CheckBox",
-        (20, 198, 330, 14),
+        (20, 142, 330, 14),
         BUTTON,
         Some(crate::WIRESHARK_PLUGIN_PROPERTY),
         Some("Also install the &Wireshark plugin"),
@@ -300,7 +310,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.condition.row(vec![s(d), s("WiresharkPlugin"), s("Enable"), s("WIRESHARKDIR")]);
     // One note in three: what the plugin is; on an upgrade with it unticked,
     // that the installed one goes; or that there's no Wireshark.
-    let note = (34, 212, 316, 12);
+    let note = (34, 156, 316, 12);
     let removing = format!(
         "WIRESHARKDIR AND {} AND NOT {}",
         crate::WIRESHARK_PLUGIN_FOUND_PROPERTY,
@@ -312,15 +322,13 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.shown_if(d, "WiresharkMissing", note, "Wireshark was not detected.", "NOT WIRESHARKDIR");
     ui.button(d, "Back", BACK, BUTTON, "&Back", "Install");
     ui.button(d, "Install", NEXT, BUTTON | ELEVATION_SHIELD, "&Install", "Cancel");
-    ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "FolderLabel");
-    ui.events(d, "ChangeFolder", &[("SpawnDialog", "BrowseDlg")]);
-    ui.events(d, "Back", &[("NewDialog", "LicenseDlg")]);
-    // Windows Installer decides the features in CostFinalize, before this
-    // page, and a property set here doesn't decide again: Install says what
+    ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", crate::GROUPS[0].control);
+    ui.events(d, "Back", &[("NewDialog", "InstallDirDlg")]);
+    // Windows Installer decides the features in CostFinalize, before the
+    // pages, and a property set here doesn't decide again: Install says what
     // the checkbox chose, or ticking it does nothing (0.1.2, 2026-11-19).
     let wanted = "WIRESHARKPLUGIN AND WIRESHARKDIR";
     for (i, (event, argument, condition)) in [
-        ("SetTargetPath", "INSTALLDIR", "1".to_string()),
         ("AddLocal", "WiresharkPlugin", wanted.to_string()),
         ("Remove", "WiresharkPlugin", format!("NOT ({wanted})")),
         ("EndDialog", "Return", "1".to_string()),
@@ -423,12 +431,12 @@ pub fn tables(licence: &str) -> Vec<Table> {
     let body = (20, 60, 330, 60);
     let d = "ExitDlg";
     finish(&mut ui, d, "Done");
-    // Asked to join warlock-users, and not in it before: is it in now? Then
-    // the sign-out modal, then the end.
-    let (member, joined) = (crate::MEMBER_PROPERTY, crate::JOINED_PROPERTY);
+    // Asked to join a group it wasn't in before: is it in now? Then the
+    // sign-out modal, then the end.
+    let asked: Vec<String> = crate::GROUPS.iter().map(|g| format!("({} AND NOT {})", g.join, g.member)).collect();
     for (i, (event, argument, condition)) in [
-        ("DoAction", "WarlockFindJoined", format!("{} AND NOT {member}", crate::JOIN_USERS_PROPERTY)),
-        ("SpawnDialog", "SignOutDlg", joined.to_string()),
+        ("DoAction", "WarlockFindJoined", asked.join(" OR ")),
+        ("SpawnDialog", "SignOutDlg", crate::JOINED_PROPERTY.to_string()),
         ("EndDialog", "Return", "1".to_string()),
     ]
     .into_iter()
@@ -478,8 +486,11 @@ pub fn tables(licence: &str) -> Vec<Table> {
         d,
         "Text",
         (20, 12, 240, 42),
-        "Warlock added you to warlock-users. Windows applies that the next time you sign in; until then, Warlock \
-         still needs administrator rights.",
+        &format!(
+            "Warlock added you to [{}]. Windows applies that the next time you sign in; until then, Warlock still \
+             needs administrator rights.",
+            crate::JOINED_GROUPS_PROPERTY
+        ),
     );
     ui.text(d, "Ask", (20, 58, 240, 14), "Sign out now? Save your work in other programs first.");
     ui.button(d, "SignOut", (114, 82, 84, 17), BUTTON, "Sign &out now", "Later");
@@ -513,7 +524,10 @@ pub fn tables(licence: &str) -> Vec<Table> {
 
     // What a ticked checkbox sets its property to.
     let mut check_box = Table::new("CheckBox", &[("Property", "s72"), ("Value", "S64")], &["Property"]);
-    check_box.row(vec![s(crate::WIRESHARK_PLUGIN_PROPERTY), s("1")]).row(vec![s(crate::JOIN_USERS_PROPERTY), s("1")]);
+    check_box.row(vec![s(crate::WIRESHARK_PLUGIN_PROPERTY), s("1")]);
+    for g in &crate::GROUPS {
+        check_box.row(vec![s(g.join), s("1")]);
+    }
 
     // The name a new folder gets in the browser.
     let mut ui_text = Table::new("UIText", &[("Key", "s72"), ("Text", "L255")], &["Key"]);
@@ -525,8 +539,10 @@ pub fn tables(licence: &str) -> Vec<Table> {
     action_text
         .row(vec![s("WarlockSetup"), s("Setting up Warlock's events, group and service"), None])
         .row(vec![s("WarlockSetupRollback"), s("Undoing Warlock's setup"), None])
-        .row(vec![s("WarlockJoinUsers"), s("Adding you to the warlock-users group"), None])
         .row(vec![s("WarlockTeardown"), s("Giving the adapter back to Windows"), None]);
+    for g in &crate::GROUPS {
+        action_text.row(vec![s(g.action), s(&format!("Adding you to the {} group", g.name)), None]);
+    }
 
     vec![ui.dialog, ui.control, ui.event, ui.condition, ui.mapping, style, check_box, ui_text, action_text]
 }
@@ -568,7 +584,7 @@ mod tests {
         let tables = tables("{\\rtf1 x}");
         let install: Vec<(&str, &str, &str, i32)> = rows(&tables, "ControlEvent")
             .iter()
-            .filter(|r| cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some("Install"))
+            .filter(|r| cell(r, 0) == Some("OptionsDlg") && cell(r, 1) == Some("Install"))
             .map(|r| {
                 (cell(r, 2).unwrap(), cell(r, 3).unwrap(), cell(r, 4).unwrap(), cell(r, 5).unwrap().parse().unwrap())
             })
@@ -590,9 +606,7 @@ mod tests {
         let show = |control: &str| {
             conditions
                 .iter()
-                .find(|r| {
-                    cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Show")
-                })
+                .find(|r| cell(r, 0) == Some("OptionsDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Show"))
                 .and_then(|r| cell(r, 3))
                 .unwrap()
                 .to_string()
@@ -600,9 +614,7 @@ mod tests {
         let hide = |control: &str| {
             conditions
                 .iter()
-                .find(|r| {
-                    cell(r, 0) == Some("InstallDirDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Hide")
-                })
+                .find(|r| cell(r, 0) == Some("OptionsDlg") && cell(r, 1) == Some(control) && cell(r, 2) == Some("Hide"))
                 .and_then(|r| cell(r, 3))
                 .unwrap()
                 .to_string()

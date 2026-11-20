@@ -23,7 +23,11 @@ info:
     HTTP/1.1 on the named pipe `\\.\pipe\warlock`, as Docker on Windows
     serves `\\.\pipe\docker_engine`. The `Host` header is ignored. The pipe
     rejects remote clients, and only Administrators and members of the
-    `warlock-users` group may open it.
+    `warlock-users` or `warlock-admin` groups may open it.
+
+    Captures of the radio are a separate API, on a pipe of their own that
+    only Administrators and `warlock-admin` may open: the admin API,
+    `api/admin.yaml`.
 
     ## Locks
 
@@ -60,10 +64,9 @@ info:
     ## Captures
 
     For packets, capture on the "Warlock AWDL" adapter, for instance with
-    Wireshark. For frames, including those Warlock doesn't deliver, such as
-    ones it can't read as AWDL, `GET /v1/capture` streams what the radio
-    hears as radiotap pcapng. Like events, a capture holds nothing and lasts
-    as long as its connection.
+    Wireshark. For frames, including those Warlock doesn't deliver, see the
+    admin API (`api/admin.yaml`). Through 0.1, this API had
+    `GET /v1/capture`; since 0.2.0 only the admin API does.
 
     ## Errors
 
@@ -95,9 +98,6 @@ tags:
   - name: events
     summary: What happens, as it happens
     description: A stream of changes, for monitoring and `warlockctl`.
-  - name: capture
-    summary: The radio's frames
-    description: 802.11 frames as the radio hears and sends them, for Wireshark.
 servers:
   - url: http://warlock
     description: The named pipe `\\.\pipe\warlock`; the host is ignored.
@@ -237,66 +237,6 @@ paths:
           content:
             application/jsonl:
               itemSchema: { $ref: '#/components/schemas/Event' }
-        default: { $ref: '#/components/responses/Error' }
-  /v1/capture:
-    get:
-      operationId: capture
-      tags: [capture]
-      summary: Capture the radio's frames
-      description: |
-        The 802.11 frames the radio hears from the moment of the request,
-        and the ones it sends if `tx` says so, as a pcapng stream until the
-        connection closes. It holds nothing: closing it changes nothing.
-
-        The stream opens with a section header and one interface (linktype
-        127, radiotap). Then each frame comes as an enhanced packet block.
-        Its radiotap header has the TSF, channel and signal, and its
-        `epb_flags` give the direction.
-
-        Frames are queued for each capture. If the client reads too slowly,
-        frames are dropped, never the radio held up; the next frame written
-        carries the number dropped (`epb_dropcount`).
-
-        The radio hears everything on its channel, other devices' AWDL
-        frames included, so a capture can show their addresses and host
-        names.
-      parameters:
-        - name: peer
-          in: query
-          description: |
-            Only frames to or from these addresses (repeatable). Without it,
-            every frame.
-          schema:
-            type: array
-            items:
-              type: string
-              pattern: '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$'
-          style: form
-          explode: true
-        - name: kind
-          in: query
-          description: |
-            `awdl`: the frames Warlock reads (AWDL action frames and
-            AWDL-encapsulated data). `other`: everything else it hears.
-          schema:
-            type: string
-            enum: [awdl, other, all]
-            default: all
-        - name: tx
-          in: query
-          description: Also Warlock's own transmissions.
-          schema:
-            type: boolean
-            default: false
-      responses:
-        '200':
-          description: The capture, as it happens.
-          content:
-            application/x-pcapng:
-              schema:
-                type: string
-                contentMediaType: application/x-pcapng
-        '400': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 components:
   responses:

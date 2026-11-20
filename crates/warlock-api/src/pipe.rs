@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-//! The named pipe the API is served on.
+//! The named pipes the API is served on.
 //!
 //! - The first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so
 //!   nothing can squat the name, and a second Warlock fails to start.
@@ -7,8 +7,12 @@
 //!   SMB).
 //! - A spare instance is always listening: each accepted connection is
 //!   replaced by a new instance before it's handed over.
-//! - The service's pipe admits SYSTEM, Administrators and the
-//!   `warlock-users` group, when it exists.
+//! - Who may open each of the service's pipes is its access list's to say,
+//!   and so Windows' to enforce, never the server's (Parker, 2026-11-19).
+//!   The API's pipe admits SYSTEM, Administrators, `warlock-users` and
+//!   `warlock-admin`; the admin pipe, where captures are, SYSTEM,
+//!   Administrators and `warlock-admin`. A group that doesn't exist yet is
+//!   left out.
 //! - Each connection is tagged with its client's process ID
 //!   (`GetNamedPipeClientProcessId`), as a [`Client`].
 
@@ -34,10 +38,35 @@ use windows_sys::Win32::System::Threading::{
 /// `docker-users`.
 pub const USERS_GROUP: &str = "warlock-users";
 
-/// Who may open the pipe.
+/// The local group allowed to use the admin API too: captures of the
+/// radio, which hear every device nearby and Warlock's traffic for every
+/// user of this PC (Parker, 2026-11-19).
+pub const ADMIN_GROUP: &str = "warlock-admin";
+
+/// Which of the service's pipes: what it serves, and who may open it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    /// `api/openapi.yaml`: [`USERS_GROUP`] and [`ADMIN_GROUP`].
+    Api,
+    /// `api/admin.yaml`: [`ADMIN_GROUP`].
+    Admin,
+}
+
+impl Surface {
+    /// The groups its pipe admits, besides SYSTEM and Administrators.
+    fn groups(self) -> &'static [&'static str] {
+        match self {
+            Surface::Api => &[USERS_GROUP, ADMIN_GROUP],
+            Surface::Admin => &[ADMIN_GROUP],
+        }
+    }
+}
+
+/// Who may open the pipes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Security {
-    /// SYSTEM, Administrators and [`USERS_GROUP`]: the service's pipe.
+    /// SYSTEM, Administrators and the [`Surface`]'s groups: the service's
+    /// pipes.
     Service,
     /// Windows' default for a pipe this process creates, which admits this
     /// user: for tests.
@@ -113,16 +142,30 @@ fn sid_string(account: &str) -> Option<String> {
     }
 }
 
-impl Descriptor {
-    /// SYSTEM and Administrators get full access; [`USERS_GROUP`], when it
-    /// exists, read and write. The DACL is protected from inheritance.
-    fn for_service() -> io::Result<Self> {
-        let mut sddl = String::from("D:P(A;;GA;;;SY)(A;;GA;;;BA)");
-        match sid_string(USERS_GROUP) {
-            Some(sid) => sddl.push_str(&format!("(A;;GRGW;;;{sid})")),
-            None => warn!("no {USERS_GROUP} group: only Administrators can use the API"),
+/// The SDDL of a service pipe's access list: SYSTEM and Administrators get
+/// full access, and each group with a SID in `groups` read and write.
+/// Protected from inheritance.
+fn sddl(groups: &[(&str, Option<String>)]) -> String {
+    let mut sddl = String::from("D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+    for (_, sid) in groups {
+        if let Some(sid) = sid {
+            sddl.push_str(&format!("(A;;GRGW;;;{sid})"));
         }
-        let text = wide(&sddl);
+    }
+    sddl
+}
+
+impl Descriptor {
+    /// The access list of `surface`'s pipe ([`sddl`]), with the groups that
+    /// exist.
+    fn for_service(surface: Surface) -> io::Result<Self> {
+        let groups: Vec<(&str, Option<String>)> = surface.groups().iter().map(|&g| (g, sid_string(g))).collect();
+        for (group, sid) in &groups {
+            if sid.is_none() {
+                warn!(?surface, "no {group} group: it can't open this pipe");
+            }
+        }
+        let text = wide(&sddl(&groups));
         let mut sd: PSECURITY_DESCRIPTOR = null_mut();
         // SAFETY: a NUL-terminated SDDL string; the descriptor is ours to free.
         let ok = unsafe {
@@ -186,11 +229,11 @@ pub struct PipeListener {
 }
 
 impl PipeListener {
-    /// Creates the pipe's first instance. Fails if the name is taken, by a
-    /// running Warlock or anything else. Needs a Tokio runtime.
-    pub fn bind(name: &str, security: Security) -> io::Result<Self> {
+    /// Creates the first instance of `surface`'s pipe. Fails if the name is
+    /// taken, by a running Warlock or anything else. Needs a Tokio runtime.
+    pub fn bind(name: &str, surface: Surface, security: Security) -> io::Result<Self> {
         let sd = match security {
-            Security::Service => Some(Descriptor::for_service()?),
+            Security::Service => Some(Descriptor::for_service(surface)?),
             Security::Default => None,
         };
         let mut options = ServerOptions::new();
@@ -228,5 +271,25 @@ impl PipeListener {
             let ok = unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut pid) };
             return (pipe, Client { pid: (ok != 0).then_some(pid) });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The admin pipe admits warlock-admin and never warlock-users; the
+    /// API's pipe admits both. Groups that don't exist are left out.
+    #[test]
+    fn each_pipe_admits_its_groups() {
+        let with = |surface: Surface| -> Vec<(&str, Option<String>)> {
+            surface.groups().iter().map(|&g| (g, Some(format!("S-1-5-21-{}", g.len())))).collect()
+        };
+        assert_eq!(Surface::Admin.groups(), [ADMIN_GROUP]);
+        assert_eq!(Surface::Api.groups(), [USERS_GROUP, ADMIN_GROUP]);
+        let admin = sddl(&with(Surface::Admin));
+        assert_eq!(admin, format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;S-1-5-21-{})", ADMIN_GROUP.len()));
+        let none = sddl(&[(ADMIN_GROUP, None)]);
+        assert_eq!(none, "D:P(A;;GA;;;SY)(A;;GA;;;BA)");
     }
 }

@@ -51,12 +51,12 @@ repos:
         language: system
         files: '(^|/)Cargo\.(toml|lock)$|^deny\.toml$'
         pass_filenames: false
-      # The API contract against Redocly's recommended rules (redocly.yaml).
+      # The API contracts against Redocly's recommended rules (redocly.yaml).
       # Through the system's npx: pre-commit's own Node environments can't
       # use an installed Node.js on Windows.
       - id: redocly-lint
-        name: redocly lint api/openapi.yaml
-        entry: npx --yes @redocly/cli@2.73.0 lint api/openapi.yaml
+        name: redocly lint api/openapi.yaml api/admin.yaml
+        entry: npx --yes @redocly/cli@2.73.0 lint api/openapi.yaml api/admin.yaml
         language: system
         files: '^api/.*\.yaml$|^redocly\.yaml$'
         pass_filenames: false

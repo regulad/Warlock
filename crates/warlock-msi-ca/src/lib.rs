@@ -2,15 +2,15 @@
 //! warlock-msi-ca: the one custom action Warlock's MSI runs from a DLL, and
 //! the only thing it can't do with its own tables (PLAN.md, W6).
 //!
-//! The install page's "Add me to warlock-users" checkbox should show, ticked
-//! and greyed out, when the account installing is already in the group
-//! (Parker, 2026-11-19). Windows Installer's searches see files, folders,
-//! registry values and components, not group membership, and the group's
-//! members are in the SAM, which only SYSTEM can read. So before the pages,
-//! [`FindMembership`] lists the group's members and compares them with
-//! `UserSID`, the account running the install.
+//! The installer's "Add me to warlock-users" and "Add me to warlock-admin"
+//! checkboxes should show, ticked and greyed out, when the account installing
+//! is already in that group (Parker, 2026-11-19). Windows Installer's searches
+//! see files, folders, registry values and components, not group membership,
+//! and the groups' members are in the SAM, which only SYSTEM can read. So
+//! before the pages, [`FindMembership`] lists each group's members and
+//! compares them with `UserSID`, the account running the install.
 //!
-//! An account the install added only gets the group's rights from its next
+//! An account the install added only gets a group's rights from its next
 //! sign-in, so the Done page then asks it to sign out (Parker, 2026-11-19):
 //! its Finish runs [`FindJoined`], which looks again, and the page's modal
 //! "Sign out now" runs [`SignOut`].
@@ -37,15 +37,25 @@ use windows_sys::Win32::System::Shutdown::{
     SHTDN_REASON_MINOR_INSTALLATION,
 };
 
-/// `warlock_api::USERS_GROUP`, which this DLL doesn't link.
-const GROUP: &str = "warlock-users";
-/// Set to 1 when the account installing is already a member.
-const MEMBER_PROPERTY: &str = "WARLOCKUSERSMEMBER";
-/// Set to 1 after the install when that account wasn't a member before it
-/// and is now.
-const JOINED_PROPERTY: &str = "WARLOCKUSERSJOINED";
-/// The checkbox's property, which a member gets ticked.
-const JOIN_PROPERTY: &str = "JOINWARLOCKUSERS";
+/// One of Warlock's groups (`warlock_api`'s, which this DLL doesn't link),
+/// and the installer's properties for it.
+struct Group {
+    name: &'static str,
+    /// Set to 1 when the account installing is already a member.
+    member: &'static str,
+    /// Its checkbox's property, which a member gets ticked.
+    join: &'static str,
+}
+
+const GROUPS: [Group; 2] = [
+    Group { name: "warlock-users", member: "WARLOCKUSERSMEMBER", join: "JOINWARLOCKUSERS" },
+    Group { name: "warlock-admin", member: "WARLOCKADMINMEMBER", join: "JOINWARLOCKADMIN" },
+];
+/// Set to 1 after the install when the account is now in a group it wasn't
+/// in before.
+const JOINED_PROPERTY: &str = "WARLOCKJOINED";
+/// Those groups, for the sign-out modal: "warlock-users and warlock-admin".
+const JOINED_GROUPS_PROPERTY: &str = "WARLOCKJOINEDGROUPS";
 /// `ERROR_NO_SUCH_ALIAS` and `NERR_GroupNotFound`: no group, as before
 /// Warlock is first installed.
 const NO_GROUP: [u32; 2] = [1376, 2220];
@@ -54,8 +64,8 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-/// The custom action: sets [`MEMBER_PROPERTY`] and [`JOIN_PROPERTY`] to 1
-/// when `UserSID` is a member of [`GROUP`]. Always succeeds.
+/// The custom action: for each group `UserSID` is a member of, sets its
+/// `member` and `join` properties to 1. Always succeeds.
 ///
 /// # Safety
 ///
@@ -63,23 +73,26 @@ fn wide(s: &str) -> Vec<u16> {
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn FindMembership(install: MSIHANDLE) -> u32 {
     let sid = property(install, "UserSID").unwrap_or_default();
-    let said = match is_member(&sid) {
-        Ok(true) => {
-            set(install, MEMBER_PROPERTY, "1");
-            set(install, JOIN_PROPERTY, "1");
-            format!("{sid} is already in {GROUP}")
-        }
-        Ok(false) => format!("{sid} isn't in {GROUP}"),
-        Err(e) => format!("couldn't tell whether {sid:?} is in {GROUP}: {e}"),
-    };
-    log(install, &format!("FindMembership: {said}"));
+    for group in &GROUPS {
+        let said = match is_member(group.name, &sid) {
+            Ok(true) => {
+                set(install, group.member, "1");
+                set(install, group.join, "1");
+                format!("{sid} is already in {}", group.name)
+            }
+            Ok(false) => format!("{sid} isn't in {}", group.name),
+            Err(e) => format!("couldn't tell whether {sid:?} is in {}: {e}", group.name),
+        };
+        log(install, &format!("FindMembership: {said}"));
+    }
     0
 }
 
-/// The custom action the Done page's Finish runs: sets [`JOINED_PROPERTY`]
-/// to 1 when `UserSID` is in [`GROUP`] now and [`MEMBER_PROPERTY`] said it
-/// wasn't before. It asks the group itself, so an install that failed to
-/// add the account doesn't ask it to sign out. Always succeeds.
+/// The custom action the Done page's Finish runs: when `UserSID` is now in
+/// groups whose `member` property said it wasn't before, sets
+/// [`JOINED_PROPERTY`] to 1 and [`JOINED_GROUPS_PROPERTY`] to their names.
+/// It asks the groups themselves, so an install that failed to add the
+/// account doesn't ask it to sign out. Always succeeds.
 ///
 /// # Safety
 ///
@@ -87,17 +100,24 @@ pub unsafe extern "system" fn FindMembership(install: MSIHANDLE) -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn FindJoined(install: MSIHANDLE) -> u32 {
     let sid = property(install, "UserSID").unwrap_or_default();
-    let before = property(install, MEMBER_PROPERTY).is_some_and(|v| !v.is_empty());
-    let said = match is_member(&sid) {
-        Ok(true) if !before => {
-            set(install, JOINED_PROPERTY, "1");
-            format!("{sid} joined {GROUP}")
-        }
-        Ok(true) => format!("{sid} was already in {GROUP}"),
-        Ok(false) => format!("{sid} isn't in {GROUP}"),
-        Err(e) => format!("couldn't tell whether {sid:?} is in {GROUP}: {e}"),
-    };
-    log(install, &format!("FindJoined: {said}"));
+    let mut joined = Vec::new();
+    for group in &GROUPS {
+        let before = property(install, group.member).is_some_and(|v| !v.is_empty());
+        let said = match is_member(group.name, &sid) {
+            Ok(true) if !before => {
+                joined.push(group.name);
+                format!("{sid} joined {}", group.name)
+            }
+            Ok(true) => format!("{sid} was already in {}", group.name),
+            Ok(false) => format!("{sid} isn't in {}", group.name),
+            Err(e) => format!("couldn't tell whether {sid:?} is in {}: {e}", group.name),
+        };
+        log(install, &format!("FindJoined: {said}"));
+    }
+    if !joined.is_empty() {
+        set(install, JOINED_PROPERTY, "1");
+        set(install, JOINED_GROUPS_PROPERTY, &joined.join(" and "));
+    }
     0
 }
 
@@ -122,9 +142,9 @@ pub unsafe extern "system" fn SignOut(install: MSIHANDLE) -> u32 {
     0
 }
 
-/// Whether the account `sid` (`S-1-5-21-…`) is a direct member of [`GROUP`].
+/// Whether the account `sid` (`S-1-5-21-…`) is a direct member of `group`.
 /// No group means no.
-fn is_member(sid: &str) -> Result<bool, String> {
+fn is_member(group: &str, sid: &str) -> Result<bool, String> {
     let mut psid: PSID = null_mut();
     // SAFETY: a NUL-terminated string and an out pointer.
     if unsafe { ConvertStringSidToSidW(wide(sid).as_ptr(), &mut psid) } == 0 {
@@ -138,7 +158,7 @@ fn is_member(sid: &str) -> Result<bool, String> {
     let rc = unsafe {
         NetLocalGroupGetMembers(
             null(),
-            wide(GROUP).as_ptr(),
+            wide(group).as_ptr(),
             0,
             &mut buf,
             MAX_PREFERRED_LENGTH,
@@ -155,7 +175,7 @@ fn is_member(sid: &str) -> Result<bool, String> {
             Ok(members.iter().any(|m| unsafe { EqualSid(m.lgrmi0_sid, psid) } != 0))
         }
         rc if NO_GROUP.contains(&rc) => Ok(false),
-        rc => Err(format!("listing {GROUP}: error {rc}")),
+        rc => Err(format!("listing {group}: error {rc}")),
     };
     // SAFETY: allocated by the calls that filled them (a null buffer is fine).
     unsafe {
@@ -206,12 +226,14 @@ mod tests {
     #[test]
     fn system_is_not_a_member() {
         // Whether or not this PC has the group, LocalSystem isn't in it.
-        assert_eq!(is_member("S-1-5-18"), Ok(false));
+        for group in &GROUPS {
+            assert_eq!(is_member(group.name, "S-1-5-18"), Ok(false), "{}", group.name);
+        }
     }
 
     #[test]
     fn a_bad_sid_is_an_error() {
-        assert!(is_member("").is_err());
-        assert!(is_member("regulad").is_err());
+        assert!(is_member("warlock-users", "").is_err());
+        assert!(is_member("warlock-users", "regulad").is_err());
     }
 }

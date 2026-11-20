@@ -21,7 +21,11 @@
 //! as long as the command runs. `capture` writes pcapng to FILE, or to
 //! standard output with `-w -` (the default when that isn't a terminal), for
 //! example into `wireshark -k -i -`; its frame count goes to standard error.
-//! The service's pipe admits Administrators and the `warlock-users` group.
+//!
+//! Commands use the API's pipe, which admits Administrators and the
+//! `warlock-users` and `warlock-admin` groups. `capture` uses the admin pipe
+//! (`api/admin.yaml`), which admits Administrators and `warlock-admin`
+//! only. `--pipe` names the pipe instead, for either.
 
 use std::fs::File;
 use std::io::{self, IsTerminal, Write};
@@ -139,21 +143,21 @@ async fn run(client: &Client, command: &str, arg: Option<&str>) -> Result<(), Cl
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut pipe = warlock_client::PIPE.to_string();
+    let mut pipe = None;
     if args.first().map(String::as_str) == Some("--pipe") {
         if args.len() < 2 {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
-        pipe = args.remove(1);
+        pipe = Some(args.remove(1));
         args.remove(0);
     }
-    let client = Client::new(pipe);
     if args.first().map(String::as_str) == Some("capture") {
         let Some(capture) = Capture::parse(&args[1..]) else {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         };
+        let client = Client::new(pipe.unwrap_or_else(|| warlock_client::ADMIN_PIPE.into()));
         return match capture.run(&client).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -162,6 +166,7 @@ async fn main() -> ExitCode {
             }
         };
     }
+    let client = Client::new(pipe.unwrap_or_else(|| warlock_client::PIPE.into()));
     let (command, arg) = match args.as_slice() {
         [c] if ["info", "peers", "advertising", "holds", "events"].contains(&c.as_str()) => (c.clone(), None),
         [c, a] if ["peer", "advertise", "hold"].contains(&c.as_str()) => (c.clone(), Some(a.clone())),

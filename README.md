@@ -51,11 +51,17 @@ The installer adds:
   the adapter is plugged in;
 - `warlock.exe` and `warlockctl.exe` in `C:\Program Files\Warlock`, which joins
   the system `PATH`;
-- the **`warlock-users`** group, whose members may use Warlock's control API
-  (Administrators always may). Tick "Add me to warlock-users" while
-  installing to join it (a silent install: `JOINWARLOCKUSERS=1`); it counts
-  from your next sign-in, so the installer then offers to sign you out. The
-  box shows ticked and greyed out when you're already a member.
+- two groups (Administrators may always do what either allows):
+  - **`warlock-users`**, whose members may use Warlock's control API;
+  - **`warlock-admin`**, whose members may also capture the radio's frames.
+    A capture hears every device nearby, and Warlock's traffic for every
+    user of the PC, so it takes this second group.
+
+  The installer's Options page can add you to either ("Add me to
+  warlock-users", "Add me to warlock-admin"; a silent install:
+  `JOINWARLOCKUSERS=1`, `JOINWARLOCKADMIN=1`). A group counts from your next
+  sign-in, so the installer then offers to sign you out. A box shows ticked
+  and greyed out when you're already a member.
 
 ## Use
 
@@ -89,7 +95,7 @@ warlockctl capture -w FILE       the radio's 802.11 frames as pcapng until Ctrl+
 For packets, Wireshark captures on the Warlock AWDL adapter. For the frames
 underneath, including those Warlock doesn't deliver to Windows, the installer
 can add **Warlock radio (802.11)** to Wireshark's capture interfaces. Tick
-"Also install the Wireshark plugin" when installing; it's greyed out when
+"Also install the Wireshark plugin" on its Options page; it's greyed out when
 Wireshark isn't installed. A silent install adds it with `WIRESHARKPLUGIN=1`.
 Its options pick peers, AWDL or other frames, and Warlock's own. Without the
 plugin, `warlockctl capture [--peer MAC]... [--kind awdl|other|all] [--tx]`
@@ -97,14 +103,22 @@ writes the same pcapng, to open in Wireshark or pipe in live:
 `warlockctl capture -w - | wireshark -k -i -`. The radio hears every device
 nearby, so a capture holds other devices' addresses and host names too.
 
-To use `warlockctl` and the plugin without elevation, be in `warlock-users`:
-tick the installer's "Add me" box, or run
-`net localgroup warlock-users <you> /add` as Administrator, then sign in
-again.
+To use `warlockctl` without elevation, be in `warlock-users`; to capture,
+with `warlockctl capture` or the plugin, be in `warlock-admin`. Tick the
+installer's boxes, or run `net localgroup warlock-admin <you> /add` (or
+`warlock-users`) as Administrator, then sign in again.
 
-Programs control Warlock the same way, through a local HTTP API on the named
-pipe `\\.\pipe\warlock`. Its contract is [`api/openapi.yaml`](api/openapi.yaml);
-[`crates/warlock-client`](crates/warlock-client) is a Rust client for it.
+Programs control Warlock the same way, through a local HTTP API on two named
+pipes, each with its own contract:
+
+- `\\.\pipe\warlock` ([`api/openapi.yaml`](api/openapi.yaml)): Warlock, its
+  peers, advertising, holds and events, for `warlock-users` and
+  `warlock-admin`;
+- `\\.\pipe\warlock-admin` ([`api/admin.yaml`](api/admin.yaml)): captures,
+  for `warlock-admin` only.
+
+Windows enforces who may open each pipe, by its access list.
+[`crates/warlock-client`](crates/warlock-client) is a Rust client for both.
 
 Warlock logs to the Windows Event Log: in Event Viewer, *Applications and
 Services Logs → Regulad → Warlock → Operational*; from a shell,
@@ -151,7 +165,7 @@ it's on, blocks unsigned builds; releases are signed in GitHub Actions
 ([`.github/workflows/build.yml`](.github/workflows/build.yml)).
 
 The pre-commit hooks ([`.pre-commit-config.yaml`](.pre-commit-config.yaml))
-run rustfmt, Clippy, cargo-deny, clang-format and the API contract's lint.
+run rustfmt, Clippy, cargo-deny, clang-format and the API contracts' lint.
 
 ## Documentation
 
@@ -167,7 +181,7 @@ Warlock is free software:
 - **GPL-2.0-only** ([`LICENSE.md`](LICENSE.md)) for Warlock itself, matching
   [devourer](https://github.com/OpenIPC/devourer), the user-space Realtek
   driver it builds in.
-- **GPL-2.0-only OR AGPL-3.0-or-later**, at your choice, for the API contract
+- **GPL-2.0-only OR AGPL-3.0-or-later**, at your choice, for the API contracts
   and `warlock-client`, so programs under either licence can use them.
 - **AGPL-3.0-only** ([`LICENSE-AGPL-3.0.md`](LICENSE-AGPL-3.0.md)) for
   `warlockctl`.

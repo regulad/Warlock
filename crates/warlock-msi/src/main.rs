@@ -21,17 +21,18 @@
 //! - the Warlock service: LocalSystem, automatic (delayed) start, its own
 //!   service SID;
 //! - `warlock setup` once the service exists and before it starts (the
-//!   `warlock-users` group, the service's restart-on-failure actions; undone
-//!   if a fresh install rolls back), and on an uninstall that isn't an
-//!   upgrade, `warlock teardown` (the adapter back to Windows' own driver,
-//!   the group removed);
-//! - optionally, the account installing in `warlock-users`, when the install
-//!   page's other checkbox (off by default) or `JOINWARLOCKUSERS=1` asks. The
+//!   `warlock-users` and `warlock-admin` groups, the service's
+//!   restart-on-failure actions; undone if a fresh install rolls back), and
+//!   on an uninstall that isn't an upgrade, `warlock teardown` (the adapter
+//!   back to Windows' own driver, the groups removed);
+//! - optionally, the account installing in `warlock-users` or
+//!   `warlock-admin` ([`GROUPS`]), when its checkbox on the Options page (off
+//!   by default) or `JOINWARLOCKUSERS=1` / `JOINWARLOCKADMIN=1` asks. A
 //!   checkbox shows ticked and greyed out when that account is already a
 //!   member, which `warlock-msi-ca`'s DLL finds out before the pages;
 //! - optionally, `warlock-extcap.exe` in Wireshark's `extcap` folder, which
 //!   makes Warlock's radio a Wireshark capture interface. It goes in when
-//!   the install page's checkbox (off by default) or `WIRESHARKPLUGIN=1`
+//!   the Options page's checkbox (off by default) or `WIRESHARKPLUGIN=1`
 //!   asks for it and the registry shows where Wireshark is; it stays in on
 //!   an upgrade that finds it installed.
 //!
@@ -110,20 +111,56 @@ const WIRESHARK_PLUGIN_PROPERTY: &str = "WIRESHARKPLUGIN";
 /// version's plugin will be removed (Parker, 2026-11-19).
 const WIRESHARK_PLUGIN_FOUND_PROPERTY: &str = "WIRESHARKPLUGINFOUND";
 
-/// Adds the account that runs the install (`UserSID`) to `warlock-users`,
-/// so it can use Warlock without elevation from its next sign-in: the
-/// installer's other checkbox (off by default), or `JOINWARLOCKUSERS=1`
-/// (Parker, 2026-11-19). Nothing takes the account out again but an
-/// uninstall, which removes the group.
-const JOIN_USERS_PROPERTY: &str = "JOINWARLOCKUSERS";
-/// Set by `warlock-msi-ca`'s `FindMembership`, before the pages, when the
-/// account installing is already in `warlock-users`: the checkbox shows
-/// ticked and greyed out (Parker, 2026-11-19).
-const MEMBER_PROPERTY: &str = "WARLOCKUSERSMEMBER";
+/// One of Warlock's groups that the installer can add the account running it
+/// (`UserSID`) to, from that account's next sign-in: a checkbox each (off by
+/// default), or the `join` property on a silent install (Parker,
+/// 2026-11-19). Nothing takes the account out again but an uninstall, which
+/// removes the groups.
+pub(crate) struct Group {
+    pub name: &'static str,
+    /// The checkbox's property: `JOINWARLOCKUSERS=1` joins `warlock-users`.
+    pub join: &'static str,
+    /// Set by `warlock-msi-ca`'s `FindMembership`, before the pages, when the
+    /// account is already a member: the checkbox shows ticked and greyed out.
+    pub member: &'static str,
+    /// The custom action that adds the account, as SYSTEM.
+    pub action: &'static str,
+    /// The checkbox's control, and the start of its notes' names.
+    pub control: &'static str,
+    /// The checkbox's label, with its keyboard shortcut.
+    pub label: &'static str,
+    /// What membership is for, under the checkbox.
+    pub purpose: &'static str,
+}
+
+/// `warlock-users`, then `warlock-admin` below it (Parker, 2026-11-19).
+/// The names and properties are `warlock-msi-ca`'s too.
+pub(crate) const GROUPS: [Group; 2] = [
+    Group {
+        name: "warlock-users",
+        join: "JOINWARLOCKUSERS",
+        member: "WARLOCKUSERSMEMBER",
+        action: "WarlockJoinUsers",
+        control: "JoinUsers",
+        label: "Add &me ([LogonUser]) to warlock-users",
+        purpose: "To use Warlock without elevation, from your next sign-in.",
+    },
+    Group {
+        name: "warlock-admin",
+        join: "JOINWARLOCKADMIN",
+        member: "WARLOCKADMINMEMBER",
+        action: "WarlockJoinAdmin",
+        control: "JoinAdmin",
+        label: "Add me ([LogonUser]) to warlock-&admin",
+        purpose: "To capture the radio (warlockctl capture, the Wireshark plugin), from your next sign-in.",
+    },
+];
 /// Set by `FindJoined`, when the Done page's Finish is pressed, when the
-/// install added that account: a modal asks it to sign out, since the group
-/// counts from its next sign-in (Parker, 2026-11-19).
-const JOINED_PROPERTY: &str = "WARLOCKUSERSJOINED";
+/// install added that account to a group: a modal asks it to sign out, since
+/// groups count from the next sign-in (Parker, 2026-11-19).
+const JOINED_PROPERTY: &str = "WARLOCKJOINED";
+/// Those groups, as the modal names them ("warlock-users and warlock-admin").
+const JOINED_GROUPS_PROPERTY: &str = "WARLOCKJOINEDGROUPS";
 /// The Binary table's name for `warlock_msi_ca.dll`.
 const CA_BINARY: &str = "WarlockCa";
 
@@ -291,7 +328,10 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("ARPCOMMENTS", "Apple Wireless Direct Link (AWDL) for Windows"),
         // Set in the UI (FindRelatedProducts, AppSearch, the checkbox), used
         // by the elevated part.
-        ("SecureCustomProperties", "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN;JOINWARLOCKUSERS"),
+        (
+            "SecureCustomProperties",
+            "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN;JOINWARLOCKUSERS;JOINWARLOCKADMIN",
+        ),
     ]
     .into_iter()
     .chain(ui::PROPERTIES)
@@ -631,21 +671,18 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
             None,
         ])
         .row(vec![s("WarlockTeardown"), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s("teardown"), None])
-        // The target is formatted as the action is scheduled, so it carries
-        // the SID of the account installing. A failure only goes in the log:
-        // that account can still join the group by hand.
-        .row(vec![
-            s("WarlockJoinUsers"),
-            n(CA_EXE_AS_SYSTEM | CA_CONTINUE),
-            s("warlock.exe"),
-            s("setup --member [UserSID]"),
-            None,
-        ])
-        // Before the pages: is the account installing already in the group?
+        // Before the pages: is the account installing already in the groups?
         .row(vec![s("WarlockFindMembership"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindMembership"), None])
         // Run by the Done page and its sign-out modal (`ui`).
         .row(vec![s("WarlockFindJoined"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindJoined"), None])
         .row(vec![s("WarlockSignOut"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("SignOut"), None]);
+    // Joining a group. The target is formatted as the action is scheduled, so
+    // it carries the SID of the account installing. A failure only goes in
+    // the log: that account can still join the group by hand.
+    for g in &GROUPS {
+        let target = format!("setup --member {} [UserSID]", g.name);
+        custom.row(vec![s(g.action), n(CA_EXE_AS_SYSTEM | CA_CONTINUE), s("warlock.exe"), s(&target), None]);
+    }
     all.push(custom);
 
     // The custom action DLL's row is added by `build`, as a stream.
@@ -666,7 +703,13 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     // there before, with its members.
     let fresh_install = Some("NOT REMOVE~=\"ALL\" AND NOT OLDERFOUND");
     let real_uninstall = Some("REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE");
-    let join_users = format!("{JOIN_USERS_PROPERTY} AND UserSID AND NOT REMOVE~=\"ALL\"");
+    // Joining each group asked for, once the groups exist and before the
+    // service starts.
+    let joins: Vec<(&str, String, i32)> = GROUPS
+        .iter()
+        .zip(5880..)
+        .map(|(g, at)| (g.action, format!("{} AND UserSID AND NOT REMOVE~=\"ALL\"", g.join), at))
+        .collect();
     // With the dialogs (`ui`) between costing and executing.
     let ui_sequence: Vec<(&str, Option<&str>, i32)> = [
         ("FindRelatedProducts", None, 25),
@@ -685,48 +728,47 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
     .chain(ui::SEQUENCE)
     .collect();
     all.push(sequence("InstallUISequence", &ui_sequence));
-    all.push(sequence(
-        "InstallExecuteSequence",
-        &[
-            ("FindRelatedProducts", None, 25),
-            ("AppSearch", None, 50),
-            ("LaunchConditions", None, 100),
-            ("ValidateProductID", None, 700),
-            ("CostInitialize", None, 800),
-            ("FileCost", None, 900),
-            ("CostFinalize", None, 1000),
-            ("MigrateFeatureStates", None, 1200),
-            ("InstallValidate", None, 1400),
-            // The old version goes first, whole.
-            ("RemoveExistingProducts", None, 1401),
-            ("InstallInitialize", None, 1500),
-            ("ProcessComponents", None, 1600),
-            ("UnpublishFeatures", None, 1800),
-            ("StopServices", Some("VersionNT"), 1900),
-            ("WarlockTeardown", real_uninstall, 1950),
-            ("DeleteServices", Some("VersionNT"), 2000),
-            ("RemoveEnvironmentStrings", None, 3300),
-            ("RemoveFiles", None, 3500),
-            ("RemoveFolders", None, 3600),
-            ("CreateFolders", None, 3700),
-            ("InstallFiles", None, 4000),
-            ("WriteEnvironmentStrings", None, 5200),
-            ("InstallServices", Some("VersionNT"), 5800),
-            ("MsiConfigureServices", Some("VersionNT"), 5850),
-            // Once the service exists (for its failure actions), before it
-            // starts; a rollback action goes before the action it undoes.
-            ("WarlockSetupRollback", fresh_install, 5870),
-            ("WarlockSetup", install, 5875),
-            // Once the group exists.
-            ("WarlockJoinUsers", Some(join_users.as_str()), 5880),
-            ("StartServices", Some("VersionNT"), 5900),
-            ("RegisterUser", None, 6000),
-            ("RegisterProduct", None, 6100),
-            ("PublishFeatures", None, 6300),
-            ("PublishProduct", None, 6400),
-            ("InstallFinalize", None, 6600),
-        ],
-    ));
+    let execute: Vec<(&str, Option<&str>, i32)> = [
+        ("FindRelatedProducts", None, 25),
+        ("AppSearch", None, 50),
+        ("LaunchConditions", None, 100),
+        ("ValidateProductID", None, 700),
+        ("CostInitialize", None, 800),
+        ("FileCost", None, 900),
+        ("CostFinalize", None, 1000),
+        ("MigrateFeatureStates", None, 1200),
+        ("InstallValidate", None, 1400),
+        // The old version goes first, whole.
+        ("RemoveExistingProducts", None, 1401),
+        ("InstallInitialize", None, 1500),
+        ("ProcessComponents", None, 1600),
+        ("UnpublishFeatures", None, 1800),
+        ("StopServices", Some("VersionNT"), 1900),
+        ("WarlockTeardown", real_uninstall, 1950),
+        ("DeleteServices", Some("VersionNT"), 2000),
+        ("RemoveEnvironmentStrings", None, 3300),
+        ("RemoveFiles", None, 3500),
+        ("RemoveFolders", None, 3600),
+        ("CreateFolders", None, 3700),
+        ("InstallFiles", None, 4000),
+        ("WriteEnvironmentStrings", None, 5200),
+        ("InstallServices", Some("VersionNT"), 5800),
+        ("MsiConfigureServices", Some("VersionNT"), 5850),
+        // Once the service exists (for its failure actions), before it
+        // starts; a rollback action goes before the action it undoes.
+        ("WarlockSetupRollback", fresh_install, 5870),
+        ("WarlockSetup", install, 5875),
+        ("StartServices", Some("VersionNT"), 5900),
+        ("RegisterUser", None, 6000),
+        ("RegisterProduct", None, 6100),
+        ("PublishFeatures", None, 6300),
+        ("PublishProduct", None, 6400),
+        ("InstallFinalize", None, 6600),
+    ]
+    .into_iter()
+    .chain(joins.iter().map(|(action, condition, at)| (*action, Some(condition.as_str()), *at)))
+    .collect();
+    all.push(sequence("InstallExecuteSequence", &execute));
     all.push(sequence(
         "AdminUISequence",
         &[
@@ -1189,4 +1231,27 @@ fn main() -> Result<()> {
     let out = out.unwrap_or_else(|| root.join("target").join("msi").join(format!("Warlock-{version}-x64.msi")));
     std::fs::create_dir_all(out.parent().ok_or("no folder for --out")?)?;
     build(&root, &out, &version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The groups and properties here are written out again in the custom
+    /// action DLL and in `warlock-api`, which this builder doesn't link: they
+    /// must say the same.
+    #[test]
+    fn the_groups_agree_with_the_dll_and_the_server() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let dll = std::fs::read_to_string(root.join("warlock-msi-ca/src/lib.rs")).unwrap();
+        let server = std::fs::read_to_string(root.join("warlock-api/src/pipe.rs")).unwrap();
+        for g in &GROUPS {
+            let entry = format!("Group {{ name: \"{}\", member: \"{}\", join: \"{}\" }}", g.name, g.member, g.join);
+            assert!(dll.contains(&entry), "warlock-msi-ca has no {entry}");
+            assert!(server.contains(&format!("= \"{}\";", g.name)), "warlock-api has no group {}", g.name);
+        }
+        for property in [JOINED_PROPERTY, JOINED_GROUPS_PROPERTY] {
+            assert!(dll.contains(&format!("= \"{property}\";")), "warlock-msi-ca doesn't set {property}");
+        }
+    }
 }

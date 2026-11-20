@@ -1,4 +1,4 @@
-# Redocly CLI configuration for `redocly lint api/openapi.yaml`, which
+# Redocly CLI configuration for `redocly lint api/openapi.yaml api/admin.yaml`, which
 # pre-commit runs (.pre-commit-config.yaml).
 extends:
   - recommended
