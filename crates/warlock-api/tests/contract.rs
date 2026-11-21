@@ -424,9 +424,10 @@ async fn a_request_carries_its_identity_while_its_connection_lasts() {
     let mut lines = client.raw_stream(Method::POST, "/v1/request", Some(body)).await.unwrap();
     let first = next_line(&mut lines, "ServiceRequestState", Duration::from_secs(1)).await;
     assert_eq!(first, json!({"service": "_rdlink._tcp", "asking": false, "identity": null, "message": null}));
-    until(&mut daemon, Duration::from_secs(1), |w| w.requests.values().any(|s| s == "_rdlink._tcp")).await;
+    until(&mut daemon, Duration::from_secs(1), |w| w.requests.values().any(|r| r.service == "_rdlink._tcp")).await;
     let wanted = answers.wanted().expect("the first call gives the requests");
-    let (&id, _) = wanted.iter().next().unwrap();
+    let (&id, want) = wanted.iter().next().unwrap();
+    assert!(!want.needs_keyboard, "off unless asked for");
     assert_eq!(answers.wanted(), None, "unchanged");
 
     // The daemon asks, with an identity: the stream says so.
@@ -455,15 +456,21 @@ async fn a_request_carries_its_identity_while_its_connection_lasts() {
     assert!(!list.to_string().contains(&"ab".repeat(16)), "{list}");
     let typed = client.requests().await.unwrap();
     assert_eq!(
-        (typed[0].service.as_str(), typed[0].reason.as_str(), typed[0].asking),
-        ("_rdlink._tcp", "guest pairing", true)
+        (typed[0].service.as_str(), typed[0].reason.as_str(), typed[0].needs_keyboard, typed[0].asking),
+        ("_rdlink._tcp", "guest pairing", false, true)
     );
     assert_eq!(typed[0].owner.pid, std::process::id());
 
-    // Each request is its own: a second gets an id of its own.
-    let second = client.request("_rdlink._tcp", "another").await.unwrap();
+    // Each request is its own: a second gets an id of its own, and asks
+    // with the needs-keyboard flag if it says so.
+    let keyboard = ServiceRequest { service: "_rdlink._tcp".into(), reason: "another".into(), needs_keyboard: true };
+    let second = client.request(&keyboard).await.unwrap();
     until(&mut daemon, Duration::from_secs(1), |w| w.requests.len() == 2).await;
-    assert_eq!(answers.wanted().map(|w| w.len()), Some(2));
+    let wanted = answers.wanted().unwrap();
+    assert_eq!(wanted.values().map(|r| r.needs_keyboard).collect::<Vec<_>>(), [false, true]);
+    let (_, list) = client.raw(Method::GET, "/v1/request", None).await.unwrap();
+    check_list("ServiceRequestLock", &list);
+    assert_eq!(list[1]["needs_keyboard"], json!(true));
     drop(second);
     drop(lines);
     let took = until(&mut daemon, HEARTBEAT + Duration::from_secs(1), |w| w.requests.is_empty()).await;
@@ -503,6 +510,7 @@ async fn bad_requests_get_400() {
         ("/v1/request", br#"{"service": "rdlink", "reason": "x"}"#),
         ("/v1/request", br#"{"service": "_airdrop._tcp", "reason": "x"}"#),
         ("/v1/request", br#"{"service": "_rdlink._tcp"}"#),
+        ("/v1/request", br#"{"service": "_rdlink._tcp", "reason": "x", "needs_keyboard": "yes"}"#),
     ] {
         let (status, v) = client.raw(Method::POST, path, Some(body)).await.unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {}", String::from_utf8_lossy(body));

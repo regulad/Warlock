@@ -19,7 +19,6 @@
 //!          --log-packets (log every packet crossing the adapter)
 //!          --advertise _x._tcp (repeatable: advertise Windows' registrations of this type on AWDL)
 //!          --no-mdns-to-air (testing: peers learn our services only from our frames)
-//!          --needs-keyboard (testing: requests set the Nearby Action's needs-keyboard bit)
 //! ```
 //!
 //! Either way it claims the TP-Link Archer T3U for WinUSB if Windows has its

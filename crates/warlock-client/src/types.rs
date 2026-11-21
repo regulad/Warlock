@@ -288,14 +288,19 @@ pub struct RealtimeLock {
     pub owner: Owner,
 }
 
-/// `POST /v1/request`'s body.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// `POST /v1/request`'s body. Build one with `..Default::default()`, so
+/// fields a newer version adds keep their defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceRequest {
     /// The service type to ask nearby devices to bring up on AWDL, one of
     /// [`Info::requestable`].
     pub service: String,
     /// Why, for logs and `GET /v1/request`.
     pub reason: String,
+    /// Ask with the needs-keyboard flag (Apple's `needsKeyboard`), where the
+    /// service's ask has one. What receivers do with it is unknown.
+    #[serde(default)]
+    pub needs_keyboard: bool,
 }
 
 /// How receivers will recognise the program that asked: what it hands the
@@ -325,6 +330,9 @@ pub struct ServiceRequestState {
 pub struct ServiceRequestLock {
     pub service: String,
     pub reason: String,
+    /// Whether it asked with the needs-keyboard flag.
+    #[serde(default)]
+    pub needs_keyboard: bool,
     pub asking: bool,
     pub owner: Owner,
 }

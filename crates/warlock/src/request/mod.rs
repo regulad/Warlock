@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use warlock_api::types::Identity;
-use warlock_api::{RequestStatus, Requests};
+use warlock_api::{RequestStatus, RequestWant, Requests};
 
 use bluetooth::Advert;
 use continuity::{APPLE, nearby_action};
@@ -42,14 +42,6 @@ const RETRY: Duration = Duration::from_secs(5);
 /// How long Windows has to show an advert's address in the trace.
 const ADDRESS_WAIT: Duration = Duration::from_secs(5);
 
-/// What a run is told about requests.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Options {
-    /// Set the Nearby Action's needs-keyboard bit (`--needs-keyboard`): a
-    /// trial's override, never the default (`continuity`'s `NEEDS_KEYBOARD`).
-    pub needs_keyboard: bool,
-}
-
 /// Serves requests until dropped.
 pub struct Asker {
     stop: Arc<AtomicBool>,
@@ -57,12 +49,11 @@ pub struct Asker {
 }
 
 impl Asker {
-    pub fn start(requests: Requests, options: Options) -> std::io::Result<Self> {
+    pub fn start(requests: Requests) -> std::io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let thread = std::thread::Builder::new()
-            .name("warlock-request".into())
-            .spawn(move || serve(requests, options, &flag))?;
+        let thread =
+            std::thread::Builder::new().name("warlock-request".into()).spawn(move || serve(requests, &flag))?;
         Ok(Self { stop, thread: Some(thread) })
     }
 }
@@ -76,11 +67,8 @@ impl Drop for Asker {
     }
 }
 
-fn serve(mut requests: Requests, options: Options, stop: &AtomicBool) {
-    if options.needs_keyboard {
-        warn!("requests set the needs-keyboard bit (--needs-keyboard): a trial's override");
-    }
-    let mut wanted: BTreeMap<u64, String> = BTreeMap::new();
+fn serve(mut requests: Requests, stop: &AtomicBool) {
+    let mut wanted: BTreeMap<u64, RequestWant> = BTreeMap::new();
     let mut asks: BTreeMap<u64, Ask> = BTreeMap::new();
     while !stop.load(Ordering::Relaxed) {
         if let Some(now) = requests.wanted() {
@@ -88,8 +76,8 @@ fn serve(mut requests: Requests, options: Options, stop: &AtomicBool) {
             asks.retain(|id, _| now.contains_key(id));
             wanted = now;
         }
-        for (id, service) in &wanted {
-            asks.entry(*id).or_insert_with(|| Ask::new(service)).poll(options);
+        for (id, want) in &wanted {
+            asks.entry(*id).or_insert_with(|| Ask::new(want)).poll();
             if stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -101,7 +89,7 @@ fn serve(mut requests: Requests, options: Options, stop: &AtomicBool) {
 
 /// One request's ask.
 struct Ask {
-    service: String,
+    want: RequestWant,
     /// The advert, while it's sent, and the IRK that fits it.
     advert: Option<(Advert, [u8; 16])>,
     message: Option<String>,
@@ -109,16 +97,16 @@ struct Ask {
 }
 
 impl Ask {
-    fn new(service: &str) -> Self {
-        Self { service: service.into(), advert: None, message: None, retry: None }
+    fn new(want: &RequestWant) -> Self {
+        Self { want: want.clone(), advert: None, message: None, retry: None }
     }
 
-    fn poll(&mut self, options: Options) {
+    fn poll(&mut self) {
         if let Some((advert, _)) = &self.advert {
             if advert.running() {
                 return;
             }
-            warn!(service = self.service, "Bluetooth stopped the advert; it starts again with a new identity");
+            warn!(service = self.want.service, "Bluetooth stopped the advert; it starts again with a new identity");
             self.advert = None;
             self.message = Some("Bluetooth stopped the advert: is it off?".into());
             self.retry = Some(Instant::now() + RETRY);
@@ -126,14 +114,14 @@ impl Ask {
         if self.retry.is_some_and(|at| Instant::now() < at) {
             return;
         }
-        match start(&self.service, options) {
+        match start(&self.want) {
             Ok(started) => {
                 self.advert = Some(started);
                 self.message = None;
                 self.retry = None;
             }
             Err(message) => {
-                warn!(service = self.service, "can't ask: {message}");
+                warn!(service = self.want.service, "can't ask: {message}");
                 self.message = Some(message);
                 self.retry = Some(Instant::now() + RETRY);
             }
@@ -149,20 +137,22 @@ impl Ask {
     }
 }
 
-/// Starts the advert for `service`, and the IRK that identifies its sender.
-fn start(service: &str, options: Options) -> Result<(Advert, [u8; 16]), String> {
-    match service {
-        "_rdlink._tcp" => rdlink(options),
+/// Starts the advert a request asks for, and the IRK that identifies its
+/// sender.
+fn start(want: &RequestWant) -> Result<(Advert, [u8; 16]), String> {
+    match want.service.as_str() {
+        "_rdlink._tcp" => rdlink(want.needs_keyboard),
         other => Err(format!("Warlock can't ask for {other}")),
     }
 }
 
-/// "RDLink needs AWDL", tagged. Windows picks the advert's address once its
-/// data is fixed, so the tag is random and the IRK is chosen to fit it.
-fn rdlink(options: Options) -> Result<(Advert, [u8; 16]), String> {
+/// "RDLink needs AWDL", tagged, with the needs-keyboard flag if the request
+/// says so. Windows picks the advert's address once its data is fixed, so the
+/// tag is random and the IRK is chosen to fit it.
+fn rdlink(needs_keyboard: bool) -> Result<(Advert, [u8; 16]), String> {
     let mut tag = [0u8; 3];
     getrandom::fill(&mut tag).map_err(|e| format!("no random numbers: {e}"))?;
-    let flags = if options.needs_keyboard { nearby_action::flags::NEEDS_KEYBOARD } else { 0 };
+    let flags = if needs_keyboard { nearby_action::flags::NEEDS_KEYBOARD } else { 0 };
     let data = continuity::nearby_action(flags, nearby_action::action::RDLINK_NEEDS_AWDL, &tag);
     // The trace first, so it sees the advert's commands.
     let trace = HciTrace::start()?;

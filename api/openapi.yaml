@@ -704,6 +704,15 @@ components:
           type: string
           description: Why, for logs and `GET /v1/request`.
           examples: ['Koala guest pairing']
+        needs_keyboard:
+          type: boolean
+          default: false
+          description: |
+            Ask with the needs-keyboard flag, Apple's `needsKeyboard`, where
+            the service's ask has one; `_rdlink._tcp`'s does. A request that
+            sets it for a service whose ask has none gets 400. What receivers
+            do with it is unknown: tvOS sets it on `_rdlink._tcp`'s ask, and
+            an iPhone answers that ask without it as well.
     Identity:
       type: object
       description: |
@@ -735,10 +744,11 @@ components:
           examples: ['Bluetooth is off']
     ServiceRequestLock:
       type: object
-      required: [service, reason, asking, owner]
+      required: [service, reason, needs_keyboard, asking, owner]
       properties:
         service: { $ref: '#/components/schemas/ServiceType' }
         reason: { type: string }
+        needs_keyboard: { type: boolean }
         asking: { type: boolean }
         owner: { $ref: '#/components/schemas/Owner' }
     Event:

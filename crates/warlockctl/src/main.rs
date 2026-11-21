@@ -15,7 +15,9 @@
 //!   realtime             the open realtime locks, and who holds them
 //!   realtime ADDRESS     run a realtime group with a peer until Ctrl+C
 //!   request              the open requests, and who holds them
-//!   request TYPE         ask nearby devices for a service (e.g. _rdlink._tcp) until Ctrl+C
+//!   request TYPE [--needs-keyboard]
+//!                        ask nearby devices for a service (e.g. _rdlink._tcp) until Ctrl+C,
+//!                        with the needs-keyboard flag if given
 //!   events               follow events until Ctrl+C
 //!   capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w FILE|-]
 //!                        capture the radio's frames as pcapng until Ctrl+C
@@ -36,10 +38,11 @@ use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use warlock_client::types::ServiceRequest;
 use warlock_client::{CaptureFilter, CaptureKind, Client, ClientError, Lines};
 
 const USAGE: &str = "usage: warlockctl [--pipe NAME] info|peers|peer ADDRESS|advertising|holds|advertise TYPE|hold \
-                     REASON|realtime [ADDRESS]|request [TYPE]|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w \
+                     REASON|realtime [ADDRESS]|request [TYPE [--needs-keyboard]]|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w \
                      FILE|-]";
 
 fn print(v: &impl serde::Serialize) {
@@ -130,7 +133,7 @@ impl Capture {
     }
 }
 
-async fn run(client: &Client, command: &str, arg: Option<&str>) -> Result<(), ClientError> {
+async fn run(client: &Client, command: &str, arg: Option<&str>, needs_keyboard: bool) -> Result<(), ClientError> {
     match (command, arg) {
         ("info", None) => print(&client.info().await?),
         ("peers", None) => print(&client.peers().await?),
@@ -142,7 +145,10 @@ async fn run(client: &Client, command: &str, arg: Option<&str>) -> Result<(), Cl
         ("realtime", None) => print(&client.realtime_locks().await?),
         ("realtime", Some(peer)) => follow(client.realtime(peer, "warlockctl").await?).await?,
         ("request", None) => print(&client.requests().await?),
-        ("request", Some(service)) => follow(client.request(service, "warlockctl").await?).await?,
+        ("request", Some(service)) => {
+            let request = ServiceRequest { service: service.into(), reason: "warlockctl".into(), needs_keyboard };
+            follow(client.request(&request).await?).await?
+        }
         ("events", None) => follow(client.events().await?).await?,
         _ => unreachable!("checked in main"),
     }
@@ -176,19 +182,20 @@ async fn main() -> ExitCode {
         };
     }
     let client = Client::new(pipe.unwrap_or_else(|| warlock_client::PIPE.into()));
-    let (command, arg) = match args.as_slice() {
+    let (command, arg, needs_keyboard) = match args.as_slice() {
         [c] if ["info", "peers", "advertising", "holds", "realtime", "request", "events"].contains(&c.as_str()) => {
-            (c.clone(), None)
+            (c.clone(), None, false)
         }
         [c, a] if ["peer", "advertise", "hold", "realtime", "request"].contains(&c.as_str()) => {
-            (c.clone(), Some(a.clone()))
+            (c.clone(), Some(a.clone()), false)
         }
+        [c, a, f] if c == "request" && f == "--needs-keyboard" => (c.clone(), Some(a.clone()), true),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
     };
-    match run(&client, &command, arg.as_deref()).await {
+    match run(&client, &command, arg.as_deref(), needs_keyboard).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("warlockctl: {e}");

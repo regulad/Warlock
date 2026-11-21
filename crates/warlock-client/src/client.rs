@@ -209,11 +209,11 @@ impl Client {
         self.get("/v1/request").await
     }
 
-    /// `POST /v1/request`: asks nearby devices to bring `service` up on AWDL
-    /// for as long as the returned stream is kept. Its lines are
+    /// `POST /v1/request`: asks nearby devices to bring `request.service` up
+    /// on AWDL for as long as the returned stream is kept. Its lines are
     /// [`ServiceRequestState`]s.
-    pub async fn request(&self, service: &str, reason: &str) -> Result<Lines, ClientError> {
-        self.lock("/v1/request", &ServiceRequest { service: service.into(), reason: reason.into() }).await
+    pub async fn request(&self, request: &ServiceRequest) -> Result<Lines, ClientError> {
+        self.lock("/v1/request", request).await
     }
 
     /// `GET /v1/events`. Its lines are [`Event`]s.

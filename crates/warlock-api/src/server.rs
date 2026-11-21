@@ -85,8 +85,17 @@ pub struct Wants {
     pub holds: usize,
     /// Peers to run a realtime group with.
     pub realtime: BTreeSet<[u8; 6]>,
-    /// Open requests: their service types (lowercase), by request.
-    pub requests: BTreeMap<u64, String>,
+    /// Open requests, by request.
+    pub requests: BTreeMap<u64, RequestWant>,
+}
+
+/// What one open request asks for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestWant {
+    /// The service type (lowercase).
+    pub service: String,
+    /// Ask with the needs-keyboard flag.
+    pub needs_keyboard: bool,
 }
 
 /// What became of one open request.
@@ -105,13 +114,13 @@ pub struct RequestStatus {
 pub struct Requests {
     wants: watch::Receiver<Wants>,
     status: Arc<watch::Sender<BTreeMap<u64, RequestStatus>>>,
-    last: Option<BTreeMap<u64, String>>,
+    last: Option<BTreeMap<u64, RequestWant>>,
 }
 
 impl Requests {
     /// The open requests, if they changed since the last call (the first
     /// call always gives them).
-    pub fn wanted(&mut self) -> Option<BTreeMap<u64, String>> {
+    pub fn wanted(&mut self) -> Option<BTreeMap<u64, RequestWant>> {
         let now = self.wants.borrow().requests.clone();
         if self.last.as_ref() == Some(&now) {
             return None;
@@ -310,8 +319,8 @@ struct Lock {
     what: String,
     /// A realtime lock's peer (lowercase); empty for the others.
     peer: String,
-    /// A request's service type (lowercase); empty for the others.
-    service: String,
+    /// What a request asks for; `None` for the others.
+    request: Option<RequestWant>,
     owner: Owner,
 }
 
@@ -331,7 +340,7 @@ impl Locks {
             holds: self.holds.len(),
             // Checked when the lock was taken.
             realtime: self.realtime.values().filter_map(|l| crate::capture::parse_mac(&l.peer)).collect(),
-            requests: self.requests.iter().map(|(id, l)| (*id, l.service.clone())).collect(),
+            requests: self.requests.iter().filter_map(|(id, l)| Some((*id, l.request.clone()?))).collect(),
         }
     }
 
@@ -365,7 +374,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         let mut locks = self.locks.lock().unwrap();
         if let Some(l) = locks.of(self.kind).remove(&self.id) {
-            info!(kind = ?self.kind, what = l.what, peer = l.peer, service = l.service, pid = l.owner.pid, "lock released");
+            info!(kind = ?self.kind, what = l.what, peer = l.peer, request = ?l.request, pid = l.owner.pid, "lock released");
         }
         self.wants.send_replace(locks.wants());
     }
@@ -539,8 +548,8 @@ impl App {
         ok(&list)
     }
 
-    fn acquire(&self, kind: Kind, what: String, service: String, client: Client) -> Guard {
-        self.try_acquire(kind, what, String::new(), service, client).expect("only realtime locks are refused")
+    fn acquire(&self, kind: Kind, what: String, request: Option<RequestWant>, client: Client) -> Guard {
+        self.try_acquire(kind, what, String::new(), request, client).expect("only realtime locks are refused")
     }
 
     /// Takes a lock. A realtime lock is refused, with the peer held, while
@@ -553,7 +562,7 @@ impl App {
         kind: Kind,
         what: String,
         peer: String,
-        service: String,
+        request: Option<RequestWant>,
         client: Client,
     ) -> Result<Guard, String> {
         let owner = Owner { pid: client.pid.unwrap_or(0), image: client.image(), since: rfc3339(SystemTime::now()) };
@@ -565,10 +574,10 @@ impl App {
             info!(peer, held, pid = owner.pid, image = owner.image, "realtime lock refused: another peer's is open");
             return Err(held);
         }
-        info!(?kind, what, peer, service, pid = owner.pid, image = owner.image, "lock taken");
+        info!(?kind, what, peer, ?request, pid = owner.pid, image = owner.image, "lock taken");
         let id = locks.next_id;
         locks.next_id += 1;
-        locks.of(kind).insert(id, Lock { what, peer, service, owner });
+        locks.of(kind).insert(id, Lock { what, peer, request, owner });
         self.wants.send_replace(locks.wants());
         Ok(Guard { id, kind, locks: self.locks.clone(), wants: self.wants.clone() })
     }
@@ -583,7 +592,7 @@ impl App {
             return error(StatusCode::BAD_REQUEST, message);
         }
         let service_type = request.service_type.to_ascii_lowercase();
-        let guard = self.acquire(Kind::Advertising, service_type.clone(), String::new(), client);
+        let guard = self.acquire(Kind::Advertising, service_type.clone(), None, client);
         jsonl(lock_stream(guard, self.state.clone(), move |s| AdvertisingState {
             instances: s.advertised.get(&service_type).cloned().unwrap_or_default(),
             service_type: service_type.clone(),
@@ -595,7 +604,7 @@ impl App {
             Ok(r) => r,
             Err(message) => return error(StatusCode::BAD_REQUEST, message),
         };
-        let guard = self.acquire(Kind::Hold, request.reason, String::new(), client);
+        let guard = self.acquire(Kind::Hold, request.reason, None, client);
         jsonl(lock_stream(guard, self.state.clone(), |s| HoldState { active: s.info.radio.state == RadioState::Up }))
     }
 
@@ -609,7 +618,7 @@ impl App {
             return error(StatusCode::BAD_REQUEST, message);
         };
         let peer = mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
-        let guard = match self.try_acquire(Kind::Realtime, request.reason, peer.clone(), String::new(), client) {
+        let guard = match self.try_acquire(Kind::Realtime, request.reason, peer.clone(), None, client) {
             Ok(g) => g,
             Err(held) => {
                 let message = format!("a realtime group with {held} is open; Warlock runs one peer at a time");
@@ -631,11 +640,15 @@ impl App {
         let list: Vec<ServiceRequestLock> = locks
             .requests
             .iter()
-            .map(|(id, l)| ServiceRequestLock {
-                service: l.service.clone(),
-                reason: l.what.clone(),
-                asking: status.get(id).is_some_and(|s| s.asking),
-                owner: l.owner.clone(),
+            .filter_map(|(id, l)| {
+                let request = l.request.as_ref()?;
+                Some(ServiceRequestLock {
+                    service: request.service.clone(),
+                    reason: l.what.clone(),
+                    needs_keyboard: request.needs_keyboard,
+                    asking: status.get(id).is_some_and(|s| s.asking),
+                    owner: l.owner.clone(),
+                })
             })
             .collect();
         ok(&list)
@@ -657,7 +670,11 @@ impl App {
             let message = format!("Warlock can't ask for {service}; it can ask for {can}");
             return error(StatusCode::BAD_REQUEST, message);
         }
-        let guard = self.acquire(Kind::Request, request.reason, service.clone(), client);
+        // Every service Warlock can ask for has a needs-keyboard flag (only
+        // `_rdlink._tcp`, a Nearby Action). One that hasn't must refuse
+        // `needs_keyboard` here, with 400, as the contract says.
+        let want = RequestWant { service: service.clone(), needs_keyboard: request.needs_keyboard };
+        let guard = self.acquire(Kind::Request, request.reason, Some(want), client);
         let id = guard.id;
         jsonl(lock_stream(guard, self.request_status.clone(), move |s| {
             let status = s.get(&id).cloned().unwrap_or_default();

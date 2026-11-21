@@ -29,13 +29,12 @@ pub mod nearby_action {
         /// whenever it sends one.
         pub const AUTH_TAG: u8 = 0x80;
         /// `SFService.needsKeyboard` (`nk`). tvOS's RDLink advert sets it, and
-        /// so did Koala's, which worked (`0xa0`, 2026-11-19 to 11-20). What a
-        /// receiver does with it is unknown: rapportd's check for the advert
-        /// doesn't read it, but the iPhone's scanner for it is a Sharing
-        /// discovery with the Keyboard flag (`0x20040`), and whether sharingd
-        /// filters on the bit there isn't known. Unknown means off: Warlock
-        /// doesn't send it, except under `warlock run --needs-keyboard`, a
-        /// trial's override, until a trial settles it.
+        /// so did Koala's own (`0xa0`, 2026-11-19 to 11-20). What a receiver
+        /// does with it is unknown, so it's sent only when a request asks for
+        /// it (`needs_keyboard`). An iPhone doesn't need it: in Koala's trial
+        /// 25 (2026-11-20, iOS 27.2.1) it identified Warlock's `0x80` advert
+        /// and advertised its RDLink 0.1 s later, although its scanner is a
+        /// Sharing discovery with the Keyboard flag (`0x20040`).
         pub const NEEDS_KEYBOARD: u8 = 0x20;
     }
 
