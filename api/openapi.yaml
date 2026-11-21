@@ -33,8 +33,8 @@ info:
 
     Whatever a program asks Warlock to keep doing lasts exactly as long as
     the request that asked for it. A lock is a request whose response never
-    ends on its own: `POST /v1/advertising`, `POST /v1/holds` and
-    `POST /v1/realtime`. The
+    ends on its own: `POST /v1/advertising`, `POST /v1/holds`,
+    `POST /v1/realtime` and `POST /v1/request`. The
     response is a stream of JSON Lines describing the lock's state, sent
     whenever that state changes and at least every 2 seconds.
 
@@ -99,6 +99,9 @@ tags:
   - name: realtime
     summary: Realtime groups with peers
     description: Locks that run a Continuity Real Time Group with a peer, in which an iPhone sends Low-Latency Wi-Fi.
+  - name: request
+    summary: Asking nearby devices for a service
+    description: Locks that ask nearby Apple devices to bring a service up on AWDL.
   - name: events
     summary: What happens, as it happens
     description: A stream of changes, for monitoring and `warlockctl`.
@@ -276,6 +279,60 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         default: { $ref: '#/components/responses/Error' }
+  /v1/request:
+    get:
+      operationId: listRequests
+      tags: [request]
+      summary: The open requests, and who holds them
+      description: The identity a request is given isn't listed; only its own stream carries it.
+      responses:
+        '200':
+          description: Every open request.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ServiceRequestLock' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: request
+      tags: [request]
+      summary: Ask nearby devices to bring a service up on AWDL (a lock)
+      description: |
+        While this request is open, Warlock asks nearby Apple devices to
+        bring the service type up on AWDL, by whatever means it has for
+        that service: today, a Bluetooth LE advert from this computer's own
+        Bluetooth. Warlock builds what it sends; the request says only what
+        is wanted. Devices that answer advertise the service on AWDL, and
+        are found as any other, with DNS-SD on the adapter or in
+        `GET /v1/peers`.
+
+        Some services identify the program that asked. Then the stream's
+        `identity` says how receivers will recognise it, and the program
+        hands that to the peer itself, for example in pairing. Each such
+        request is asked for on its own. If the identity changes (Bluetooth
+        went off and came back), peers given the old one no longer
+        recognise the program until given the new one.
+
+        `GET /v1/info` lists the services Warlock can ask for
+        (`requestable`); a request for another gets 400.
+
+        Experimental: from static analysis of iOS 27, tried with one iPhone
+        (iOS 27.2.1). For `_rdlink._tcp`, the iPhone accepts the ask only at
+        −60 dBm or stronger, so it has to be near this computer's Bluetooth.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceRequest' }
+      responses:
+        '200':
+          description: The request lasts until the connection closes.
+          content:
+            application/jsonl:
+              itemSchema: { $ref: '#/components/schemas/ServiceRequestState' }
+        '400': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
   /v1/events:
     get:
       operationId: events
@@ -344,8 +401,13 @@ components:
           description: When it took the lock.
     Info:
       type: object
-      required: [version, host_name, adapter, radio, awdl]
+      required: [version, host_name, adapter, radio, awdl, requestable]
       properties:
+        requestable:
+          type: array
+          description: The service types `POST /v1/request` can ask nearby devices for.
+          items: { $ref: '#/components/schemas/ServiceType' }
+          examples: [['_rdlink._tcp']]
         version:
           type: string
           description: Warlock's version.
@@ -630,6 +692,54 @@ components:
       properties:
         peer: { $ref: '#/components/schemas/MacAddress' }
         reason: { type: string }
+        owner: { $ref: '#/components/schemas/Owner' }
+    ServiceRequest:
+      type: object
+      required: [service, reason]
+      properties:
+        service:
+          description: The service type to ask for, one of `requestable` in `GET /v1/info`.
+          $ref: '#/components/schemas/ServiceType'
+        reason:
+          type: string
+          description: Why, for logs and `GET /v1/request`.
+          examples: ['Koala guest pairing']
+    Identity:
+      type: object
+      description: |
+        How receivers will recognise the program that asked. Newer versions
+        may add other kinds of identity.
+      minProperties: 1
+      properties:
+        irk:
+          type: string
+          description: A Bluetooth Identity Resolving Key, 16 bytes in hex.
+          pattern: '^[0-9a-f]{32}$'
+    ServiceRequestState:
+      type: object
+      description: A line of a request's stream.
+      required: [service, asking, identity, message]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceType' }
+        asking:
+          type: boolean
+          description: Whether Warlock is asking now.
+        identity:
+          description: How receivers will recognise the program; null when they won't.
+          oneOf:
+            - $ref: '#/components/schemas/Identity'
+            - type: 'null'
+        message:
+          type: ['string', 'null']
+          description: Why Warlock isn't asking, for people; null otherwise.
+          examples: ['Bluetooth is off']
+    ServiceRequestLock:
+      type: object
+      required: [service, reason, asking, owner]
+      properties:
+        service: { $ref: '#/components/schemas/ServiceType' }
+        reason: { type: string }
+        asking: { type: boolean }
         owner: { $ref: '#/components/schemas/Owner' }
     Event:
       description: |

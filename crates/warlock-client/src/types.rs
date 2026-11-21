@@ -48,6 +48,10 @@ pub struct Info {
     pub awdl: Awdl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic: Option<Traffic>,
+    /// The service types `POST /v1/request` can ask nearby devices for.
+    /// Empty from a Warlock that predates it.
+    #[serde(default)]
+    pub requestable: Vec<String>,
 }
 
 /// The "Warlock AWDL" network adapter.
@@ -281,6 +285,47 @@ pub struct RealtimeState {
 pub struct RealtimeLock {
     pub peer: String,
     pub reason: String,
+    pub owner: Owner,
+}
+
+/// `POST /v1/request`'s body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceRequest {
+    /// The service type to ask nearby devices to bring up on AWDL, one of
+    /// [`Info::requestable`].
+    pub service: String,
+    /// Why, for logs and `GET /v1/request`.
+    pub reason: String,
+}
+
+/// How receivers will recognise the program that asked: what it hands the
+/// peer itself, for example in pairing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    /// A Bluetooth Identity Resolving Key, 16 bytes in hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub irk: Option<String>,
+}
+
+/// A line of a request's stream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceRequestState {
+    pub service: String,
+    /// Whether Warlock is asking now.
+    pub asking: bool,
+    /// How receivers will recognise the program; `None` when they won't. If
+    /// it changes, peers given the old one no longer recognise it.
+    pub identity: Option<Identity>,
+    /// Why Warlock isn't asking, for people; `None` otherwise.
+    pub message: Option<String>,
+}
+
+/// An entry of `GET /v1/request`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceRequestLock {
+    pub service: String,
+    pub reason: String,
+    pub asking: bool,
     pub owner: Owner,
 }
 

@@ -14,15 +14,19 @@
 //!   and lock streams report;
 //! - [`Event`]s, sent by the daemon (`broadcast`): `GET /v1/events`;
 //! - [`Wants`], published by the server (`watch`): the service types,
-//!   holds and realtime peers that open locks ask for, which the daemon
-//!   acts on.
+//!   holds, realtime peers and requests that open locks ask for, which the
+//!   daemon acts on.
 //!
-//! A fourth, captures (`crate::capture`), carries radio frames to the admin
-//! pipe's `GET /v1/capture` streams, queued per capture so the radio never
-//! waits.
+//! Requests (`/v1/request`) don't need the radio, so the part of the daemon
+//! that serves them runs apart from it, with [`Requests`]: it reads the
+//! requests from [`Wants`] and publishes each one's [`RequestStatus`]
+//! (`watch`).
 //!
-//! A lock (`POST /v1/advertising`, `/v1/holds`, `/v1/realtime`) is registered for as
-//! long as its response stream exists. Hyper drops the stream when the
+//! Captures (`crate::capture`) carry radio frames to the admin pipe's
+//! `GET /v1/capture` streams, queued per capture so the radio never waits.
+//!
+//! A lock (`POST /v1/advertising`, `/v1/holds`, `/v1/realtime`,
+//! `/v1/request`) is registered for as long as its response stream exists. Hyper drops the stream when the
 //! connection ends, and the stream's guard then releases the lock. A line
 //! goes out at least every [`HEARTBEAT`]; in practice hyper notices a closed
 //! pipe at once, and the heartbeat is the backstop.
@@ -81,6 +85,50 @@ pub struct Wants {
     pub holds: usize,
     /// Peers to run a realtime group with.
     pub realtime: BTreeSet<[u8; 6]>,
+    /// Open requests: their service types (lowercase), by request.
+    pub requests: BTreeMap<u64, String>,
+}
+
+/// What became of one open request.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RequestStatus {
+    /// Whether Warlock is asking.
+    pub asking: bool,
+    /// How receivers will recognise the program that asked, if they will.
+    pub identity: Option<Identity>,
+    /// Why Warlock isn't asking, for people.
+    pub message: Option<String>,
+}
+
+/// The daemon's end for requests: what open requests ask for, and what
+/// became of each. Nothing here blocks or needs a runtime.
+pub struct Requests {
+    wants: watch::Receiver<Wants>,
+    status: Arc<watch::Sender<BTreeMap<u64, RequestStatus>>>,
+    last: Option<BTreeMap<u64, String>>,
+}
+
+impl Requests {
+    /// The open requests, if they changed since the last call (the first
+    /// call always gives them).
+    pub fn wanted(&mut self) -> Option<BTreeMap<u64, String>> {
+        let now = self.wants.borrow().requests.clone();
+        if self.last.as_ref() == Some(&now) {
+            return None;
+        }
+        self.last = Some(now.clone());
+        Some(now)
+    }
+
+    /// Replaces what the requests' streams report, by request. A request
+    /// left out reads as not asking.
+    pub fn publish(&self, status: BTreeMap<u64, RequestStatus>) {
+        self.status.send_if_modified(|s| {
+            let changed = *s != status;
+            *s = status;
+            changed
+        });
+    }
 }
 
 /// The daemon's end of the channels. Nothing here blocks or needs a runtime.
@@ -89,6 +137,7 @@ pub struct Daemon {
     events: broadcast::Sender<Event>,
     wants: watch::Receiver<Wants>,
     captures: Arc<Captures>,
+    request_status: Arc<watch::Sender<BTreeMap<u64, RequestStatus>>>,
 }
 
 impl Daemon {
@@ -132,6 +181,12 @@ impl Daemon {
     /// What locks ask for now, changed or not.
     pub fn wants_now(&self) -> Wants {
         self.wants.borrow().clone()
+    }
+
+    /// An end for the part of the daemon that serves requests, which may
+    /// run on a thread of its own.
+    pub fn requests(&self) -> Requests {
+        Requests { wants: self.wants.clone(), status: self.request_status.clone(), last: None }
     }
 }
 
@@ -180,6 +235,8 @@ impl Server {
         let (state_tx, state_rx) = watch::channel(initial);
         let (events, _) = broadcast::channel(1024);
         let (wants_tx, wants_rx) = watch::channel(Wants::default());
+        let (request_tx, request_rx) = watch::channel(BTreeMap::new());
+        let request_status = Arc::new(request_tx);
         let captures = Arc::new(Captures::default());
         let app = App {
             state: state_rx,
@@ -187,6 +244,7 @@ impl Server {
             locks: Arc::new(Mutex::new(Locks::default())),
             wants: Arc::new(wants_tx),
             captures: captures.clone(),
+            request_status: request_rx,
         };
         for (mut listener, surface) in listeners {
             let app = app.clone();
@@ -207,13 +265,14 @@ impl Server {
                 }
             });
         }
-        Ok((Server { runtime: Some(runtime) }, Daemon { state: state_tx, events, wants: wants_rx, captures }))
+        let daemon = Daemon { state: state_tx, events, wants: wants_rx, captures, request_status };
+        Ok((Server { runtime: Some(runtime) }, daemon))
     }
 }
 
 /// Every operation in `api/openapi.yaml`, the API's pipe, as (method,
 /// path): the contract test checks this against the document.
-pub const OPERATIONS: [(&str, &str); 10] = [
+pub const OPERATIONS: [(&str, &str); 12] = [
     ("get", "/v1/info"),
     ("get", "/v1/peers"),
     ("get", "/v1/peers/{address}"),
@@ -223,6 +282,8 @@ pub const OPERATIONS: [(&str, &str); 10] = [
     ("post", "/v1/holds"),
     ("get", "/v1/realtime"),
     ("post", "/v1/realtime"),
+    ("get", "/v1/request"),
+    ("post", "/v1/request"),
     ("get", "/v1/events"),
 ];
 
@@ -239,14 +300,18 @@ struct App {
     locks: Arc<Mutex<Locks>>,
     wants: Arc<watch::Sender<Wants>>,
     captures: Arc<Captures>,
+    request_status: watch::Receiver<BTreeMap<u64, RequestStatus>>,
 }
 
 /// One open lock.
 struct Lock {
-    /// The service type, or the hold's or realtime lock's reason.
+    /// The advertised service type, or the reason for a hold, realtime lock
+    /// or request.
     what: String,
     /// A realtime lock's peer (lowercase); empty for the others.
     peer: String,
+    /// A request's service type (lowercase); empty for the others.
+    service: String,
     owner: Owner,
 }
 
@@ -256,6 +321,7 @@ struct Locks {
     advertising: BTreeMap<u64, Lock>,
     holds: BTreeMap<u64, Lock>,
     realtime: BTreeMap<u64, Lock>,
+    requests: BTreeMap<u64, Lock>,
 }
 
 impl Locks {
@@ -265,6 +331,7 @@ impl Locks {
             holds: self.holds.len(),
             // Checked when the lock was taken.
             realtime: self.realtime.values().filter_map(|l| crate::capture::parse_mac(&l.peer)).collect(),
+            requests: self.requests.iter().map(|(id, l)| (*id, l.service.clone())).collect(),
         }
     }
 
@@ -273,6 +340,7 @@ impl Locks {
             Kind::Advertising => &mut self.advertising,
             Kind::Hold => &mut self.holds,
             Kind::Realtime => &mut self.realtime,
+            Kind::Request => &mut self.requests,
         }
     }
 }
@@ -282,6 +350,7 @@ enum Kind {
     Advertising,
     Hold,
     Realtime,
+    Request,
 }
 
 /// Releases its lock when dropped.
@@ -296,7 +365,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         let mut locks = self.locks.lock().unwrap();
         if let Some(l) = locks.of(self.kind).remove(&self.id) {
-            info!(kind = ?self.kind, what = l.what, peer = l.peer, pid = l.owner.pid, "lock released");
+            info!(kind = ?self.kind, what = l.what, peer = l.peer, service = l.service, pid = l.owner.pid, "lock released");
         }
         self.wants.send_replace(locks.wants());
     }
@@ -419,9 +488,11 @@ impl App {
             (Method::POST, "/v1/holds") => self.hold(client, request).await,
             (Method::GET, "/v1/realtime") => self.realtime_locks(),
             (Method::POST, "/v1/realtime") => self.realtime(client, request).await,
+            (Method::GET, "/v1/request") => self.requests(),
+            (Method::POST, "/v1/request") => self.request(client, request).await,
             (Method::GET, "/v1/events") => self.events(),
             (_, "/v1/info" | "/v1/peers" | "/v1/events") => not_allowed("GET"),
-            (_, "/v1/advertising" | "/v1/holds" | "/v1/realtime") => not_allowed("GET, POST"),
+            (_, "/v1/advertising" | "/v1/holds" | "/v1/realtime" | "/v1/request") => not_allowed("GET, POST"),
             _ => error(StatusCode::NOT_FOUND, "no such endpoint".into()),
         }
     }
@@ -468,8 +539,8 @@ impl App {
         ok(&list)
     }
 
-    fn acquire(&self, kind: Kind, what: String, peer: String, client: Client) -> Guard {
-        self.try_acquire(kind, what, peer, client).expect("only realtime locks are refused")
+    fn acquire(&self, kind: Kind, what: String, service: String, client: Client) -> Guard {
+        self.try_acquire(kind, what, String::new(), service, client).expect("only realtime locks are refused")
     }
 
     /// Takes a lock. A realtime lock is refused, with the peer held, while
@@ -477,7 +548,14 @@ impl App {
     /// (Parker, 2026-11-19), as an Apple host runs one Continuity Real Time
     /// Group peer. The check and the insert are under one mutex, so two
     /// requests can't both win.
-    fn try_acquire(&self, kind: Kind, what: String, peer: String, client: Client) -> Result<Guard, String> {
+    fn try_acquire(
+        &self,
+        kind: Kind,
+        what: String,
+        peer: String,
+        service: String,
+        client: Client,
+    ) -> Result<Guard, String> {
         let owner = Owner { pid: client.pid.unwrap_or(0), image: client.image(), since: rfc3339(SystemTime::now()) };
         let mut locks = self.locks.lock().unwrap();
         if let Kind::Realtime = kind
@@ -487,10 +565,10 @@ impl App {
             info!(peer, held, pid = owner.pid, image = owner.image, "realtime lock refused: another peer's is open");
             return Err(held);
         }
-        info!(?kind, what, peer, pid = owner.pid, image = owner.image, "lock taken");
+        info!(?kind, what, peer, service, pid = owner.pid, image = owner.image, "lock taken");
         let id = locks.next_id;
         locks.next_id += 1;
-        locks.of(kind).insert(id, Lock { what, peer, owner });
+        locks.of(kind).insert(id, Lock { what, peer, service, owner });
         self.wants.send_replace(locks.wants());
         Ok(Guard { id, kind, locks: self.locks.clone(), wants: self.wants.clone() })
     }
@@ -531,7 +609,7 @@ impl App {
             return error(StatusCode::BAD_REQUEST, message);
         };
         let peer = mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
-        let guard = match self.try_acquire(Kind::Realtime, request.reason, peer.clone(), client) {
+        let guard = match self.try_acquire(Kind::Realtime, request.reason, peer.clone(), String::new(), client) {
             Ok(g) => g,
             Err(held) => {
                 let message = format!("a realtime group with {held} is open; Warlock runs one peer at a time");
@@ -543,6 +621,52 @@ impl App {
             asked: s.realtime_asked.contains(&peer),
             joined: s.realtime_joined.contains(&peer),
             peer: peer.clone(),
+        }))
+    }
+
+    fn requests(&self) -> Response<Body> {
+        let status = self.request_status.borrow().clone();
+        let locks = self.locks.lock().unwrap();
+        // The identity is the asking program's alone: it isn't listed.
+        let list: Vec<ServiceRequestLock> = locks
+            .requests
+            .iter()
+            .map(|(id, l)| ServiceRequestLock {
+                service: l.service.clone(),
+                reason: l.what.clone(),
+                asking: status.get(id).is_some_and(|s| s.asking),
+                owner: l.owner.clone(),
+            })
+            .collect();
+        ok(&list)
+    }
+
+    async fn request(&self, client: Client, request: Request<Incoming>) -> Response<Body> {
+        let request: ServiceRequest = match body(request).await {
+            Ok(r) => r,
+            Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        };
+        if !is_service_type(&request.service) {
+            let message = format!("{:?} isn't a service type such as _rdlink._tcp", request.service);
+            return error(StatusCode::BAD_REQUEST, message);
+        }
+        let service = request.service.to_ascii_lowercase();
+        let requestable = self.state.borrow().info.requestable.clone();
+        if !requestable.contains(&service) {
+            let can = if requestable.is_empty() { "nothing".into() } else { requestable.join(", ") };
+            let message = format!("Warlock can't ask for {service}; it can ask for {can}");
+            return error(StatusCode::BAD_REQUEST, message);
+        }
+        let guard = self.acquire(Kind::Request, request.reason, service.clone(), client);
+        let id = guard.id;
+        jsonl(lock_stream(guard, self.request_status.clone(), move |s| {
+            let status = s.get(&id).cloned().unwrap_or_default();
+            ServiceRequestState {
+                service: service.clone(),
+                asking: status.asking,
+                identity: status.identity,
+                message: status.message,
+            }
         }))
     }
 
@@ -578,10 +702,10 @@ fn not_allowed(allow: &'static str) -> Response<Body> {
 
 /// A lock's stream: `report` turns the state into a line, sent when it
 /// changes and at least every [`HEARTBEAT`]. Owns the lock's guard.
-fn lock_stream<T: Serialize + PartialEq + Send + 'static>(
+fn lock_stream<S: Send + Sync + 'static, T: Serialize + PartialEq + Send + 'static>(
     guard: Guard,
-    state: watch::Receiver<State>,
-    report: impl Fn(&State) -> T + Send + 'static,
+    state: watch::Receiver<S>,
+    report: impl Fn(&S) -> T + Send + 'static,
 ) -> impl Stream<Item = Bytes> + Send + 'static {
     let mut tick = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);

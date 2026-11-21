@@ -204,6 +204,18 @@ impl Client {
         self.lock("/v1/realtime", &RealtimeRequest { peer: peer.into(), reason: reason.into() }).await
     }
 
+    /// `GET /v1/request`.
+    pub async fn requests(&self) -> Result<Vec<ServiceRequestLock>, ClientError> {
+        self.get("/v1/request").await
+    }
+
+    /// `POST /v1/request`: asks nearby devices to bring `service` up on AWDL
+    /// for as long as the returned stream is kept. Its lines are
+    /// [`ServiceRequestState`]s.
+    pub async fn request(&self, service: &str, reason: &str) -> Result<Lines, ClientError> {
+        self.lock("/v1/request", &ServiceRequest { service: service.into(), reason: reason.into() }).await
+    }
+
     /// `GET /v1/events`. Its lines are [`Event`]s.
     pub async fn events(&self) -> Result<Lines, ClientError> {
         self.raw_stream(Method::GET, "/v1/events", None).await

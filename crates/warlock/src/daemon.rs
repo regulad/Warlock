@@ -28,6 +28,7 @@ use crate::advertise::Advertiser;
 use crate::api;
 use crate::discovery::Discovery;
 use crate::power::Power;
+use crate::request;
 use crate::service;
 
 const ETHERTYPE_IPV6: u16 = 0x86dd;
@@ -66,6 +67,9 @@ pub struct Options {
     /// (`docs/service-discovery.md`): Windows still answers its own queries,
     /// which it loops back to itself, so `--advertise` keeps working.
     pub no_mdns_to_air: bool,
+    /// Requests set the Nearby Action's needs-keyboard bit
+    /// (`--needs-keyboard`): a trial's override, never the default.
+    pub needs_keyboard: bool,
 }
 
 /// Whether an IPv6 packet is mDNS: UDP to or from port 5353, with no
@@ -184,6 +188,7 @@ impl Options {
             log_packets: false,
             advertise: Vec::new(),
             no_mdns_to_air: false,
+            needs_keyboard: false,
         };
         let mut it = args.iter();
         while let Some(flag) = it.next() {
@@ -193,6 +198,10 @@ impl Options {
             }
             if flag == "--no-mdns-to-air" {
                 o.no_mdns_to_air = true;
+                continue;
+            }
+            if flag == "--needs-keyboard" {
+                o.needs_keyboard = true;
                 continue;
             }
             let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -376,6 +385,7 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         radio: radio_info(RadioState::Absent, own, o),
         awdl: wire::Awdl { master: None, peers: 0 },
         traffic: None,
+        requestable: request::REQUESTABLE.iter().map(|s| s.to_string()).collect(),
     };
     let initial = warlock_api::State {
         info: info.clone(),
@@ -389,6 +399,9 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         format!("can't serve the control API on {} and {} (is Warlock running already?): {e}", pipes.api, pipes.admin)
     })?;
     info!(pipe = pipes.api, admin = pipes.admin, "control API up");
+    // Requests need no radio: they're served from the start, on their own
+    // thread, until the run ends.
+    let _requests = request::Asker::start(control.requests(), request::Options { needs_keyboard: o.needs_keyboard })?;
 
     // The adapter, disconnected until a radio is up.
     let wintun = dll::load(&dll::ensure(&dll::default_root())?)?;

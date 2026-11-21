@@ -92,6 +92,7 @@ fn info(radio: RadioState) -> Info {
         },
         awdl: Awdl { master: up.then(|| mac(2)), peers: 2 },
         traffic: Some(Traffic { to_air: 1, to_windows: 2, announced: 3, unroutable: 4 }),
+        requestable: vec!["_rdlink._tcp".into()],
     }
 }
 
@@ -414,6 +415,64 @@ async fn realtime_locks_hold_one_peer_at_a_time() {
 }
 
 #[tokio::test]
+async fn a_request_carries_its_identity_while_its_connection_lasts() {
+    use warlock_api::RequestStatus;
+    let (_server, mut daemon, client, _) = serve(RadioState::Up);
+    let mut answers = daemon.requests();
+    // Types are kept lowercase; nothing is asked until the daemon says so.
+    let body = br#"{"service": "_RDLink._tcp", "reason": "guest pairing"}"#;
+    let mut lines = client.raw_stream(Method::POST, "/v1/request", Some(body)).await.unwrap();
+    let first = next_line(&mut lines, "ServiceRequestState", Duration::from_secs(1)).await;
+    assert_eq!(first, json!({"service": "_rdlink._tcp", "asking": false, "identity": null, "message": null}));
+    until(&mut daemon, Duration::from_secs(1), |w| w.requests.values().any(|s| s == "_rdlink._tcp")).await;
+    let wanted = answers.wanted().expect("the first call gives the requests");
+    let (&id, _) = wanted.iter().next().unwrap();
+    assert_eq!(answers.wanted(), None, "unchanged");
+
+    // The daemon asks, with an identity: the stream says so.
+    let identity = Identity { irk: Some("00112233445566778899aabbccddeeff".into()) };
+    answers.publish([(id, RequestStatus { asking: true, identity: Some(identity.clone()), message: None })].into());
+    let next = next_line(&mut lines, "ServiceRequestState", Duration::from_secs(1)).await;
+    assert_eq!(next["identity"], json!({"irk": "00112233445566778899aabbccddeeff"}));
+    let typed: ServiceRequestState = serde_json::from_value(next).unwrap();
+    assert_eq!(typed.identity, Some(identity));
+
+    // It can't ask for a while: the stream says why.
+    answers.publish(
+        [(id, RequestStatus { asking: false, identity: None, message: Some("Bluetooth is off".into()) })].into(),
+    );
+    let next = next_line(&mut lines, "ServiceRequestState", Duration::from_secs(1)).await;
+    assert_eq!((next["asking"].clone(), next["message"].clone()), (json!(false), json!("Bluetooth is off")));
+
+    // The list names the owner, and never the identity.
+    answers.publish(
+        [(id, RequestStatus { asking: true, identity: Some(Identity { irk: Some("ab".repeat(16)) }), message: None })]
+            .into(),
+    );
+    next_line(&mut lines, "ServiceRequestState", Duration::from_secs(1)).await;
+    let (_, list) = client.raw(Method::GET, "/v1/request", None).await.unwrap();
+    check_list("ServiceRequestLock", &list);
+    assert!(!list.to_string().contains(&"ab".repeat(16)), "{list}");
+    let typed = client.requests().await.unwrap();
+    assert_eq!(
+        (typed[0].service.as_str(), typed[0].reason.as_str(), typed[0].asking),
+        ("_rdlink._tcp", "guest pairing", true)
+    );
+    assert_eq!(typed[0].owner.pid, std::process::id());
+
+    // Each request is its own: a second gets an id of its own.
+    let second = client.request("_rdlink._tcp", "another").await.unwrap();
+    until(&mut daemon, Duration::from_secs(1), |w| w.requests.len() == 2).await;
+    assert_eq!(answers.wanted().map(|w| w.len()), Some(2));
+    drop(second);
+    drop(lines);
+    let took = until(&mut daemon, HEARTBEAT + Duration::from_secs(1), |w| w.requests.is_empty()).await;
+    eprintln!("requests released {took:?} after their connections closed");
+    assert_eq!(answers.wanted(), Some(BTreeMap::new()));
+    assert_eq!(client.requests().await.unwrap(), vec![]);
+}
+
+#[tokio::test]
 async fn locks_on_one_type_add_up() {
     let (_server, mut daemon, client, _) = serve(RadioState::Up);
     let a = client.advertise("_x._tcp").await.unwrap();
@@ -440,6 +499,10 @@ async fn bad_requests_get_400() {
         ("/v1/realtime", br#"{"peer": "02:00:00:00:00", "reason": "x"}"#),
         ("/v1/realtime", br#"{"peer": "02:00:00:00:00:0g", "reason": "x"}"#),
         ("/v1/realtime", br#"{"peer": "02:00:00:00:00:01"}"#),
+        // Not a service type; one Warlock can't ask for; no reason.
+        ("/v1/request", br#"{"service": "rdlink", "reason": "x"}"#),
+        ("/v1/request", br#"{"service": "_airdrop._tcp", "reason": "x"}"#),
+        ("/v1/request", br#"{"service": "_rdlink._tcp"}"#),
     ] {
         let (status, v) = client.raw(Method::POST, path, Some(body)).await.unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {}", String::from_utf8_lossy(body));
