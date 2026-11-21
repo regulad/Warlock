@@ -161,9 +161,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      # The licence texts; the package builder itself is built here.
+      # The licence texts, sentry-native's from its submodule (not
+      # recursively, as in "Build"); the package builder itself is built
+      # here.
       - uses: actions/checkout@v7
         with:
+          submodules: true
           persist-credentials: false
       - name: Rust
         run: |
