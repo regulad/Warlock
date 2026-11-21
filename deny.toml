@@ -11,8 +11,10 @@ ignore = []
 
 [licenses]
 # Apache-2.0 is left out on purpose: it isn't compatible with GPL-2.0. A
-# crate offering "MIT OR Apache-2.0" is taken under MIT, and an Apache-only
-# crate is rejected.
+# crate offering "MIT OR Apache-2.0" is taken under MIT, and a crate offered
+# under Apache-2.0 alone is rejected. That rules out Sentry's SDK, whose
+# `sentry-types` needs `debugid`: Warlock carries no telemetry (PLAN.md,
+# "No telemetry in Warlock").
 allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
