@@ -61,6 +61,8 @@ host name breaks the promise for people who never chose Warlock.
 - The SDK adds things of its own: check what it sends after updating it, as
   the 0.17.6 probe did (`PLAN.md`, "Diagnostics").
 - `DO_NOT_TRACK` turns everything off; nothing may bypass it.
+- Only a release has the DSN built in. A trial that should report builds
+  with `WARLOCK_DIAGNOSTICS=1`; nothing else turns it on.
 - `nothing_identifying_leaves` sends through the real SDK: run it, and
   `WARLOCK_SHOW_DIAGNOSTICS=1 cargo test -p warlock nothing_identifying --
   --nocapture` shows what would leave.
@@ -73,11 +75,25 @@ task per issue, so several people can take tasks at once (Parker,
 2026-11-19). `PLAN.md` keeps the design, the decisions and what was found, and
 links the issues; it isn't the to-do list.
 
-- A commit that completes an issue says so (`Fixes #N`).
 - An issue, pull request or comment an agent drafts is posted only after
   Parker has reviewed it, and ends with a rule and his footer:
   `*Drafted by Claude (`claude-opus-5-5`); reviewed and signed off by
   @regulad.*`, naming the model that drafted it.
+
+## Check the open issues with every commit
+
+Before each commit, look through the open issues (`gh issue list`), this
+repository's and Koala's, for any the commit completes or advances, and name
+them in its message (Parker, 2026-11-21):
+
+- `Fixes #N` for one it completes: GitHub closes the issue when the commit
+  reaches `master`. For one of Koala's, `Fixes regulad/Koala#N`.
+- `#N` for one it only advances.
+- Where it does what the issue asked another way, or leaves part of it, the
+  message says how and why, so the issue's closing records it.
+
+**Why:** Warlock's diagnostics did what #1 asked, over several commits, and
+none of them named it, so it stayed open with nothing tying it to the work.
 
 ## Show drafts in quote blocks
 

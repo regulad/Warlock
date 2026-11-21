@@ -22,7 +22,9 @@
 # from a job of its own: it alone has the Sentry token, it has no
 # `id-token`, so it can't reach the signing account, and it runs nothing
 # built here, only sentry-cli, pinned by its SHA-256, which reads the files.
-# The release doesn't wait for it.
+# The release doesn't wait for it. Once the release is published, another
+# such job makes it a release in Sentry, with its commits, and records its
+# deploy to `production`.
 name: Build and sign
 
 on:
@@ -317,3 +319,49 @@ jobs:
           ls -l assets
           gh release create "$TAG" assets/*.msi assets/*.yaml \
             --title "Warlock ${TAG#v}" --notes-from-tag --verify-tag
+
+  # The release in Sentry, named as the daemon names it (`warlock@<version>`,
+  # diagnostics.rs), with the commits since the last one, finalized, and a
+  # deploy to `production`: when it was published (PLAN.md, "Diagnostics").
+  sentry-release:
+    name: Release in Sentry
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    env:
+      SENTRY_ORG: regulad
+      SENTRY_PROJECT: warlock
+    steps:
+      - name: sentry-cli
+        env:
+          VERSION: 3.8.2
+          SHA256: c958865f9d4000183509ea21b1f04925d5390de6d8d87386b9e69f2b305070c3
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/sentry-cli" \
+            "https://github.com/getsentry/sentry-cli/releases/download/$VERSION/sentry-cli-Linux-x86_64"
+          echo "$SHA256  $RUNNER_TEMP/sentry-cli" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/sentry-cli"
+      - name: Release
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: '"$RUNNER_TEMP/sentry-cli" releases new "warlock@${TAG#v}"'
+      # Through Sentry's GitHub integration. Reports differ on whether an
+      # organization token (Sentry's `org:ci` scope) may do this: if it
+      # can't, the run shows the failure, and the release goes on without
+      # its commits.
+      - name: Commits
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: '"$RUNNER_TEMP/sentry-cli" releases set-commits "warlock@${TAG#v}" --commit "$GITHUB_REPOSITORY@$GITHUB_SHA"'
+      - name: Finalize and deploy
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          "$RUNNER_TEMP/sentry-cli" releases finalize "warlock@${TAG#v}"
+          "$RUNNER_TEMP/sentry-cli" deploys new --release "warlock@${TAG#v}" -e production

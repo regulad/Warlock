@@ -171,6 +171,8 @@ const CA_BINARY: &str = "WarlockCa";
 const MANUFACTURER: &str = "Regulad";
 /// The winget package.
 const PACKAGE: &str = "Regulad.Warlock";
+/// Warlock's repository, where its privacy policy is published.
+const REPOSITORY: &str = "https://github.com/regulad/Warlock";
 const DESCRIPTION: &str = "Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter";
 /// The service's name, as `warlock install` and `sc` know it.
 const SERVICE: &str = "Warlock";
@@ -1191,10 +1193,13 @@ fn winget(root: &Path, msi: &Path, url: &str, out: Option<PathBuf>) -> Result<()
         (
             format!("{PACKAGE}.locale.en-US.yaml"),
             format!(
-                "{}PackageLocale: en-US\nPublisher: {}\nPackageName: Warlock\n\
+                "{}PackageLocale: en-US\nPublisher: {}\nPrivacyUrl: {}\nPackageName: Warlock\n\
                  License: {}\nShortDescription: {}\n{}",
                 header("defaultLocale"),
                 q(publisher),
+                // The privacy policy as of this version's tag (the release
+                // workflow tags v<version>).
+                q(&format!("{REPOSITORY}/blob/v{version}/PRIVACY.md")),
                 // warlock.exe, and warlockctl.exe.
                 q("GPL-2.0-only AND AGPL-3.0-only"),
                 q(DESCRIPTION),

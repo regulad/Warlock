@@ -10,7 +10,7 @@ Warlock carries traffic between this computer and the Apple devices it talks to,
 
 ## Diagnostics
 
-To find and fix problems, Warlock sends crash reports and diagnostics to Sentry (Functional Software, Inc., sentry.io), a service that stores them on our behalf:
+To find and fix problems, Warlock's releases send crash reports and diagnostics (a build of Warlock from its source code sends none) to Sentry (Functional Software, Inc., sentry.io), a service that stores them on our behalf, in the United States:
 
 - **Errors and crash reports:** what went wrong and where in Warlock's code, crashes in its Wi-Fi driver included, with the warnings that came before.
 - **Usage statistics:** when Warlock starts and stops, and the requests programs make of it (which kind, how long they took and how they went).

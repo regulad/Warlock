@@ -6,6 +6,10 @@
 //! offered under Apache-2.0 alone, which GPL-2.0-only Warlock can't take
 //! (PLAN.md, "Diagnostics").
 //!
+//! - **Only in releases:** a tagged build has the DSN built in, as does one
+//!   built with `WARLOCK_DIAGNOSTICS=1`, for a trial. Any other, from source
+//!   or a `testing` run, has none and sends nothing (Parker, 2026-11-21, as
+//!   #1 asked).
 //! - **Off** when the service's environment, which is the system-wide one,
 //!   has `DO_NOT_TRACK` set to anything but empty, `0` or `false`. A user's
 //!   own `DO_NOT_TRACK` doesn't reach the service.
@@ -43,12 +47,19 @@ use warlock_api::Served;
 /// Warlock's Sentry project (`regulad/warlock`, platform `native`, made by
 /// the homelab's `tofu/sentry`, 2026-11-21). A DSN only lets a client send
 /// events, so it isn't a secret.
-pub const DSN: &str = "https://a44d5cf240aba5efe4c1f92f45a9a9c4@o4506961510596608.ingest.us.sentry.io/4512468117225472";
+const PROJECT: &str = "https://a44d5cf240aba5efe4c1f92f45a9a9c4@o4506961510596608.ingest.us.sentry.io/4512468117225472";
+
+/// The DSN this build sends to: [`PROJECT`] in a release or a trial's build
+/// (`build.rs`), and none in any other.
+pub const DSN: &str = if TAGGED || TRIAL { PROJECT } else { "" };
 
 /// The commit Warlock was built from (`build.rs`), if known.
 const COMMIT: Option<&str> = option_env!("WARLOCK_COMMIT");
 /// Whether this is a tagged release build (`build.rs`).
 const TAGGED: bool = option_env!("WARLOCK_TAGGED").is_some();
+/// Whether this build was made with `WARLOCK_DIAGNOSTICS=1`, for a trial
+/// (`build.rs`).
+const TRIAL: bool = option_env!("WARLOCK_DIAGNOSTICS_TRIAL").is_some();
 
 /// Whether diagnostics are on: everything here does nothing while they're
 /// off.
@@ -91,26 +102,31 @@ impl Drop for Diagnostics {
     }
 }
 
-/// Starts diagnostics for this run, unless `DO_NOT_TRACK` says not to.
+/// Starts diagnostics for this run, if this build has a DSN and
+/// `DO_NOT_TRACK` doesn't say not to.
 pub fn start() -> Diagnostics {
+    if DSN.is_empty() {
+        info!("this build of Warlock isn't a release, so it sends no diagnostics");
+        return Diagnostics { on: false };
+    }
     if do_not_track(std::env::var("DO_NOT_TRACK").ok().as_deref()) {
         info!("DO_NOT_TRACK is set system-wide, so Warlock sends no diagnostics");
         return Diagnostics { on: false };
     }
     let root = std::env::var_os("ProgramData").map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from);
-    init(&root.join("Warlock").join("sentry"), None)
+    init(DSN, &root.join("Warlock").join("sentry"), None)
 }
 
-/// Starts the SDK with its database at `database` (where it keeps what it
-/// hasn't sent yet, and crashes until the next start), sending through
-/// `transport` if given (tests), or WinHTTP.
-fn init(database: &Path, transport: sentry_send_function_t) -> Diagnostics {
+/// Starts the SDK for `dsn` with its database at `database` (where it keeps
+/// what it hasn't sent yet, and crashes until the next start), sending
+/// through `transport` if given (tests), or WinHTTP.
+fn init(dsn: &str, database: &Path, transport: sentry_send_function_t) -> Diagnostics {
     let path: Vec<u16> = database.as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: options made here and handed to sentry_init, which owns them;
     // the strings outlive the calls, which copy them.
     let started = unsafe {
         let options = sentry_options_new();
-        sentry_options_set_dsn(options, c(DSN).as_ptr());
+        sentry_options_set_dsn(options, c(dsn).as_ptr());
         sentry_options_set_release(options, c(&release()).as_ptr());
         sentry_options_set_environment(options, c(environment()).as_ptr());
         sentry_options_set_database_pathw(options, path.as_ptr());
@@ -561,6 +577,11 @@ mod tests {
     }
 
     #[test]
+    fn only_a_release_or_a_trial_has_the_dsn() {
+        assert_eq!(DSN.is_empty(), !TAGGED && !TRIAL);
+    }
+
+    #[test]
     fn what_warlock_logs_of_peers_is_redacted() {
         let cases = [
             ("PeerFound(c6:45:45:ba:cd:d3)", "PeerFound(<addr>)"),
@@ -615,7 +636,7 @@ mod tests {
     #[test]
     fn nothing_identifying_leaves() {
         let database = std::env::temp_dir().join(format!("warlock-diagnostics-{}", std::process::id()));
-        let diagnostics = init(&database, Some(capture));
+        let diagnostics = init(PROJECT, &database, Some(capture));
         assert!(diagnostics.on);
         let user = std::env::var("USERNAME").unwrap_or_default();
         breadcrumb("PeerFound(c6:45:45:ba:cd:d3)");

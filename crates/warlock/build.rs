@@ -7,7 +7,8 @@
 //!
 //! It also tells the diagnostics (`src/diagnostics.rs`) what they name the
 //! release after: the commit (`WARLOCK_COMMIT`), and whether this is a
-//! tagged build (`WARLOCK_TAGGED`, from GitHub's runner).
+//! tagged build (`WARLOCK_TAGGED`, from GitHub's runner); and whether to
+//! build them in for a trial (`WARLOCK_DIAGNOSTICS=1` when building).
 
 use std::env;
 use std::fmt::Write as _;
@@ -28,11 +29,16 @@ fn main() {
     std::fs::write(out.join("events.rs"), constants(&header)).unwrap();
 }
 
-/// The commit, and whether GitHub's runner is building a tag.
+/// The commit, whether GitHub's runner is building a tag, and whether a
+/// build that isn't one should send diagnostics anyway, for a trial.
 fn release() {
     println!("cargo:rerun-if-env-changed=GITHUB_REF_TYPE");
     if env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
         println!("cargo:rustc-env=WARLOCK_TAGGED=1");
+    }
+    println!("cargo:rerun-if-env-changed=WARLOCK_DIAGNOSTICS");
+    if env::var("WARLOCK_DIAGNOSTICS").as_deref() == Ok("1") {
+        println!("cargo:rustc-env=WARLOCK_DIAGNOSTICS_TRIAL=1");
     }
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..").join("..");
     if let Ok(out) = Command::new("git").args(["rev-parse", "--short=12", "HEAD"]).current_dir(&root).output()
