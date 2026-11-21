@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 //! The licence page's text: which part of Warlock is under which licence,
 //! then the licences themselves, from the repository's own files, as the RTF
-//! a ScrollableText control shows.
+//! a ScrollableText control shows; and the privacy page's, `PRIVACY.md`.
 //!
 //! The files are Markdown, as the FSF publishes its licences, and use little
-//! of it: headings, `**bold**`, `-` lists whose items continue on indented
-//! lines, indented blocks kept line by line, links and code spans. That is
-//! all this converts.
+//! of it: headings, `**bold**`, `*italics*`, `-` lists whose items continue
+//! on indented lines, indented blocks kept line by line, links and code
+//! spans. That is all this converts.
 //!
 //! The control's text is formatted text, so `[` and `]` would be read as
 //! property references; they go in as RTF hex escapes instead.
@@ -20,20 +20,29 @@ const INTRO: [&str; 5] = [
     "**Warlock is free software.**",
     "`warlock.exe`, the Warlock service, is licensed under the GNU General Public License, version 2 only, \
      with an exception that permits combining it with Wintun.",
-    "`warlockctl.exe`, its command-line tool, is licensed under the GNU Affero General Public License, version 3 \
-     only.",
-    "`warlock.exe` includes Sentry's native SDK, under the MIT licence, which sends Warlock's diagnostics: \
-     PRIVACY.md, installed with Warlock, says what, and how to turn them off.",
+    "`warlockctl.exe`, its command-line tool, `warlock-extcap.exe`, its Wireshark plugin, and the installer's \
+     own code are licensed under the GNU Affero General Public License, version 3 only.",
     "Their texts follow, and are installed with Warlock. Its source code is at https://github.com/regulad/Warlock.",
+    "The programs are built with other free software, Sentry's SDKs among it, which send Warlock's diagnostics \
+     (PRIVACY.md says what, and how to turn them off): THIRD-PARTY-NOTICES.txt, installed with Warlock, has its \
+     licences.",
 ];
 
 /// The licences, in the order the page shows them.
-const FILES: [&str; 4] =
-    ["LICENSE.md", "LICENSE-WINTUN-EXCEPTION.md", "LICENSE-AGPL-3.0.md", "third_party/sentry-native/LICENSE"];
+const FILES: [&str; 3] = ["LICENSE.md", "LICENSE-WINTUN-EXCEPTION.md", "LICENSE-AGPL-3.0.md"];
 
-/// The page's RTF, on one line.
+/// The start of a page's RTF.
+const HEADER: &str = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Segoe UI;}}\uc1\f0\fs18 ";
+
+/// The privacy page's RTF, on one line: `PRIVACY.md`, as it's installed.
+pub fn privacy(root: &Path) -> Result<String> {
+    let text = std::fs::read_to_string(root.join("PRIVACY.md")).map_err(|e| format!("PRIVACY.md: {e}"))?;
+    Ok(format!("{HEADER}{}}}", markdown(&text)))
+}
+
+/// The licence page's RTF, on one line.
 pub fn rtf(root: &Path) -> Result<String> {
-    let mut out = String::from(r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Segoe UI;}}\uc1\f0\fs18 ");
+    let mut out = String::from(HEADER);
     for p in INTRO {
         out += &paragraph(p);
     }
@@ -103,16 +112,49 @@ fn render(block: &[&str]) -> String {
     paragraph(&joined.join(" "))
 }
 
-/// Inline Markdown (code spans, links, `**bold**`) as escaped RTF.
+/// Inline Markdown (code spans, links, `**bold**`, `*italics*`) as escaped
+/// RTF.
 fn inline(text: &str) -> String {
     let text = links(&text.replace('`', ""));
     let mut out = String::new();
     for (i, part) in text.split("**").enumerate() {
         if i % 2 == 1 {
-            out += &format!(r"{{\b {}}}", escape(part));
+            out += &format!(r"{{\b {}}}", italics(part));
         } else {
-            out += &escape(part);
+            out += &italics(part);
         }
+    }
+    out
+}
+
+/// `*italics*` (an asterisk next to a word on its inner side) as RTF, the
+/// rest escaped.
+fn italics(text: &str) -> String {
+    let mut out = String::new();
+    let mut parts = text.split('*').peekable();
+    let mut open = false;
+    let mut first = true;
+    while let Some(part) = parts.next() {
+        if !first {
+            // An asterisk between `before` and `part`: opens before a word,
+            // closes after one; otherwise it stays.
+            let opens = !open && part.starts_with(|c: char| !c.is_whitespace()) && parts.peek().is_some();
+            let closes = open && !out.ends_with(char::is_whitespace);
+            if opens {
+                out += r"{\i ";
+                open = true;
+            } else if closes {
+                out += "}";
+                open = false;
+            } else {
+                out.push('*');
+            }
+        }
+        out += &escape(part);
+        first = false;
+    }
+    if open {
+        out += "}";
     }
     out
 }
@@ -183,6 +225,22 @@ mod tests {
         assert!(rtf.contains(r"\li360\sa60 b) two\par"), "{rtf}");
         assert!(rtf.contains(r"kept\line as is"), "{rtf}");
         assert!(rtf.contains("See LICENSE.md and x."), "{rtf}");
+    }
+
+    #[test]
+    fn italics_become_rtf_and_lone_asterisks_stay() {
+        assert_eq!(inline("*Effective 21 November 2026.*"), r"{\i Effective 21 November 2026.}");
+        assert_eq!(inline("a * b"), "a * b");
+        assert_eq!(inline("**bold** and *it*"), r"{\b bold} and {\i it}");
+    }
+
+    #[test]
+    fn the_privacy_page_is_the_policy() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rtf = privacy(&root).unwrap();
+        assert!(rtf.is_ascii() && !rtf.contains(['\n', '\r', '\t', '[', ']']));
+        assert!(rtf.contains("privacy policy") && rtf.contains("DO_NOT_TRACK"), "{rtf}");
+        assert!(!rtf.contains('*'), "{rtf}");
     }
 
     #[test]

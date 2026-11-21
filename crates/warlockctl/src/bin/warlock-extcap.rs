@@ -16,15 +16,32 @@
 //!
 //! Like `warlockctl capture`, it needs Administrator or the `warlock-admin`
 //! group; Wireshark shows what went wrong from its standard error.
+//!
+//! Diagnostics (PRIVACY.md; `warlock-sentry`): a release reports its panics,
+//! and its faults (`ClientError::is_fault`), to Sentry's `warlock-extcap`
+//! project, unless `DO_NOT_TRACK` is set; how it's used (Warlock not
+//! running, not allowed, a request turned down) isn't a fault.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::process::ExitCode;
 
-use warlock_client::{CaptureFilter, CaptureKind, Client};
+use warlock_client::{CaptureFilter, CaptureKind, Client, ClientError};
 
 /// The one interface, as Wireshark names it in its options.
 const INTERFACE: &str = "warlock";
+
+/// The extcap's Sentry project (`regulad/warlock-extcap`), whose DSN the
+/// homelab's `tofu/sentry` makes: none yet, so nothing is sent.
+const PROJECT: &str = "";
+
+/// `e` as text, reported first if it's a fault.
+fn fault(e: ClientError) -> String {
+    if e.is_fault() {
+        warlock_sentry::error(&format!("warlock-extcap capture: {e}"));
+    }
+    e.to_string()
+}
 
 /// Arguments as Wireshark passes them: `--name value`, `--name=value`, or a
 /// bare flag.
@@ -113,9 +130,9 @@ fn filter(args: &Args) -> Result<CaptureFilter, String> {
 /// Streams the capture into Wireshark's pipe until either end closes.
 async fn capture(fifo: &str, filter: CaptureFilter) -> Result<(), String> {
     let mut out = OpenOptions::new().write(true).open(fifo).map_err(|e| format!("can't open {fifo}: {e}"))?;
-    let mut chunks = Client::new(warlock_client::ADMIN_PIPE).capture(&filter).await.map_err(|e| e.to_string())?;
+    let mut chunks = Client::new(warlock_client::ADMIN_PIPE).capture(&filter).await.map_err(fault)?;
     while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
+        let chunk = chunk.map_err(fault)?;
         if out.write_all(&chunk).and_then(|()| out.flush()).is_err() {
             // Wireshark stopped the capture.
             return Ok(());
@@ -126,6 +143,8 @@ async fn capture(fifo: &str, filter: CaptureFilter) -> Result<(), String> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // Until the program ends, which sends what's left.
+    let _diagnostics = warlock_sentry::start("warlock-extcap", warlock_sentry::dsn(PROJECT));
     let args = Args::parse(std::env::args().skip(1));
     if args.has("--extcap-interfaces") {
         interfaces();

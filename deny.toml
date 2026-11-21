@@ -13,8 +13,11 @@ ignore = []
 # Apache-2.0 is left out on purpose: it isn't compatible with GPL-2.0. A
 # crate offering "MIT OR Apache-2.0" is taken under MIT, and a crate offered
 # under Apache-2.0 alone is rejected. That rules out Sentry's Rust SDK, whose
-# `sentry-types` needs `debugid`: Warlock's diagnostics go through Sentry's
-# native SDK instead, MIT, built from source (PLAN.md, "Diagnostics").
+# `sentry-types` needs `debugid`, for the daemon: its diagnostics go through
+# Sentry's native SDK instead, MIT, built from source. The AGPL programs,
+# which may take Apache-2.0, use the Rust SDK (`warlock-sentry`): its
+# Apache-2.0-only crates are the exceptions below, and the bans keep the SDK
+# to those programs (PLAN.md, "Diagnostics").
 allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
@@ -30,12 +33,23 @@ allow = [
     "GPL-2.0-only",
     "GPL-2.0-or-later",
 ]
-# AGPL only where it's ours to choose: warlockctl, which links nothing
-# GPL-2.0-only. Allowed globally, an AGPL dependency could reach the
-# GPL-2.0 daemon, and the two can't be combined. (warlock-client is
-# "GPL-2.0-only OR AGPL-3.0-or-later", which the GPL-2.0-only allowance covers.)
+# AGPL only where it's ours to choose: warlockctl, the installer's custom
+# actions (warlock-msi-ca) and the Rust SDK's wrapper (warlock-sentry), which
+# link nothing GPL-2.0-only. Allowed globally, an AGPL dependency could reach
+# the GPL-2.0 daemon, and the two can't be combined. (warlock-client and
+# warlock-diagnostics are "GPL-2.0-only OR AGPL-3.0-or-later", which the
+# GPL-2.0-only allowance covers.)
 exceptions = [
     { crate = "warlockctl", allow = ["AGPL-3.0-only"] },
+    { crate = "warlock-msi-ca", allow = ["AGPL-3.0-only"] },
+    { crate = "warlock-sentry", allow = ["AGPL-3.0-only"] },
+    # Sentry's Rust SDK's crates offered under Apache-2.0 alone, for the AGPL
+    # programs only: `sentry` itself is banned anywhere else (below).
+    { crate = "debugid", allow = ["Apache-2.0"] },
+    { crate = "sync_wrapper", allow = ["Apache-2.0"] },
+    # native-tls's TLS off Windows; on Windows it's SChannel, and this isn't
+    # built.
+    { crate = "openssl", allow = ["Apache-2.0"] },
 ]
 confidence-threshold = 0.93
 # The list is policy, not an inventory: allowed licences nothing uses yet are fine.
@@ -53,6 +67,11 @@ wildcards = "deny"
 # all, so most pairs never occur: the hook runs with `-A unused-wrapper`.
 deny = [
     { crate = "bincode", reason = "its 3.0 release is a tombstone; use postcard (PLAN.md)" },
+    # Sentry's Rust SDK only through warlock-sentry, and warlock-sentry only
+    # in the AGPL programs: so its Apache-2.0-only crates never reach GPL-2.0
+    # code.
+    { crate = "sentry", wrappers = ["warlock-sentry"], reason = "it needs crates under Apache-2.0 alone: AGPL programs only" },
+    { crate = "warlock-sentry", wrappers = ["warlockctl", "warlock-msi-ca"], reason = "AGPL-3.0-only" },
     { crate = "awdl-core", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
     { crate = "awdl-proto", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
     { crate = "devourer-sys", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },

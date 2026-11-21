@@ -3,12 +3,8 @@
 //! `warlock.exe`, with the Windows SDK's `mc.exe` and `rc.exe`, and turns
 //! the header `mc.exe` writes into the constants `src/events.rs` uses: the
 //! provider's GUID and an event descriptor per event. The manifest is the
-//! one source of both.
-//!
-//! It also tells the diagnostics (`src/diagnostics.rs`) what they name the
-//! release after: the commit (`WARLOCK_COMMIT`), and whether this is a
-//! tagged build (`WARLOCK_TAGGED`, from GitHub's runner); and whether to
-//! build them in for a trial (`WARLOCK_DIAGNOSTICS=1` when building).
+//! one source of both. (The diagnostics' release and DSN are
+//! `warlock-diagnostics`'s, from its build script.)
 
 use std::env;
 use std::fmt::Write as _;
@@ -16,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    release();
     println!("cargo:rerun-if-changed=events.man");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("events.man");
@@ -27,32 +22,6 @@ fn main() {
     println!("cargo:rustc-link-arg-bins={}", out.join("events.res").display());
     let header = std::fs::read_to_string(out.join("events.h")).expect("mc.exe's header");
     std::fs::write(out.join("events.rs"), constants(&header)).unwrap();
-}
-
-/// The commit, whether GitHub's runner is building a tag, and whether a
-/// build that isn't one should send diagnostics anyway, for a trial.
-fn release() {
-    println!("cargo:rerun-if-env-changed=GITHUB_REF_TYPE");
-    if env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
-        println!("cargo:rustc-env=WARLOCK_TAGGED=1");
-    }
-    println!("cargo:rerun-if-env-changed=WARLOCK_DIAGNOSTICS");
-    if env::var("WARLOCK_DIAGNOSTICS").as_deref() == Ok("1") {
-        println!("cargo:rustc-env=WARLOCK_DIAGNOSTICS_TRIAL=1");
-    }
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..").join("..");
-    if let Ok(out) = Command::new("git").args(["rev-parse", "--short=12", "HEAD"]).current_dir(&root).output()
-        && out.status.success()
-    {
-        println!("cargo:rustc-env=WARLOCK_COMMIT={}", String::from_utf8_lossy(&out.stdout).trim());
-    }
-    // A commit or a checkout changes these.
-    for file in ["HEAD", "logs/HEAD"] {
-        let path = root.join(".git").join(file);
-        if path.exists() {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
 }
 
 fn run(command: &mut Command) {

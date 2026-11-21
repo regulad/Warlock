@@ -155,12 +155,13 @@ tools.
   Windows' default computer names (`DESKTOP-` and random letters) say nothing
   about you. If you've renamed your PC to something that does, consider
   renaming it back (Settings → System → About → Rename this PC).
-- **Warlock's releases send crash reports and diagnostics to Sentry**,
-  without anything that identifies you, this computer or the devices nearby:
-  [`PRIVACY.md`](PRIVACY.md) says what, and the installer puts it beside
-  Warlock. To turn them off, set `DO_NOT_TRACK` for the whole computer, not
-  just your account, since the service only sees system-wide settings, then
-  restart it:
+- **Warlock's releases send crash reports and diagnostics to Sentry**: the
+  service, `warlockctl`, the Wireshark plugin and the installer, without
+  anything that identifies you, this computer or the devices nearby.
+  [`PRIVACY.md`](PRIVACY.md) says what; the installer shows it, and puts it
+  beside Warlock. To turn them off, set `DO_NOT_TRACK` for the whole
+  computer, not just your account, since the service only sees system-wide
+  settings, then restart the service:
 
   ```text
   setx /M DO_NOT_TRACK 1
@@ -208,10 +209,18 @@ Warlock is free software:
 - **GPL-2.0-only** ([`LICENSE.md`](LICENSE.md)) for Warlock itself, matching
   [devourer](https://github.com/OpenIPC/devourer), the user-space Realtek
   driver it builds in.
-- **GPL-2.0-only OR AGPL-3.0-or-later**, at your choice, for the API contracts
-  and `warlock-client`, so programs under either licence can use them.
+- **GPL-2.0-only OR AGPL-3.0-or-later**, at your choice, for the API contracts,
+  `warlock-client` and `warlock-diagnostics`, so programs under either licence
+  can use them.
 - **AGPL-3.0-only** ([`LICENSE-AGPL-3.0.md`](LICENSE-AGPL-3.0.md)) for
-  `warlockctl`.
+  `warlockctl` and the Wireshark plugin, the installer's custom actions
+  (`warlock-msi-ca`) and `warlock-sentry`, which use Sentry's Rust SDK.
+
+The programs are built with other free software, whose licences the MSI
+installs as `THIRD-PARTY-NOTICES.txt`
+([`crates/warlock-msi/data`](crates/warlock-msi/data/third-party-notices.txt));
+`cargo run -p warlock-msi -- notices` writes it again when `Cargo.lock`
+changes, which a test checks.
 
 Warlock doesn't include [Wintun](https://www.wintun.net), the driver behind its
 network adapter. It downloads the release it was built against from

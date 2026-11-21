@@ -17,7 +17,7 @@
 # the annotated tag's message as its notes. Again the job that can write
 # (the release) builds nothing.
 #
-# And a tag's debug files go to Sentry, so that the crashes the daemon
+# And a tag's debug files go to Sentry, so that the crashes every program
 # reports name their functions, files and lines (PLAN.md, "Diagnostics"),
 # from a job of its own: it alone has the Sentry token, it has no
 # `id-token`, so it can't reach the signing account, and it runs nothing
@@ -64,15 +64,21 @@ jobs:
             target/release/warlock_msi_ca.dll
           if-no-files-found: error
           retention-days: 1
-      # The daemon, the one program that reports to Sentry, and its PDB,
-      # which holds devourer's and sentry-native's debug information too.
-      # Signing changes neither's identifiers, so these match the release.
+      # Every program reports to Sentry: each with its PDB (warlock.pdb holds
+      # devourer's and sentry-native's debug information too). Signing changes
+      # neither's identifiers, so these match the release.
       - uses: actions/upload-artifact@v7
         with:
           name: debug-files
           path: |
             target/release/warlock.exe
             target/release/warlock.pdb
+            target/release/warlockctl.exe
+            target/release/warlockctl.pdb
+            target/release/warlock-extcap.exe
+            target/release/warlock_extcap.pdb
+            target/release/warlock_msi_ca.dll
+            target/release/warlock_msi_ca.pdb
           if-no-files-found: error
           retention-days: 1
 
@@ -97,12 +103,21 @@ jobs:
             "https://github.com/getsentry/sentry-cli/releases/download/$VERSION/sentry-cli-Linux-x86_64"
           echo "$SHA256  $RUNNER_TEMP/sentry-cli" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/sentry-cli"
+      # Each program's to its own project (PLAN.md, "Diagnostics").
       - name: Upload
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          "$RUNNER_TEMP/sentry-cli" debug-files check debug-files/warlock.pdb
-          "$RUNNER_TEMP/sentry-cli" debug-files upload -o regulad -p warlock --wait debug-files
+          cli="$RUNNER_TEMP/sentry-cli"
+          upload() {
+            project=$1; shift
+            for f in "$@"; do "$cli" debug-files check "debug-files/$f"; done
+            "$cli" debug-files upload -o regulad -p "$project" --wait "${@/#/debug-files/}"
+          }
+          upload warlock warlock.exe warlock.pdb
+          upload warlockctl warlockctl.exe warlockctl.pdb
+          upload warlock-extcap warlock-extcap.exe warlock_extcap.pdb
+          upload warlock-installer warlock_msi_ca.dll warlock_msi_ca.pdb
 
   sign-binaries:
     name: Sign the binaries
@@ -320,9 +335,10 @@ jobs:
           gh release create "$TAG" assets/*.msi assets/*.yaml \
             --title "Warlock ${TAG#v}" --notes-from-tag --verify-tag
 
-  # The release in Sentry, named as the daemon names it (`warlock@<version>`,
-  # diagnostics.rs), with the commits since the last one, finalized, and a
-  # deploy to `production`: when it was published (PLAN.md, "Diagnostics").
+  # The release in Sentry, named as every program names it
+  # (`warlock@<version>`, warlock-diagnostics), in each program's project,
+  # with the commits since the last one, finalized, and a deploy to
+  # `production`: when it was published (PLAN.md, "Diagnostics").
   sentry-release:
     name: Release in Sentry
     if: startsWith(github.ref, 'refs/tags/v')
@@ -332,7 +348,6 @@ jobs:
     environment: release
     env:
       SENTRY_ORG: regulad
-      SENTRY_PROJECT: warlock
     steps:
       - name: sentry-cli
         env:
@@ -347,7 +362,9 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: '"$RUNNER_TEMP/sentry-cli" releases new "warlock@${TAG#v}"'
+        run: |
+          "$RUNNER_TEMP/sentry-cli" releases new "warlock@${TAG#v}" \
+            -p warlock -p warlockctl -p warlock-extcap -p warlock-installer
       # Through Sentry's GitHub integration. Reports differ on whether an
       # organization token (Sentry's `org:ci` scope) may do this: if it
       # can't, the run shows the failure, and the release goes on without

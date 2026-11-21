@@ -41,12 +41,14 @@ to avoid that as much as possible").
 
 ## Keep the diagnostics anonymous, and `PRIVACY.md` true
 
-What Warlock sends to Sentry (`crates/warlock/src/diagnostics.rs`) never
+What Warlock's programs send to Sentry (the daemon's
+`crates/warlock/src/diagnostics.rs`; `warlock-sentry` for warlockctl, the
+extcap and the installer; what they share in `warlock-diagnostics`) never
 identifies the user, this computer or the devices nearby: no names (the
-user's, the computer's, peers'), user or device IDs, network addresses
-(peers' AWDL MACs, IPv6 addresses), USB serial numbers or keys (Parker,
-2026-11-21). `PRIVACY.md` lists what is sent, and changes in the same commit
-as anything that adds to it.
+user's, the computer's, peers'), user, account or device IDs (SIDs among
+them), network addresses (peers' AWDL MACs, IPv6 addresses), USB serial
+numbers or keys (Parker, 2026-11-21). `PRIVACY.md` lists what is sent, and
+changes in the same commit as anything that adds to it.
 
 **Why:** the privacy policy promises exactly this, and Warlock hears every
 Apple device nearby. A diagnostic that quietly carries a peer's address or a
@@ -57,15 +59,21 @@ host name breaks the promise for people who never chose Warlock.
   device instance (which holds its serial); a transaction names the route
   (`/v1/peers/{address}`), not the request's path.
 - Only errors and warnings go to the diagnostics, through `redact`; Warlock's
-  information names peers and their services, and stays out.
-- The SDK adds things of its own: check what it sends after updating it, as
-  the 0.17.6 probe did (`PLAN.md`, "Diagnostics").
+  information names peers and their services, and stays out. A message for
+  the diagnostics is written apart from the log line beside it, which may
+  name the account (the installer's logs its SID).
+- warlockctl and the extcap report faults (`ClientError::is_fault`), not
+  how they're used.
+- The SDKs add things of their own: check what they send after updating
+  them, as the 0.17.6 probe did (`PLAN.md`, "Diagnostics").
 - `DO_NOT_TRACK` turns everything off; nothing may bypass it.
-- Only a release has the DSN built in. A trial that should report builds
+- Only a release has the DSNs built in. A trial that should report builds
   with `WARLOCK_DIAGNOSTICS=1`; nothing else turns it on.
-- `nothing_identifying_leaves` sends through the real SDK: run it, and
+- `nothing_identifying_leaves` sends through the real SDKs: run it, and
   `WARLOCK_SHOW_DIAGNOSTICS=1 cargo test -p warlock nothing_identifying --
-  --nocapture` shows what would leave.
+  --nocapture` (or `-p warlock-sentry`) shows what would leave.
+- Sentry's Rust SDK stays in the AGPL programs: `deny.toml` bans it
+  elsewhere, and `the_daemon_links_nothing_under_apache_alone` checks.
 
 ## Track pending work in GitHub issues
 

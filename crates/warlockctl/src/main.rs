@@ -32,6 +32,11 @@
 //! `warlock-users` and `warlock-admin` groups. `capture` uses the admin pipe
 //! (`api/admin.yaml`), which admits Administrators and `warlock-admin`
 //! only. `--pipe` names the pipe instead, for either.
+//!
+//! Diagnostics (PRIVACY.md; `warlock-sentry`): a release reports its panics,
+//! and its faults ([`ClientError::is_fault`]), to Sentry's `warlockctl`
+//! project, unless `DO_NOT_TRACK` is set; how it's used (Warlock not
+//! running, not allowed, a request turned down) isn't a fault.
 
 use std::fs::File;
 use std::io::{self, IsTerminal, Write};
@@ -44,6 +49,18 @@ use warlock_client::{CaptureFilter, CaptureKind, Client, ClientError, Lines};
 const USAGE: &str = "usage: warlockctl [--pipe NAME] info|peers|peer ADDRESS|advertising|holds|advertise TYPE|hold \
                      REASON|realtime [ADDRESS]|request [TYPE [--needs-keyboard]]|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w \
                      FILE|-]";
+
+/// warlockctl's Sentry project (`regulad/warlockctl`), whose DSN the
+/// homelab's `tofu/sentry` makes: none yet, so nothing is sent.
+const PROJECT: &str = "";
+
+/// `e` as text, reported first if it's a fault.
+fn fault(command: &str, e: ClientError) -> String {
+    if e.is_fault() {
+        warlock_sentry::error(&format!("warlockctl {command}: {e}"));
+    }
+    e.to_string()
+}
 
 fn print(v: &impl serde::Serialize) {
     println!("{}", serde_json::to_string_pretty(v).expect("JSON"));
@@ -101,7 +118,7 @@ impl Capture {
             }
             None => Box::new(io::stdout().lock()),
         };
-        let mut chunks = client.capture(&self.filter).await.map_err(|e| e.to_string())?;
+        let mut chunks = client.capture(&self.filter).await.map_err(|e| fault("capture", e))?;
         // The first chunk is the pcapng header; each after it, one frame.
         let mut frames: u64 = 0;
         let mut header = true;
@@ -113,7 +130,7 @@ impl Capture {
             };
             let chunk = match chunk {
                 Some(Ok(c)) => c,
-                Some(Err(e)) => break Some(e.to_string()),
+                Some(Err(e)) => break Some(fault("capture", e)),
                 None => break Some("the stream ended: Warlock stopped".into()),
             };
             out.write_all(&chunk).and_then(|()| out.flush()).map_err(|e| format!("writing: {e}"))?;
@@ -157,6 +174,8 @@ async fn run(client: &Client, command: &str, arg: Option<&str>, needs_keyboard: 
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // Until the program ends, which sends what's left.
+    let _diagnostics = warlock_sentry::start("warlockctl", warlock_sentry::dsn(PROJECT));
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut pipe = None;
     if args.first().map(String::as_str) == Some("--pipe") {
@@ -173,6 +192,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         };
         let client = Client::new(pipe.unwrap_or_else(|| warlock_client::ADMIN_PIPE.into()));
+        warlock_sentry::tag("command", "capture");
         return match capture.run(&client).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -195,10 +215,11 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    warlock_sentry::tag("command", &command);
     match run(&client, &command, arg.as_deref(), needs_keyboard).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("warlockctl: {e}");
+            eprintln!("warlockctl: {}", fault(&command, e));
             ExitCode::FAILURE
         }
     }

@@ -1,0 +1,14 @@
+[package]
+name = "warlock-diagnostics"
+version.workspace = true
+description = "What Warlock's programs share for their diagnostics, whichever of Sentry's SDKs sends them: the release's name, the DSN a build has, DO_NOT_TRACK, this computer's facts, and redaction"
+edition.workspace = true
+# Dual-licensed, like warlock-client: the GPL-2.0-only daemon and the AGPL
+# programs both use it (PLAN.md, "Diagnostics").
+license = "GPL-2.0-only OR AGPL-3.0-or-later"
+authors.workspace = true
+publish = false
+
+[dependencies]
+regex-lite = "0.1.9"
+windows-sys = { version = "0.61", features = ["Win32_System_Registry", "Win32_System_SystemInformation"] }

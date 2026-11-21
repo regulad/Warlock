@@ -16,10 +16,10 @@ warlock-api.workspace = true
 # The Windows service host (MIT OR Apache-2.0).
 windows-service = "=0.8.1"
 # Diagnostics (PRIVACY.md): Sentry's native SDK, built from
-# third_party/sentry-native (MIT); and the redaction of what's sent (MIT OR
-# Apache-2.0).
+# third_party/sentry-native (MIT); and what the programs share for them, the
+# redaction of what's sent among it.
 sentry-native-sys.workspace = true
-regex-lite = "0.1.9"
+warlock-diagnostics.workspace = true
 # Random tags and IRKs for requests (MIT OR Apache-2.0).
 getrandom = "0.4"
 # SipHash-2-4, for requests' auth tags (MIT OR Apache-2.0).
@@ -29,7 +29,7 @@ windows = { version = "0.62", features = ["Devices_Bluetooth", "Devices_Bluetoot
 # Logs (MIT).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_Dns", "Win32_System_Console", "Win32_System_Diagnostics_Etw", "Win32_System_Power", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Time", "Win32_NetworkManagement_NetManagement", "Win32_Security", "Win32_Security_Authorization", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_Dns", "Win32_System_Console", "Win32_System_Diagnostics_Etw", "Win32_System_Power", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Time", "Win32_NetworkManagement_NetManagement", "Win32_Security", "Win32_Security_Authorization", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 warlock-capture.workspace = true

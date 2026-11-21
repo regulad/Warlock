@@ -52,6 +52,9 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let command = args.next().unwrap_or_default();
     let options: Vec<String> = args.collect();
+    // Diagnostics (PRIVACY.md) for every command, until the process ends:
+    // panics, and the errors the daemon, `setup` and `teardown` log.
+    let _diagnostics = diagnostics::start(&command);
     let result = match command.as_str() {
         "run" => daemon::Options::parse(&options).and_then(|o| {
             logging::console();

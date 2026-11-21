@@ -368,9 +368,10 @@ struct Run<'a> {
 /// adapter come up first and stay; a supported adapter is used whenever one
 /// is plugged in (PLAN.md, W5).
 pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
-    // Diagnostics (PRIVACY.md), unless DO_NOT_TRACK is set system-wide: for
-    // the whole run, the service's session.
-    let _diagnostics = diagnostics::start();
+    // Diagnostics (PRIVACY.md) started with the process (main.rs); the run
+    // is a session of its own.
+    tracing::info!("{}", diagnostics::state());
+    diagnostics::session();
     let own = random_addr();
     // The control API first: programs can follow the radio from the start,
     // and a second Warlock stops here, its pipe taken.

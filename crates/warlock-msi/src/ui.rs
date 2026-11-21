@@ -4,6 +4,8 @@
 //!
 //! - Licences: the licence page ([`crate::licence`]). It asks nothing: the
 //!   GPL and the AGPL don't need accepting to install or run a program.
+//! - Privacy: the privacy policy, `PRIVACY.md`, as it's installed. It asks
+//!   nothing either: the policy says how to turn diagnostics off.
 //! - Install folder: where Warlock goes, with a folder browser, and what its
 //!   service will do.
 //! - Options: adding the account installing to `warlock-users`, to
@@ -207,8 +209,9 @@ const BACK: (i32, i32, i32, i32) = (180, 243, 56, 17);
 const NEXT: (i32, i32, i32, i32) = (236, 243, 56, 17);
 const CANCEL: (i32, i32, i32, i32) = (304, 243, 56, 17);
 
-/// The UI's tables. `licence` is the licence page's RTF.
-pub fn tables(licence: &str) -> Vec<Table> {
+/// The UI's tables. `licence` and `privacy` are the licence and privacy
+/// pages' RTF.
+pub fn tables(licence: &str, privacy: &str) -> Vec<Table> {
     let mut ui = Ui::new();
 
     // Licences: read, then Next.
@@ -235,6 +238,35 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.button(d, "Back", BACK, VISIBLE, "&Back", "Next");
     ui.button(d, "Next", NEXT, BUTTON, "&Next", "Cancel");
     ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "LicenseText");
+    ui.events(d, "Next", &[("NewDialog", "PrivacyDlg")]);
+    ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
+
+    // Privacy: the privacy policy itself (Parker, 2026-11-21), which says
+    // what Warlock's programs send and how to turn that off. It asks and
+    // changes nothing.
+    let d = "PrivacyDlg";
+    ui.dialog(d, WIDTH, HEIGHT, MODAL, "Next", s("Next"), s("Cancel"));
+    ui.page(d, "Privacy", "What Warlock sends to find and fix problems, and how to turn it off.");
+    ui.control(
+        d,
+        "PrivacyText",
+        "ScrollableText",
+        (20, 52, 330, 146),
+        VISIBLE | ENABLED | SUNKEN,
+        None,
+        Some(privacy),
+        Some("Back"),
+    );
+    ui.text(
+        d,
+        "Note",
+        (20, 203, 330, 28),
+        "This is Warlock's privacy policy, which is installed with it. Nothing on this page changes your computer.",
+    );
+    ui.button(d, "Back", BACK, BUTTON, "&Back", "Next");
+    ui.button(d, "Next", NEXT, BUTTON, "&Next", "Cancel");
+    ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "PrivacyText");
+    ui.events(d, "Back", &[("NewDialog", "LicenseDlg")]);
     ui.events(d, "Next", &[("NewDialog", "InstallDirDlg")]);
     ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
 
@@ -268,7 +300,7 @@ pub fn tables(licence: &str) -> Vec<Table> {
     ui.button(d, "Next", NEXT, BUTTON, "&Next", "Cancel");
     ui.button(d, "Cancel", CANCEL, BUTTON, "Cancel", "FolderLabel");
     ui.events(d, "ChangeFolder", &[("SpawnDialog", "BrowseDlg")]);
-    ui.events(d, "Back", &[("NewDialog", "LicenseDlg")]);
+    ui.events(d, "Back", &[("NewDialog", "PrivacyDlg")]);
     ui.events(d, "Next", &[("SetTargetPath", "INSTALLDIR"), ("NewDialog", "OptionsDlg")]);
     ui.events(d, "Cancel", &[("SpawnDialog", "CancelDlg")]);
 
@@ -455,13 +487,15 @@ pub fn tables(licence: &str) -> Vec<Table> {
     );
     ui.shown_if(d, "Repaired", body, "Warlock is repaired.", REPAIRING);
     ui.shown_if(d, "Removed", body, "Warlock is removed, and the adapter it had is back with Windows.", REMOVING);
+    // Their Finish reports how setup ended, for the diagnostics
+    // (warlock-msi-ca), then ends it.
     let d = "UserExitDlg";
     finish(&mut ui, d, "Cancelled");
-    ui.events(d, "Finish", &[("EndDialog", "Exit")]);
+    ui.events(d, "Finish", &[("DoAction", "WarlockCancelled"), ("EndDialog", "Exit")]);
     ui.text(d, "Body", body, "Warlock's setup was cancelled. Nothing was changed.");
     let d = "FatalErrorDlg";
     finish(&mut ui, d, "Setup failed");
-    ui.events(d, "Finish", &[("EndDialog", "Exit")]);
+    ui.events(d, "Finish", &[("DoAction", "WarlockFailed"), ("EndDialog", "Exit")]);
     ui.text(
         d,
         "Body",
@@ -582,7 +616,7 @@ mod tests {
     /// ends the dialog.
     #[test]
     fn install_carries_the_plugin_checkbox() {
-        let tables = tables("{\\rtf1 x}");
+        let tables = tables("{\\rtf1 x}", "{\\rtf1 y}");
         let install: Vec<(&str, &str, &str, i32)> = rows(&tables, "ControlEvent")
             .iter()
             .filter(|r| cell(r, 0) == Some("OptionsDlg") && cell(r, 1) == Some("Install"))
@@ -602,7 +636,7 @@ mod tests {
     /// checkbox changes: Show and Hide conditions are each other's opposite.
     #[test]
     fn the_plugin_has_one_note_at_a_time() {
-        let tables = tables("{\\rtf1 x}");
+        let tables = tables("{\\rtf1 x}", "{\\rtf1 y}");
         let conditions = rows(&tables, "ControlCondition");
         let show = |control: &str| {
             conditions
@@ -687,7 +721,7 @@ mod tests {
     /// end setup too.
     #[test]
     fn finish_asks_a_new_member_to_sign_out() {
-        let tables = tables("{\\rtf1 x}");
+        let tables = tables("{\\rtf1 x}", "{\\rtf1 y}");
         let events = |d: &str, c: &str| -> Vec<(&str, &str, &str)> {
             let mut v: Vec<(i32, &str, &str, &str)> = rows(&tables, "ControlEvent")
                 .iter()
@@ -723,7 +757,7 @@ mod tests {
     /// must be two whose conditions are each other's opposite, or one.
     #[test]
     fn a_button_changes_dialogs_once() {
-        let tables = tables("{\\rtf1 x}");
+        let tables = tables("{\\rtf1 x}", "{\\rtf1 y}");
         let mut by_control: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
         for r in rows(&tables, "ControlEvent") {
             if ["NewDialog", "SpawnDialog", "SpawnWaitDialog", "EndDialog"].contains(&cell(r, 2).unwrap()) {
@@ -746,7 +780,7 @@ mod tests {
     /// (error 2810), or whose references name no control.
     #[test]
     fn every_dialog_is_well_formed() {
-        let tables = tables("{\\rtf1 x}");
+        let tables = tables("{\\rtf1 x}", "{\\rtf1 y}");
         let controls = rows(&tables, "Control");
         for dialog in rows(&tables, "Dialog") {
             let d = cell(dialog, 0).unwrap();

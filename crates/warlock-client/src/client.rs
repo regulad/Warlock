@@ -62,6 +62,22 @@ impl fmt::Display for ClientError {
 
 impl std::error::Error for ClientError {}
 
+impl ClientError {
+    /// Whether this points at a fault, in Warlock or in this client, rather
+    /// than at how it was used: Warlock not running, the caller not allowed,
+    /// and a request Warlock turned down (4xx) aren't faults. What a
+    /// program's diagnostics report.
+    pub fn is_fault(&self) -> bool {
+        match self {
+            ClientError::Connect { source, .. } => {
+                !matches!(source.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied)
+            }
+            ClientError::Http(_) | ClientError::Json(_) => true,
+            ClientError::Api { status, .. } => status.is_server_error(),
+        }
+    }
+}
+
 impl From<hyper::Error> for ClientError {
     fn from(e: hyper::Error) -> Self {
         ClientError::Http(e)
@@ -341,5 +357,24 @@ impl Lines {
     /// The next line as `T`.
     pub async fn next<T: DeserializeOwned>(&mut self) -> Option<Result<T, ClientError>> {
         Some(self.next_value().await?.and_then(|v| serde_json::from_value(v).map_err(ClientError::from)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_faults_are_faults() {
+        let connect = |kind| ClientError::Connect { pipe: crate::PIPE.into(), source: io::Error::from(kind) };
+        let api = |status| ClientError::Api { status, message: String::new() };
+        assert!(!connect(io::ErrorKind::NotFound).is_fault(), "Warlock isn't running");
+        assert!(!connect(io::ErrorKind::PermissionDenied).is_fault(), "not allowed");
+        assert!(connect(io::ErrorKind::ConnectionReset).is_fault());
+        for status in [StatusCode::BAD_REQUEST, StatusCode::NOT_FOUND, StatusCode::CONFLICT] {
+            assert!(!api(status).is_fault(), "{status}");
+        }
+        assert!(api(StatusCode::INTERNAL_SERVER_ERROR).is_fault());
+        assert!(ClientError::from(serde_json::from_str::<Value>("{").unwrap_err()).is_fault());
     }
 }

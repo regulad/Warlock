@@ -59,6 +59,7 @@
 //! 2026-11-18. Sequence numbers are Windows Installer's suggested ones.
 
 mod licence;
+mod notices;
 mod ui;
 
 use std::collections::BTreeMap;
@@ -100,9 +101,12 @@ const COMPONENT_LICENSES: &str = "{017BEEEC-3CC4-4536-BC22-1F8363621EB7}";
 /// Key file `warlock-extcap.exe`, in Wireshark's `extcap` folder. Generated
 /// 2026-11-19 (0.1.2).
 const COMPONENT_WIRESHARK_PLUGIN: &str = "{5BB193A0-3D81-4220-97CA-7FC16F300AC6}";
-/// Key file `PRIVACY.md`; with `LICENSE-sentry-native.txt`, the licence of
-/// the SDK that sends Warlock's diagnostics. Generated 2026-11-21 (0.2.5).
+/// Key file `PRIVACY.md`, the privacy policy. Generated 2026-11-21 (0.2.5).
 const COMPONENT_DIAGNOSTICS: &str = "{E3E20141-999A-41F6-9A64-D6972807FA22}";
+/// Key file `THIRD-PARTY-NOTICES.txt`: the licences of the third-party
+/// software built into the programs (`notices`). Generated 2026-11-21
+/// (0.2.5).
+const COMPONENT_NOTICES: &str = "{2158E17D-8824-46F1-8417-DC476B9B59F3}";
 
 /// The optional Wireshark plugin (PLAN.md, W6): installed when the
 /// installer's checkbox sets this property and Wireshark was found, which
@@ -205,6 +209,9 @@ const CA_CONTINUE: i32 = 64;
 const CA_DLL: i32 = 1;
 /// `msidbCustomActionTypeRollback`: runs only if the install rolls back.
 const CA_ROLLBACK: i32 = 256;
+/// An install without the full UI (`UILevel` 5), whose own pages report how
+/// it ended: silent (2), basic (3) or reduced (4).
+const NO_FULL_UI: &str = "UILevel < 5";
 /// `SERVICE_WIN32_OWN_PROCESS`.
 const OWN_PROCESS: i32 = 0x10;
 /// `SERVICE_AUTO_START`.
@@ -316,8 +323,14 @@ struct Payload {
 
 /// Every table, filled in. `runtime_min` is the least Visual C++ runtime
 /// version (`14.50`) the binaries need.
-fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, files: &[(Payload, u64)]) -> Vec<Table> {
-    let mut all = ui::tables(licence);
+fn tables(
+    version: &str,
+    product_code: &str,
+    runtime_min: &str,
+    (licence, privacy): (&str, &str),
+    files: &[(Payload, u64)],
+) -> Vec<Table> {
+    let mut all = ui::tables(licence, privacy);
 
     let mut property = Table::new("Property", &[("Property", "s72"), ("Value", "l0")], &["Property"]);
     for (k, v) in [
@@ -377,6 +390,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("Warlockctl", COMPONENT_WARLOCKCTL, "warlockctl.exe"),
         ("Licenses", COMPONENT_LICENSES, "LICENSE.md"),
         ("Diagnostics", COMPONENT_DIAGNOSTICS, "PRIVACY.md"),
+        ("Notices", COMPONENT_NOTICES, "THIRD-PARTY-NOTICES.txt"),
     ] {
         component.row(vec![s(name), s(guid), s("INSTALLDIR"), n(COMPONENT_64BIT), None, s(key)]);
     }
@@ -426,7 +440,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
 
     let mut feature_components =
         Table::new("FeatureComponents", &[("Feature_", "s38"), ("Component_", "s72")], &["Feature_", "Component_"]);
-    for c in ["Warlock", "Warlockctl", "Licenses", "Diagnostics"] {
+    for c in ["Warlock", "Warlockctl", "Licenses", "Diagnostics", "Notices"] {
         feature_components.row(vec![s("Warlock"), s(c)]);
     }
     feature_components.row(vec![s("WiresharkPlugin"), s("WiresharkPlugin")]);
@@ -681,7 +695,11 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         .row(vec![s("WarlockFindMembership"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindMembership"), None])
         // After the install (the UI sequence), and by the sign-out prompt.
         .row(vec![s("WarlockFindJoined"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("FindJoined"), None])
-        .row(vec![s("WarlockSignOut"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("SignOut"), None]);
+        .row(vec![s("WarlockSignOut"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("SignOut"), None])
+        // How the install ended, for the diagnostics (warlock-msi-ca).
+        .row(vec![s("WarlockFinished"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("Finished"), None])
+        .row(vec![s("WarlockFailed"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("Failed"), None])
+        .row(vec![s("WarlockCancelled"), n(CA_DLL | CA_CONTINUE), s(CA_BINARY), s("Cancelled"), None]);
     // Joining a group. The target is formatted as the action is scheduled, so
     // it carries the SID of the account installing. A failure only goes in
     // the log: that account can still join the group by hand.
@@ -777,6 +795,12 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("PublishFeatures", None, 6300),
         ("PublishProduct", None, 6400),
         ("InstallFinalize", None, 6600),
+        // How it ended, for the diagnostics: finished, whatever the UI; with
+        // no full UI, failed or cancelled as the ending actions (with one,
+        // the Failed and Cancelled pages report it, `ui`).
+        ("WarlockFinished", None, 6650),
+        ("WarlockCancelled", Some(NO_FULL_UI), -2),
+        ("WarlockFailed", Some(NO_FULL_UI), -3),
     ]
     .into_iter()
     .chain(joins.iter().map(|(action, condition, at)| (*action, Some(condition.as_str()), *at)))
@@ -989,10 +1013,10 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
             vital: false,
         },
         Payload {
-            key: "LICENSE_SENTRY.txt",
-            component: "Diagnostics",
-            name: "SENTRYLI.TXT|LICENSE-sentry-native.txt",
-            source: root.join("third_party").join("sentry-native").join("LICENSE"),
+            key: "THIRD-PARTY-NOTICES.txt",
+            component: "Notices",
+            name: "NOTICES.TXT|THIRD-PARTY-NOTICES.txt",
+            source: root.join(notices::FILE),
             vital: false,
         },
     ];
@@ -1006,6 +1030,7 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
         files.iter().filter(|(p, _)| p.key.ends_with(".exe")).map(|(p, _)| p.source.as_path()).collect();
     let runtime_min = runtime_min(&exes)?;
     let licence = licence::rtf(root)?;
+    let privacy = licence::privacy(root)?;
 
     let work = out.with_extension("work");
     let _ = std::fs::remove_dir_all(&work);
@@ -1019,7 +1044,7 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     // SAFETY: valid paths and out-parameter.
     check("creating the database", unsafe { MsiOpenDatabaseW(wide_path(out).as_ptr(), MSIDBOPEN_CREATE, &mut db) })?;
     let db = Handle(db);
-    for t in tables(version, &product_code, &runtime_min, &licence, &files) {
+    for t in tables(version, &product_code, &runtime_min, (&licence, &privacy), &files) {
         let file = format!("{}.idt", t.name);
         std::fs::write(work.join("idt").join(&file), t.idt()?)?;
         // SAFETY: valid handle and paths.
@@ -1217,13 +1242,17 @@ fn winget(root: &Path, msi: &Path, url: &str, out: Option<PathBuf>) -> Result<()
 }
 
 const USAGE: &str = "usage: warlock-msi [--out PATH] [--no-build]\n       \
-                     warlock-msi winget MSI --installer-url URL [--out DIR]";
+                     warlock-msi winget MSI --installer-url URL [--out DIR]\n       \
+                     warlock-msi notices";
 
 fn main() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
     // Without the `\\?\` prefix canonicalize adds, which makecab can't read.
     let root = PathBuf::from(root.to_string_lossy().trim_start_matches(r"\\?\"));
     let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|a| a == "notices") {
+        return notices::write(&root);
+    }
     if args.peek().is_some_and(|a| a == "winget") {
         args.next();
         let (mut msi, mut url, mut out) = (None, None, None);
@@ -1290,7 +1319,7 @@ mod tests {
     /// to go on to the sign-out prompt.
     #[test]
     fn joining_is_known_before_the_done_page() {
-        let all = tables("0.0.0", "{00000000-0000-0000-0000-000000000000}", "14.50", "{\\rtf1 x}", &[]);
+        let all = tables("0.0.0", "{00000000-0000-0000-0000-000000000000}", "14.50", ("{\\rtf1 x}", "{\\rtf1 y}"), &[]);
         let ui = &all.iter().find(|t| t.name == "InstallUISequence").unwrap().rows;
         let at = |action: &str| -> i32 {
             let row = ui.iter().find(|r| r[0].as_deref() == Some(action)).unwrap_or_else(|| panic!("no {action}"));

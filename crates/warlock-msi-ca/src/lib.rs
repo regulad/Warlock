@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
-//! warlock-msi-ca: the one custom action Warlock's MSI runs from a DLL, and
-//! the only thing it can't do with its own tables (PLAN.md, W6).
+// SPDX-License-Identifier: AGPL-3.0-only
+//! warlock-msi-ca: the custom actions Warlock's MSI runs from a DLL: what it
+//! can't do with its own tables (PLAN.md, W6), and its diagnostics.
 //!
 //! The installer's "Add me to warlock-users" and "Add me to warlock-admin"
 //! checkboxes should show, ticked and greyed out, when the account installing
@@ -20,8 +20,26 @@
 //! the others after the install, so the Visual C++ runtime the DLL links to
 //! is there. None fails the install: what one can't find out leaves things
 //! as they were, and says why in the log.
+//!
+//! **Diagnostics** (PRIVACY.md; Parker, 2026-11-21): every action reports to
+//! Sentry's `warlock-installer` project (`warlock-sentry`), as fully as it
+//! can without identifying anyone, unless `DO_NOT_TRACK` is set in its own
+//! environment (it looks no further):
+//! - each action as a transaction, with how it went;
+//! - its errors, and its panics, which it catches, so none reaches msiexec;
+//! - the install's kind (fresh, upgrade, repair, uninstall), its UI, and
+//!   the options chosen ([`facts`]);
+//! - how the install ended: [`Finished`] after `InstallFinalize`, [`Failed`]
+//!   and [`Cancelled`] from the Failed and Cancelled pages' Finish, or, with
+//!   no full UI, as the execute sequence's ending actions.
+//!
+//! The account's SID, which the log names, never goes: what's sent is
+//! written apart from the log, and `redact` takes SIDs out besides.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{null, null_mut};
+
+use warlock_sentry::{Fact, Outcome, Timed};
 
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, GetLastError, LocalFree};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
@@ -52,6 +70,10 @@ const GROUPS: [Group; 2] = [
     Group { name: "warlock-users", member: "WARLOCKUSERSMEMBER", join: "JOINWARLOCKUSERS" },
     Group { name: "warlock-admin", member: "WARLOCKADMINMEMBER", join: "JOINWARLOCKADMIN" },
 ];
+/// The diagnostics' names, group by group, for whether it was asked for and
+/// whether the account was already in it ([`facts`]).
+const GROUP_FACTS: [(&str, &str); 2] =
+    [("join_warlock_users", "in_warlock_users"), ("join_warlock_admin", "in_warlock_admin")];
 /// Set to 1 after the install when the account is now in a group it wasn't
 /// in before.
 const JOINED_PROPERTY: &str = "WARLOCKJOINED";
@@ -61,8 +83,57 @@ const JOINED_GROUPS_PROPERTY: &str = "WARLOCKJOINEDGROUPS";
 /// Warlock is first installed.
 const NO_GROUP: [u32; 2] = [1376, 2220];
 
+/// The installer's Sentry project (`regulad/warlock-installer`), whose DSN
+/// the homelab's `tofu/sentry` makes: none yet, so nothing is sent.
+const PROJECT: &str = "";
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Runs the action `name` as a step of the install, for the diagnostics:
+/// timed, with the install's [`facts`], its panics caught and reported. The
+/// action itself always succeeds, as before.
+fn step(install: MSIHANDLE, name: &str, body: impl FnOnce(&mut Timed)) -> u32 {
+    let _diagnostics = warlock_sentry::start("warlock-installer", warlock_sentry::dsn(PROJECT));
+    warlock_sentry::set_context("install", &facts(install));
+    let mut timed = Timed::start(name, "msi.custom_action");
+    if catch_unwind(AssertUnwindSafe(|| body(&mut timed))).is_err() {
+        // The SDK's panic hook has reported it.
+        timed.fail("panic");
+        log(install, &format!("{name}: panicked"));
+    }
+    0
+}
+
+/// What kind of install this is, for the diagnostics, from its properties:
+/// none of them identifying.
+fn facts(install: MSIHANDLE) -> Vec<(&'static str, Fact)> {
+    let has = |name: &str| property(install, name).is_some_and(|v| !v.is_empty());
+    let kind = if property(install, "REMOVE").is_some_and(|v| v.eq_ignore_ascii_case("ALL")) {
+        "uninstall"
+    } else if has("Installed") {
+        "repair"
+    } else if has("OLDERFOUND") {
+        "upgrade"
+    } else {
+        "install"
+    };
+    let ui = match property(install, "UILevel").as_deref() {
+        Some("2") => "none",
+        Some("3") => "basic",
+        Some("4") => "reduced",
+        Some("5") => "full",
+        _ => "unknown",
+    };
+    let mut facts = vec![("kind", kind.into()), ("ui", ui.into())];
+    for (group, (join, member)) in GROUPS.iter().zip(GROUP_FACTS) {
+        facts.push((join, has(group.join).into()));
+        facts.push((member, has(group.member).into()));
+    }
+    facts.push(("wireshark_found", has("WIRESHARKDIR").into()));
+    facts.push(("wireshark_plugin", has("WIRESHARKPLUGIN").into()));
+    facts
 }
 
 /// The custom action: for each group `UserSID` is a member of, sets its
@@ -73,20 +144,32 @@ fn wide(s: &str) -> Vec<u16> {
 /// Windows Installer calls it with a valid install handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn FindMembership(install: MSIHANDLE) -> u32 {
-    let sid = property(install, "UserSID").unwrap_or_default();
-    for group in &GROUPS {
-        let said = match is_member(group.name, &sid) {
-            Ok(true) => {
-                set(install, group.member, "1");
-                set(install, group.join, "1");
-                format!("{sid} is already in {}", group.name)
-            }
-            Ok(false) => format!("{sid} isn't in {}", group.name),
-            Err(e) => format!("couldn't tell whether {sid:?} is in {}: {e}", group.name),
-        };
-        log(install, &format!("FindMembership: {said}"));
-    }
-    0
+    step(install, "FindMembership", |timed| {
+        let sid = property(install, "UserSID").unwrap_or_default();
+        for group in &GROUPS {
+            let said = match is_member(group.name, &sid) {
+                Ok(true) => {
+                    set(install, group.member, "1");
+                    set(install, group.join, "1");
+                    timed.set(group.name, "member");
+                    format!("{sid} is already in {}", group.name)
+                }
+                Ok(false) => {
+                    timed.set(group.name, "not-member");
+                    format!("{sid} isn't in {}", group.name)
+                }
+                Err(e) => {
+                    timed.fail("membership-unknown");
+                    warlock_sentry::error(&format!(
+                        "FindMembership: couldn't tell whether the account is in {}: {e}",
+                        group.name
+                    ));
+                    format!("couldn't tell whether {sid:?} is in {}: {e}", group.name)
+                }
+            };
+            log(install, &format!("FindMembership: {said}"));
+        }
+    })
 }
 
 /// The custom action run once the install is done, before the Done page
@@ -101,26 +184,50 @@ pub unsafe extern "system" fn FindMembership(install: MSIHANDLE) -> u32 {
 /// Windows Installer calls it with a valid install handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn FindJoined(install: MSIHANDLE) -> u32 {
-    let sid = property(install, "UserSID").unwrap_or_default();
-    let mut joined = Vec::new();
-    for group in &GROUPS {
-        let before = property(install, group.member).is_some_and(|v| !v.is_empty());
-        let said = match is_member(group.name, &sid) {
-            Ok(true) if !before => {
-                joined.push(group.name);
-                format!("{sid} joined {}", group.name)
-            }
-            Ok(true) => format!("{sid} was already in {}", group.name),
-            Ok(false) => format!("{sid} isn't in {}", group.name),
-            Err(e) => format!("couldn't tell whether {sid:?} is in {}: {e}", group.name),
-        };
-        log(install, &format!("FindJoined: {said}"));
-    }
-    if !joined.is_empty() {
-        set(install, JOINED_PROPERTY, "1");
-        set(install, JOINED_GROUPS_PROPERTY, &joined.join(" and "));
-    }
-    0
+    step(install, "FindJoined", |timed| {
+        let sid = property(install, "UserSID").unwrap_or_default();
+        let mut joined = Vec::new();
+        for group in &GROUPS {
+            let before = property(install, group.member).is_some_and(|v| !v.is_empty());
+            let asked = property(install, group.join).is_some_and(|v| !v.is_empty());
+            let said = match is_member(group.name, &sid) {
+                Ok(true) if !before => {
+                    joined.push(group.name);
+                    timed.set(group.name, "joined");
+                    format!("{sid} joined {}", group.name)
+                }
+                Ok(true) => {
+                    timed.set(group.name, "member");
+                    format!("{sid} was already in {}", group.name)
+                }
+                Ok(false) => {
+                    // Asked to join, and the install didn't add it.
+                    if asked {
+                        timed.fail("not-joined");
+                        warlock_sentry::error(&format!(
+                            "FindJoined: the install didn't add the account to {}",
+                            group.name
+                        ));
+                    }
+                    timed.set(group.name, "not-member");
+                    format!("{sid} isn't in {}", group.name)
+                }
+                Err(e) => {
+                    timed.fail("membership-unknown");
+                    warlock_sentry::error(&format!(
+                        "FindJoined: couldn't tell whether the account is in {}: {e}",
+                        group.name
+                    ));
+                    format!("couldn't tell whether {sid:?} is in {}: {e}", group.name)
+                }
+            };
+            log(install, &format!("FindJoined: {said}"));
+        }
+        if !joined.is_empty() {
+            set(install, JOINED_PROPERTY, "1");
+            set(install, JOINED_GROUPS_PROPERTY, &joined.join(" and "));
+        }
+    })
 }
 
 /// The custom action of the sign-out modal's "Sign out now": signs the
@@ -132,16 +239,70 @@ pub unsafe extern "system" fn FindJoined(install: MSIHANDLE) -> u32 {
 /// Windows Installer calls it with a valid install handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn SignOut(install: MSIHANDLE) -> u32 {
-    let reason = SHTDN_REASON_MAJOR_APPLICATION | SHTDN_REASON_MINOR_INSTALLATION | SHTDN_REASON_FLAG_PLANNED;
-    // SAFETY: no pointers; it signs out this process's session.
-    let said = if unsafe { ExitWindowsEx(EWX_LOGOFF, reason) } != 0 {
-        "signing out".to_string()
-    } else {
-        // SAFETY: no preconditions.
-        format!("couldn't sign out: error {}", unsafe { GetLastError() })
+    step(install, "SignOut", |timed| {
+        let reason = SHTDN_REASON_MAJOR_APPLICATION | SHTDN_REASON_MINOR_INSTALLATION | SHTDN_REASON_FLAG_PLANNED;
+        // SAFETY: no pointers; it signs out this process's session.
+        let said = if unsafe { ExitWindowsEx(EWX_LOGOFF, reason) } != 0 {
+            "signing out".to_string()
+        } else {
+            // SAFETY: no preconditions.
+            let said = format!("couldn't sign out: error {}", unsafe { GetLastError() });
+            timed.fail("not-signed-out");
+            warlock_sentry::error(&format!("SignOut: {said}"));
+            said
+        };
+        log(install, &format!("SignOut: {said}"));
+    })
+}
+
+/// How the install ended, for the diagnostics: as a transaction named by
+/// its kind (`install`, `upgrade`, `repair`, `uninstall`), with its facts; a
+/// failure as an error too. Always succeeds.
+fn ended(install: MSIHANDLE, outcome: Outcome) -> u32 {
+    let _diagnostics = warlock_sentry::start("warlock-installer", warlock_sentry::dsn(PROJECT));
+    let facts = facts(install);
+    let kind = match facts.first() {
+        Some((_, Fact::Text(kind))) => kind.clone(),
+        _ => "install".into(),
     };
-    log(install, &format!("SignOut: {said}"));
+    warlock_sentry::set_context("install", &facts);
+    // Nothing in it panics, but nothing may reach msiexec either.
+    let _ = catch_unwind(AssertUnwindSafe(|| warlock_sentry::ended(&kind, "msi.install", outcome, &facts)));
+    log(install, &format!("the {kind} {outcome:?}"));
     0
+}
+
+/// The custom action run once the install has finished: after
+/// `InstallFinalize`, in the execute sequence, whatever the UI.
+///
+/// # Safety
+///
+/// Windows Installer calls it with a valid install handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Finished(install: MSIHANDLE) -> u32 {
+    ended(install, Outcome::Finished)
+}
+
+/// The custom action run when the install failed: the Failed page's
+/// Finish, or with no full UI the execute sequence's ending action.
+///
+/// # Safety
+///
+/// Windows Installer calls it with a valid install handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Failed(install: MSIHANDLE) -> u32 {
+    ended(install, Outcome::Failed)
+}
+
+/// The custom action run when the install was cancelled: the Cancelled
+/// page's Finish, or with no full UI the execute sequence's ending action.
+///
+/// # Safety
+///
+/// Windows Installer calls it with a valid install handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Cancelled(install: MSIHANDLE) -> u32 {
+    ended(install, Outcome::Cancelled)
 }
 
 /// Whether the account `sid` (`S-1-5-21-…`) is a direct member of `group`.

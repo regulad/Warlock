@@ -1,0 +1,23 @@
+[package]
+name = "warlock-sentry"
+version.workspace = true
+description = "Diagnostics for Warlock's AGPL programs (warlockctl, warlock-extcap, the installer's custom actions), through Sentry's Rust SDK"
+edition.workspace = true
+# AGPL, like the programs that use it: Sentry's Rust SDK needs crates offered
+# under Apache-2.0 alone, which GPL-2.0-only code can't link, but the AGPL
+# can (deny.toml; PLAN.md, "Diagnostics").
+license = "AGPL-3.0-only"
+authors.workspace = true
+publish = false
+
+[dependencies]
+warlock-diagnostics.workspace = true
+# Sentry's SDK (MIT), as Koala has it, without its sessions, logs and
+# metrics, sending over reqwest with Windows' own TLS and certificate store
+# (SChannel, through native-tls): not ureq, whose native-tls feature bundles
+# Mozilla's roots (webpki-root-certs, under CDLA-Permissive-2.0, which
+# deny.toml doesn't allow). Pinned, as in Koala: 0.49.6 is too new.
+sentry = { version = "=0.49.5", default-features = false, features = ["backtrace", "contexts", "panic", "debug-images", "reqwest", "native-tls"] }
+
+[dev-dependencies]
+sentry = { version = "=0.49.5", default-features = false, features = ["test"] }
