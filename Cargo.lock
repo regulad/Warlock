@@ -1796,6 +1796,7 @@ dependencies = [
 name = "sentry-native-sys"
 version = "0.2.5"
 dependencies = [
+ "cc",
  "cmake",
 ]
 

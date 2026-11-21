@@ -2,7 +2,13 @@
 //! Raw FFI to Sentry's native SDK, sentry-native 0.17 (MIT,
 //! `third_party/sentry-native`, `include/sentry.h`): the functions Warlock
 //! uses, declared by hand from that header. Built statically with its
-//! in-process crash backend and WinHTTP transport (`build.rs`).
+//! in-process crash backend and WinHTTP transport (`build.rs`), and a shim
+//! that formats its log for Warlock's (`shim/logger.c`).
+//!
+//! The native SDK, not Sentry's Rust one, because of licensing: the Rust
+//! SDK needs crates offered under Apache-2.0 alone, which the GPL-2.0-only
+//! daemon can't link (PLAN.md, "Diagnostics"; `deny.toml`). The AGPL
+//! programs, which can, use the Rust SDK (`warlock-sentry`).
 //!
 //! Warlock's diagnostics (`crates/warlock/src/diagnostics.rs`) wrap these;
 //! nothing else should call them.
@@ -94,6 +100,15 @@ unsafe extern "C" {
     pub fn sentry_options_set_traces_sample_rate(opts: *mut sentry_options_t, sample_rate: f64);
     pub fn sentry_options_set_auto_session_tracking(opts: *mut sentry_options_t, val: c_int);
     pub fn sentry_options_set_shutdown_timeout(opts: *mut sentry_options_t, shutdown_timeout: u64);
+    pub fn sentry_options_set_debug(opts: *mut sentry_options_t, debug: c_int);
+    pub fn sentry_options_set_logger_level(opts: *mut sentry_options_t, level: c_int);
+    pub fn sentry_options_set_logger_enabled_when_crashed(opts: *mut sentry_options_t, enabled: c_int);
+    /// The shim's (`shim/logger.c`): the SDK's log, each message formatted,
+    /// to `log`, with its `sentry_level_t`.
+    pub fn warlock_sentry_set_logger(
+        opts: *mut sentry_options_t,
+        log: unsafe extern "C" fn(level: c_int, message: *const c_char),
+    );
     pub fn sentry_options_set_before_send(
         opts: *mut sentry_options_t,
         func: sentry_event_function_t,

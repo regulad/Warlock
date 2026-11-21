@@ -10,3 +10,5 @@ build = "build.rs"
 
 [build-dependencies]
 cmake = "0.1"
+# The logger's shim (shim/logger.c).
+cc = "1.11"

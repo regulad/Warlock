@@ -37,7 +37,7 @@
 //!   - its modules' full paths, which can name the user's folder: cut to
 //!     file names in `before_send` ([`before_send`]).
 
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CString, c_char, c_int, c_void};
 use std::fmt::Write as _;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -97,6 +97,25 @@ pub fn start(command: &str) -> Diagnostics {
     diagnostics
 }
 
+/// The log's target for what the SDK says of itself, which [`Layer`] keeps
+/// out of the diagnostics: the SDK reporting on its own reports.
+const SDK_TARGET: &str = "warlock::sentry";
+
+/// What the SDK says of itself (`warlock_sentry_set_logger`), to Warlock's
+/// log.
+unsafe extern "C" fn sdk_log(level: c_int, message: *const c_char) {
+    if message.is_null() {
+        return;
+    }
+    // SAFETY: the shim's NUL-terminated text, for the call.
+    let text = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy();
+    if level >= SENTRY_LEVEL_ERROR {
+        tracing::error!(target: SDK_TARGET, "Sentry's SDK: {text}");
+    } else {
+        warn!(target: SDK_TARGET, "Sentry's SDK: {text}");
+    }
+}
+
 /// Whether diagnostics are on, and why not, for the log.
 pub fn state() -> &'static str {
     if ON.load(Ordering::SeqCst) {
@@ -138,6 +157,13 @@ fn init(dsn: &str, database: &Path, transport: sentry_send_function_t) -> Diagno
         // `setup`'s runs.
         sentry_options_set_auto_session_tracking(options, 0);
         sentry_options_set_shutdown_timeout(options, 2000);
+        // What the SDK says of itself, from warnings up, to Warlock's log
+        // ([`sdk_log`]): a service's stderr, where it would go, goes nowhere.
+        // Not while crashing, when the log's locks may be held.
+        sentry_options_set_debug(options, 1);
+        sentry_options_set_logger_level(options, SENTRY_LEVEL_WARNING);
+        sentry_options_set_logger_enabled_when_crashed(options, 0);
+        warlock_sentry_set_logger(options, sdk_log);
         sentry_options_set_before_send(options, Some(before_send), std::ptr::null_mut());
         if transport.is_some() {
             sentry_options_set_transport(options, sentry_transport_new(transport));
@@ -287,7 +313,10 @@ pub struct Layer;
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Layer {
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
         let level = *event.metadata().level();
-        if (level != Level::ERROR && level != Level::WARN) || !ON.load(Ordering::SeqCst) {
+        if (level != Level::ERROR && level != Level::WARN)
+            || !ON.load(Ordering::SeqCst)
+            || event.metadata().target() == SDK_TARGET
+        {
             return;
         }
         let mut text = String::new();

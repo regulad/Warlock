@@ -48,12 +48,23 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
     println!("cargo:rustc-link-lib=static=sentry");
-    // What sentry-native's CMakeLists links on Windows (_SENTRY_PLATFORM_LIBS).
-    for lib in ["dbghelp", "shlwapi", "version", "winhttp", "synchronization"] {
+    // What sentry-native's CMakeLists links on Windows (_SENTRY_PLATFORM_LIBS),
+    // and advapi32 (RegGetValueA, for its OS context), which CMake links by
+    // default and Cargo doesn't: warlock.exe had it from other crates, the
+    // crate's own test didn't.
+    for lib in ["dbghelp", "shlwapi", "version", "winhttp", "synchronization", "advapi32"] {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }
 
+    // The logger's shim, against the SDK's header, built as the SDK is.
+    cc::Build::new()
+        .file(manifest.join("shim").join("logger.c"))
+        .include(sentry.join("include"))
+        .define("SENTRY_BUILD_STATIC", None)
+        .compile("warlock_sentry_shim");
+
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={}", manifest.join("shim").display());
     for p in ["CMakeLists.txt", "src", "include"] {
         println!("cargo:rerun-if-changed={}", sentry.join(p).display());
     }
