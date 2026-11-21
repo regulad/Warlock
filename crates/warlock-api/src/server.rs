@@ -19,8 +19,8 @@
 //!
 //! Requests (`/v1/request`) don't need the radio, so the part of the daemon
 //! that serves them runs apart from it, with [`Requests`]: it reads the
-//! requests from [`Wants`] and publishes each one's [`RequestStatus`]
-//! (`watch`).
+//! requests from [`Wants`] and publishes each one's [`RequestStatus`], and
+//! the computer's Bluetooth, which `GET /v1/info` reports (`watch`).
 //!
 //! Captures (`crate::capture`) carry radio frames to the admin pipe's
 //! `GET /v1/capture` streams, queued per capture so the radio never waits.
@@ -109,11 +109,13 @@ pub struct RequestStatus {
     pub message: Option<String>,
 }
 
-/// The daemon's end for requests: what open requests ask for, and what
-/// became of each. Nothing here blocks or needs a runtime.
+/// The daemon's end for requests: what open requests ask for, what became
+/// of each, and the Bluetooth they're asked over. Nothing here blocks or
+/// needs a runtime.
 pub struct Requests {
     wants: watch::Receiver<Wants>,
     status: Arc<watch::Sender<BTreeMap<u64, RequestStatus>>>,
+    bluetooth: Arc<watch::Sender<Option<Bluetooth>>>,
     last: Option<BTreeMap<u64, RequestWant>>,
 }
 
@@ -138,6 +140,15 @@ impl Requests {
             changed
         });
     }
+
+    /// Replaces what `GET /v1/info` reports of this computer's Bluetooth.
+    pub fn publish_bluetooth(&self, bluetooth: Bluetooth) {
+        self.bluetooth.send_if_modified(|b| {
+            let changed = *b != Some(bluetooth);
+            *b = Some(bluetooth);
+            changed
+        });
+    }
 }
 
 /// The daemon's end of the channels. Nothing here blocks or needs a runtime.
@@ -147,6 +158,7 @@ pub struct Daemon {
     wants: watch::Receiver<Wants>,
     captures: Arc<Captures>,
     request_status: Arc<watch::Sender<BTreeMap<u64, RequestStatus>>>,
+    bluetooth: Arc<watch::Sender<Option<Bluetooth>>>,
 }
 
 impl Daemon {
@@ -195,7 +207,12 @@ impl Daemon {
     /// An end for the part of the daemon that serves requests, which may
     /// run on a thread of its own.
     pub fn requests(&self) -> Requests {
-        Requests { wants: self.wants.clone(), status: self.request_status.clone(), last: None }
+        Requests {
+            wants: self.wants.clone(),
+            status: self.request_status.clone(),
+            bluetooth: self.bluetooth.clone(),
+            last: None,
+        }
     }
 }
 
@@ -246,6 +263,8 @@ impl Server {
         let (wants_tx, wants_rx) = watch::channel(Wants::default());
         let (request_tx, request_rx) = watch::channel(BTreeMap::new());
         let request_status = Arc::new(request_tx);
+        let (bluetooth_tx, bluetooth_rx) = watch::channel(None);
+        let bluetooth = Arc::new(bluetooth_tx);
         let captures = Arc::new(Captures::default());
         let app = App {
             state: state_rx,
@@ -254,6 +273,7 @@ impl Server {
             wants: Arc::new(wants_tx),
             captures: captures.clone(),
             request_status: request_rx,
+            bluetooth: bluetooth_rx,
         };
         for (mut listener, surface) in listeners {
             let app = app.clone();
@@ -274,7 +294,7 @@ impl Server {
                 }
             });
         }
-        let daemon = Daemon { state: state_tx, events, wants: wants_rx, captures, request_status };
+        let daemon = Daemon { state: state_tx, events, wants: wants_rx, captures, request_status, bluetooth };
         Ok((Server { runtime: Some(runtime) }, daemon))
     }
 }
@@ -310,6 +330,9 @@ struct App {
     wants: Arc<watch::Sender<Wants>>,
     captures: Arc<Captures>,
     request_status: watch::Receiver<BTreeMap<u64, RequestStatus>>,
+    /// What the requests' thread publishes of this computer's Bluetooth,
+    /// for `GET /v1/info`.
+    bluetooth: watch::Receiver<Option<Bluetooth>>,
 }
 
 /// One open lock.
@@ -489,7 +512,7 @@ impl App {
             };
         }
         match (method, path.as_str()) {
-            (Method::GET, "/v1/info") => ok(&self.state.borrow().info),
+            (Method::GET, "/v1/info") => self.info(),
             (Method::GET, "/v1/peers") => ok(&self.state.borrow().peers),
             (Method::GET, "/v1/advertising") => self.advertising(),
             (Method::POST, "/v1/advertising") => self.advertise(client, request).await,
@@ -504,6 +527,13 @@ impl App {
             (_, "/v1/advertising" | "/v1/holds" | "/v1/realtime" | "/v1/request") => not_allowed("GET, POST"),
             _ => error(StatusCode::NOT_FOUND, "no such endpoint".into()),
         }
+    }
+
+    /// The daemon's info, with the Bluetooth the requests' thread reports.
+    fn info(&self) -> Response<Body> {
+        let mut info = self.state.borrow().info.clone();
+        info.bluetooth = *self.bluetooth.borrow();
+        ok(&info)
     }
 
     fn peer(&self, address: &str) -> Response<Body> {

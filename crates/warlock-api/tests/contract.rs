@@ -93,6 +93,9 @@ fn info(radio: RadioState) -> Info {
         awdl: Awdl { master: up.then(|| mac(2)), peers: 2 },
         traffic: Some(Traffic { to_air: 1, to_windows: 2, announced: 3, unroutable: 4 }),
         requestable: vec!["_rdlink._tcp".into()],
+        // The daemon's info has none: the server adds what the requests'
+        // thread publishes.
+        bluetooth: None,
     }
 }
 
@@ -279,6 +282,37 @@ async fn state_endpoints_match_the_contract() {
     // The typed client reads the same.
     assert_eq!(client.info().await.unwrap(), info(RadioState::Up));
     assert_eq!(client.peers().await.unwrap(), peers());
+}
+
+/// Info carries the Bluetooth the requests' thread publishes: null until it
+/// has, then its state.
+#[tokio::test]
+async fn info_reports_the_bluetooth_the_requests_thread_publishes() {
+    let (_server, daemon, client, _) = serve(RadioState::Up);
+    let (_, v) = client.raw(Method::GET, "/v1/info", None).await.unwrap();
+    check("Info", &v);
+    assert_eq!(v["bluetooth"], Value::Null);
+    let requests = daemon.requests();
+    for (bluetooth, expected) in [
+        (
+            Bluetooth { state: BluetoothState::On, extended_advertising: true },
+            json!({"state": "on", "extended_advertising": true}),
+        ),
+        (
+            Bluetooth { state: BluetoothState::Off, extended_advertising: true },
+            json!({"state": "off", "extended_advertising": true}),
+        ),
+        (
+            Bluetooth { state: BluetoothState::Absent, extended_advertising: false },
+            json!({"state": "absent", "extended_advertising": false}),
+        ),
+    ] {
+        requests.publish_bluetooth(bluetooth);
+        let (_, v) = client.raw(Method::GET, "/v1/info", None).await.unwrap();
+        check("Info", &v);
+        assert_eq!(v["bluetooth"], expected);
+        assert_eq!(client.info().await.unwrap().bluetooth, Some(bluetooth));
+    }
 }
 
 #[tokio::test]

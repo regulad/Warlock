@@ -92,7 +92,7 @@ leads one of its own when there is none.
 `warlockctl` shows and steers what Warlock is doing:
 
 ```text
-warlockctl info                  the adapter, the radio and the cluster
+warlockctl info                  the adapter, the radio, Bluetooth and the cluster
 warlockctl peers                 the Apple devices Warlock hears
 warlockctl peer ADDRESS          one of them, with its services
 warlockctl events                what happens, as it happens

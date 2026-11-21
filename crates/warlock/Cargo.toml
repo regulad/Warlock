@@ -20,7 +20,7 @@ getrandom = "0.4"
 # SipHash-2-4, for requests' auth tags (MIT OR Apache-2.0).
 siphasher = "1.0.4"
 # Bluetooth LE adverts for requests, WinRT (MIT OR Apache-2.0).
-windows = { version = "0.62", features = ["Devices_Bluetooth", "Devices_Bluetooth_Advertisement", "Foundation", "Foundation_Collections", "Storage_Streams"] }
+windows = { version = "0.62", features = ["Devices_Bluetooth", "Devices_Bluetooth_Advertisement", "Devices_Radios", "Foundation", "Foundation_Collections", "Storage_Streams"] }
 # Logs (MIT).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

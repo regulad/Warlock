@@ -6,12 +6,12 @@
 //! Addresses are kept as the strings the contract specifies, so this crate
 //! needs nothing from the AWDL crates.
 //!
-//! A newer Warlock may add properties, event types and radio states without
-//! a break (the contract's "Compatibility"). Properties a type doesn't know
-//! are ignored. An event type or radio state it doesn't know arrives as
-//! [`Event::Unknown`] or [`RadioState::Unknown`], and both enums are
-//! `#[non_exhaustive]`, so a `match` on them already has an arm for what
-//! comes later.
+//! A newer Warlock may add properties, event types, and radio and Bluetooth
+//! states without a break (the contract's "Compatibility"). Properties a type
+//! doesn't know are ignored. An event type or state it doesn't know arrives as
+//! [`Event::Unknown`], [`RadioState::Unknown`] or [`BluetoothState::Unknown`],
+//! and the enums are `#[non_exhaustive]`, so a `match` on them already has an
+//! arm for what comes later.
 
 use std::net::Ipv6Addr;
 
@@ -52,6 +52,36 @@ pub struct Info {
     /// Empty from a Warlock that predates it.
     #[serde(default)]
     pub requestable: Vec<String>,
+    /// This computer's Bluetooth, which requests ask over; `None` until
+    /// Warlock has looked, and from a Warlock that predates it.
+    #[serde(default)]
+    pub bluetooth: Option<Bluetooth>,
+}
+
+/// This computer's Bluetooth, as requests need it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bluetooth {
+    pub state: BluetoothState,
+    /// Whether its controller has Bluetooth 5's LE extended advertising,
+    /// which requests need.
+    pub extended_advertising: bool,
+}
+
+/// Where this computer's Bluetooth is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum BluetoothState {
+    /// No Bluetooth adapter.
+    Absent,
+    /// An adapter, its radio switched off.
+    Off,
+    /// An adapter, its radio on.
+    On,
+    /// A state from a newer Warlock than this crate knows: not `On`.
+    /// Warlock never sends it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The "Warlock AWDL" network adapter.
@@ -428,6 +458,9 @@ mod tests {
         assert_eq!(event, Event::PeerLost { address: "02:00:00:00:00:01".into() });
         // Known values still parse as themselves.
         assert_eq!(from_value::<RadioState>(json!("up")).unwrap(), RadioState::Up);
+        assert_eq!(info.bluetooth, None, "a Warlock without it");
+        assert_eq!(from_value::<BluetoothState>(json!("on")).unwrap(), BluetoothState::On);
+        assert_eq!(from_value::<BluetoothState>(json!("busy")).unwrap(), BluetoothState::Unknown);
     }
 
     #[test]

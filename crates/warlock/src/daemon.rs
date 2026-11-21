@@ -378,6 +378,8 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         awdl: wire::Awdl { master: None, peers: 0 },
         traffic: None,
         requestable: request::REQUESTABLE.iter().map(|s| s.to_string()).collect(),
+        // The requests' thread reports it, and the API adds it.
+        bluetooth: None,
     };
     let initial = warlock_api::State {
         info: info.clone(),

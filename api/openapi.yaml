@@ -77,9 +77,10 @@ info:
 
     The version is semver, and before 1.0.0 the middle number is the one
     that changes on a break. Without a break, Warlock may add properties to
-    any object, event types to `GET /v1/events` and radio states to
-    `Radio.state`. Clients ignore properties and event types they don't know,
-    and take a radio state they don't know as not `up`.
+    any object, event types to `GET /v1/events`, radio states to
+    `Radio.state` and Bluetooth states to `Bluetooth.state`. Clients ignore
+    properties and event types they don't know, and take a radio state they
+    don't know as not `up`, and a Bluetooth state as not `on`.
 # No HTTP authentication: who may connect is decided by the pipe's access
 # control list (see Transport), which OpenAPI can't express.
 security: []
@@ -401,8 +402,15 @@ components:
           description: When it took the lock.
     Info:
       type: object
-      required: [version, host_name, adapter, radio, awdl, requestable]
+      required: [version, host_name, adapter, radio, awdl, requestable, bluetooth]
       properties:
+        bluetooth:
+          description: |
+            This computer's Bluetooth, which requests ask over; null until
+            Warlock has looked, a moment after it starts.
+          oneOf:
+            - $ref: '#/components/schemas/Bluetooth'
+            - type: 'null'
         requestable:
           type: array
           description: The service types `POST /v1/request` can ask nearby devices for.
@@ -470,6 +478,25 @@ components:
         mtu:
           type: integer
           examples: [1450]
+    Bluetooth:
+      type: object
+      description: This computer's Bluetooth adapter, as Windows reports it, every couple of seconds.
+      required: [state, extended_advertising]
+      properties:
+        state:
+          type: string
+          enum: [absent, off, on]
+          description: |
+            `absent`: no Bluetooth adapter. `off`: an adapter, its radio
+            switched off. `on`: an adapter, its radio on. Newer versions may
+            add states; take one you don't know as not `on` (see
+            Compatibility).
+        extended_advertising:
+          type: boolean
+          description: |
+            Whether its controller has Bluetooth 5's LE extended advertising,
+            which requests need: Warlock reads each advert's address from
+            those commands. False with no adapter.
     Radio:
       type: object
       required: [state]

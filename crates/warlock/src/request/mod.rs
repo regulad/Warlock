@@ -25,7 +25,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
-use warlock_api::types::Identity;
+use warlock_api::types::{Bluetooth, BluetoothState, Identity};
 use warlock_api::{RequestStatus, RequestWant, Requests};
 
 use bluetooth::Advert;
@@ -41,6 +41,21 @@ const POLL: Duration = Duration::from_millis(100);
 const RETRY: Duration = Duration::from_secs(5);
 /// How long Windows has to show an advert's address in the trace.
 const ADDRESS_WAIT: Duration = Duration::from_secs(5);
+/// How often this computer's Bluetooth is looked at, for `GET /v1/info`
+/// and the asks.
+const BLUETOOTH_CHECK: Duration = Duration::from_secs(2);
+
+/// Why requests can't be asked over this Bluetooth, if they can't.
+fn unusable(bluetooth: Bluetooth) -> Option<&'static str> {
+    match bluetooth.state {
+        BluetoothState::Absent => Some("This computer has no Bluetooth adapter."),
+        _ if !bluetooth.extended_advertising => {
+            Some("This computer's Bluetooth adapter has no LE extended advertising (Bluetooth 5).")
+        }
+        BluetoothState::On => None,
+        _ => Some("Bluetooth is off."),
+    }
+}
 
 /// Serves requests until dropped.
 pub struct Asker {
@@ -70,14 +85,27 @@ impl Drop for Asker {
 fn serve(mut requests: Requests, stop: &AtomicBool) {
     let mut wanted: BTreeMap<u64, RequestWant> = BTreeMap::new();
     let mut asks: BTreeMap<u64, Ask> = BTreeMap::new();
+    let mut bluetooth = bluetooth::adapter();
+    info!(state = ?bluetooth.state, extended_advertising = bluetooth.extended_advertising, "Bluetooth");
+    requests.publish_bluetooth(bluetooth);
+    let mut checked = Instant::now();
     while !stop.load(Ordering::Relaxed) {
+        if checked.elapsed() >= BLUETOOTH_CHECK {
+            checked = Instant::now();
+            let now = bluetooth::adapter();
+            if now != bluetooth {
+                info!(state = ?now.state, extended_advertising = now.extended_advertising, "Bluetooth changed");
+                bluetooth = now;
+                requests.publish_bluetooth(now);
+            }
+        }
         if let Some(now) = requests.wanted() {
             // Dropping an ask stops its advert.
             asks.retain(|id, _| now.contains_key(id));
             wanted = now;
         }
         for (id, want) in &wanted {
-            asks.entry(*id).or_insert_with(|| Ask::new(want)).poll();
+            asks.entry(*id).or_insert_with(|| Ask::new(want)).poll(bluetooth);
             if stop.load(Ordering::Relaxed) {
                 break;
             }
@@ -101,7 +129,17 @@ impl Ask {
         Self { want: want.clone(), advert: None, message: None, retry: None }
     }
 
-    fn poll(&mut self) {
+    /// Keeps the ask going over `bluetooth`, or says why it can't.
+    fn poll(&mut self, bluetooth: Bluetooth) {
+        if let Some(why) = unusable(bluetooth) {
+            if self.advert.take().is_some() {
+                warn!(service = self.want.service, "the ask stopped: {why}");
+            }
+            // Asked again, with a new identity, as soon as Bluetooth can.
+            self.message = Some(why.into());
+            self.retry = None;
+            return;
+        }
         if let Some((advert, _)) = &self.advert {
             if advert.running() {
                 return;
