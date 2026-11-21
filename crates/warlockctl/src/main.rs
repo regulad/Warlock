@@ -50,9 +50,10 @@ const USAGE: &str = "usage: warlockctl [--pipe NAME] info|peers|peer ADDRESS|adv
                      REASON|realtime [ADDRESS]|request [TYPE [--needs-keyboard]]|events|capture [--peer MAC]... [--kind awdl|other|all] [--tx] [-w \
                      FILE|-]";
 
-/// warlockctl's Sentry project (`regulad/warlockctl`), whose DSN the
-/// homelab's `tofu/sentry` makes: none yet, so nothing is sent.
-const PROJECT: &str = "";
+/// warlockctl's Sentry project (`regulad/warlockctl`, platform `rust`, made
+/// by the homelab's `tofu/sentry`, 2026-11-21). A DSN only lets a client
+/// send events, so it isn't a secret.
+const PROJECT: &str = "https://7782f516cec4741d9e4e96c2d0082a97@o4506961510596608.ingest.us.sentry.io/4512468747943940";
 
 /// `e` as text, reported first if it's a fault.
 fn fault(command: &str, e: ClientError) -> String {

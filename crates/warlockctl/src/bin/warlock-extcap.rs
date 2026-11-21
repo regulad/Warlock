@@ -31,9 +31,10 @@ use warlock_client::{CaptureFilter, CaptureKind, Client, ClientError};
 /// The one interface, as Wireshark names it in its options.
 const INTERFACE: &str = "warlock";
 
-/// The extcap's Sentry project (`regulad/warlock-extcap`), whose DSN the
-/// homelab's `tofu/sentry` makes: none yet, so nothing is sent.
-const PROJECT: &str = "";
+/// The extcap's Sentry project (`regulad/warlock-extcap`, platform `rust`,
+/// made by the homelab's `tofu/sentry`, 2026-11-21). A DSN only lets a
+/// client send events, so it isn't a secret.
+const PROJECT: &str = "https://84f9de366d36aaf53f889b48512d35da@o4506961510596608.ingest.us.sentry.io/4512468747943939";
 
 /// `e` as text, reported first if it's a fault.
 fn fault(e: ClientError) -> String {

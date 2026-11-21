@@ -83,9 +83,10 @@ const JOINED_GROUPS_PROPERTY: &str = "WARLOCKJOINEDGROUPS";
 /// Warlock is first installed.
 const NO_GROUP: [u32; 2] = [1376, 2220];
 
-/// The installer's Sentry project (`regulad/warlock-installer`), whose DSN
-/// the homelab's `tofu/sentry` makes: none yet, so nothing is sent.
-const PROJECT: &str = "";
+/// The installer's Sentry project (`regulad/warlock-installer`, platform
+/// `rust`, made by the homelab's `tofu/sentry`, 2026-11-21). A DSN only lets
+/// a client send events, so it isn't a secret.
+const PROJECT: &str = "https://9170239ec5263c1a87ee70264e7db513@o4506961510596608.ingest.us.sentry.io/4512468747943938";
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
