@@ -16,6 +16,13 @@
 # package, and a GitHub release carries the package and the manifests, with
 # the annotated tag's message as its notes. Again the job that can write
 # (the release) builds nothing.
+#
+# And a tag's debug files go to Sentry, so that the crashes the daemon
+# reports name their functions, files and lines (PLAN.md, "Diagnostics"),
+# from a job of its own: it alone has the Sentry token, it has no
+# `id-token`, so it can't reach the signing account, and it runs nothing
+# built here, only sentry-cli, pinned by its SHA-256, which reads the files.
+# The release doesn't wait for it.
 name: Build and sign
 
 on:
@@ -55,6 +62,45 @@ jobs:
             target/release/warlock_msi_ca.dll
           if-no-files-found: error
           retention-days: 1
+      # The daemon, the one program that reports to Sentry, and its PDB,
+      # which holds devourer's and sentry-native's debug information too.
+      # Signing changes neither's identifiers, so these match the release.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debug-files
+          path: |
+            target/release/warlock.exe
+            target/release/warlock.pdb
+          if-no-files-found: error
+          retention-days: 1
+
+  debug-files:
+    name: Debug files to Sentry
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: debug-files
+          path: debug-files
+      - name: sentry-cli
+        env:
+          VERSION: 3.8.2
+          SHA256: c958865f9d4000183509ea21b1f04925d5390de6d8d87386b9e69f2b305070c3
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/sentry-cli" \
+            "https://github.com/getsentry/sentry-cli/releases/download/$VERSION/sentry-cli-Linux-x86_64"
+          echo "$SHA256  $RUNNER_TEMP/sentry-cli" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/sentry-cli"
+      - name: Upload
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          "$RUNNER_TEMP/sentry-cli" debug-files check debug-files/warlock.pdb
+          "$RUNNER_TEMP/sentry-cli" debug-files upload -o regulad -p warlock --wait debug-files
 
   sign-binaries:
     name: Sign the binaries

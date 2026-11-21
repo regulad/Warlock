@@ -43,7 +43,17 @@ fn main() {
         .join(";");
 
     let mut cfg = cmake::Config::new(manifest.join("cmake"));
+    // Debug information (/Z7, in the objects), which the linker puts in
+    // warlock.pdb, so Sentry can name devourer's frames in a crash (PLAN.md,
+    // "Diagnostics"). It doesn't change the code MSVC generates.
+    //
+    // Beware: with the Visual Studio generator, cmake-rs sets
+    // CMAKE_<LANG>_FLAGS_RELEASE itself (to pass /MD), which replaces
+    // CMake's /O2 /Ob2 /DNDEBUG: devourer is built unoptimised, with its
+    // asserts on, and always has been.
     cfg.profile("Release")
+        .cflag("-Z7")
+        .cxxflag("-Z7")
         .define("DEVOURER_SOURCE_DIR", cmake_path(&devourer))
         .define("WARLOCK_LIBUSB_INCLUDE_DIRS", libusb_includes)
         .build_target("warlock_dvr_shim");

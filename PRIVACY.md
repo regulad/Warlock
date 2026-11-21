@@ -16,7 +16,7 @@ To find and fix problems, Warlock sends crash reports and diagnostics to Sentry 
 - **Usage statistics:** when Warlock starts and stops, and the requests programs make of it (which kind, how long they took and how they went).
 - **This computer:** Warlock's version, the Windows version, the processor, the amount of memory, the model of its Wi-Fi adapter, its radio's state and channel, and whether its Bluetooth is on and has the features Warlock needs.
 
-Warlock doesn't send names (yours, this computer's or those of the devices nearby), user or device IDs, network (MAC or IP) addresses, your adapters' serial numbers, or anything else that identifies you or your devices, and our diagnostics service is set not to store IP addresses.
+Warlock doesn't send names (yours, this computer's or those of the devices nearby), user or device IDs, network (MAC or IP) addresses, your adapters' serial numbers, or anything else that identifies you or your devices, and our diagnostics service is set not to store IP addresses. It does note roughly where each report came from (the city, region and country), which it works out from the connection before discarding the address.
 
 This is used only to diagnose and improve Warlock. It isn't sold, shared for advertising, or combined with other data. Sentry keeps it for up to 90 days.
 

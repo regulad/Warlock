@@ -17,8 +17,18 @@ fn main() {
     if !sentry.join("CMakeLists.txt").exists() {
         panic!("sentry-native checkout missing at {}; run `git submodule update --init`", sentry.display());
     }
+    // CMake's own Release flags, and debug information (/Z7, in the objects)
+    // that the linker puts in warlock.pdb, so Sentry can name the SDK's
+    // frames in a crash. Set here because, with the Visual Studio generator,
+    // cmake-rs sets CMAKE_<LANG>_FLAGS_RELEASE itself unless it's given,
+    // without /O2 /Ob2 /DNDEBUG: the SDK would be built unoptimised, and
+    // without NDEBUG it logs everything it does to stderr
+    // (sentry_options_new).
+    let release = "-MD -O2 -Ob2 -DNDEBUG -Z7";
     let dst = cmake::Config::new(&sentry)
         .profile("Release")
+        .define("CMAKE_C_FLAGS_RELEASE", release)
+        .define("CMAKE_CXX_FLAGS_RELEASE", release)
         .define("SENTRY_BACKEND", "inproc")
         .define("SENTRY_TRANSPORT", "winhttp")
         // No screenshots, ever: not even compiled in (Windows' default is
