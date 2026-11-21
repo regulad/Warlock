@@ -31,6 +31,16 @@ Warlock was built with the assistance of Claude Opus 5.5.
   While Warlock is installed, it takes every supported adapter it sees away
   from Windows' Wi-Fi driver. Don't install it if such an adapter is your
   only Wi-Fi. Uninstalling gives the adapter back.
+- **A Bluetooth LE adapter, switched on**: the PC's own, built in or a USB
+  dongle, left to Windows. Apple devices come onto AWDL when a nearby device
+  asks them to over Bluetooth LE, and Warlock asks from this adapter
+  (`warlockctl request`, `POST /v1/request`). Koala needs that to reach an
+  iPhone. The AWDL link runs without Bluetooth, but nothing can be asked for.
+
+  Warlock reads each advert's address from the extended-advertising commands
+  Windows sends the controller, so the controller needs Bluetooth 5's LE
+  extended advertising. With an older one, Warlock can't learn the address
+  (untried). Warlock is tested with a MediaTek adapter (USB `13d3:3608`).
 - **The Microsoft Visual C++ v14 Redistributable (x64)**, as new as the
   release was built with. winget installs it with Warlock; the MSI on its own
   says when it's missing.
@@ -89,8 +99,10 @@ warlockctl events                what happens, as it happens
 warlockctl advertise TYPE        advertise a service type (e.g. _x._tcp) until Ctrl+C
 warlockctl hold REASON           keep AWDL up until Ctrl+C
 warlockctl realtime ADDRESS      run a realtime group with a peer until Ctrl+C (experimental)
-warlockctl advertising | holds | realtime
-                                 who is advertising, holding or running what
+warlockctl request TYPE          ask nearby devices to bring a service (e.g. _rdlink._tcp) up on AWDL
+                                 until Ctrl+C, over this computer's Bluetooth (experimental)
+warlockctl advertising | holds | realtime | request
+                                 who is advertising, holding, running or asking for what
 warlockctl capture -w FILE       the radio's 802.11 frames as pcapng until Ctrl+C
 ```
 
