@@ -151,6 +151,33 @@ impl Requests {
     }
 }
 
+/// One request a pipe served, for the daemon's diagnostics: its route as
+/// the contract names it (`/v1/peers/{address}`, never the address), its
+/// status, and when it came and was answered (for a lock, when its stream
+/// started).
+#[derive(Clone, Debug)]
+pub struct Served {
+    /// `api` or `admin`.
+    pub surface: &'static str,
+    pub method: String,
+    pub route: &'static str,
+    pub status: u16,
+    pub started: SystemTime,
+    pub answered: SystemTime,
+}
+
+/// What hears of every request served ([`Server::start_observed`]).
+pub type Observer = Arc<dyn Fn(&Served) + Send + Sync>;
+
+/// The route `path` is for, as the contracts name it; `unknown` for any
+/// other.
+fn route(path: &str) -> &'static str {
+    if path.strip_prefix("/v1/peers/").is_some_and(|a| !a.is_empty() && !a.contains('/')) {
+        return "/v1/peers/{address}";
+    }
+    OPERATIONS.iter().chain(ADMIN_OPERATIONS.iter()).map(|(_, p)| *p).find(|p| *p == path).unwrap_or("unknown")
+}
+
 /// The daemon's end of the channels. Nothing here blocks or needs a runtime.
 pub struct Daemon {
     state: watch::Sender<State>,
@@ -240,6 +267,16 @@ impl Server {
     /// Serves the API on `pipes`, reporting `initial` until the daemon
     /// publishes. Fails if either pipe exists already.
     pub fn start(pipes: Pipes, security: Security, initial: State) -> io::Result<(Server, Daemon)> {
+        Self::start_observed(pipes, security, initial, None)
+    }
+
+    /// As [`Server::start`], telling `observer` of every request served.
+    pub fn start_observed(
+        pipes: Pipes,
+        security: Security,
+        initial: State,
+        observer: Option<Observer>,
+    ) -> io::Result<(Server, Daemon)> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("warlock-api")
@@ -274,6 +311,7 @@ impl Server {
             captures: captures.clone(),
             request_status: request_rx,
             bluetooth: bluetooth_rx,
+            observer,
         };
         for (mut listener, surface) in listeners {
             let app = app.clone();
@@ -333,6 +371,7 @@ struct App {
     /// What the requests' thread publishes of this computer's Bluetooth,
     /// for `GET /v1/info`.
     bluetooth: watch::Receiver<Option<Bluetooth>>,
+    observer: Option<Observer>,
 }
 
 /// One open lock.
@@ -486,10 +525,27 @@ async fn body<T: DeserializeOwned>(request: Request<Incoming>) -> Result<T, Stri
 
 impl App {
     async fn handle(self, surface: Surface, client: Client, request: Request<Incoming>) -> Response<Body> {
-        match surface {
+        let started = SystemTime::now();
+        let (method, route) = (request.method().to_string(), route(request.uri().path()));
+        let observer = self.observer.clone();
+        let response = match surface {
             Surface::Api => self.api(client, request).await,
             Surface::Admin => self.admin(client, request),
+        };
+        if let Some(observer) = observer {
+            observer(&Served {
+                surface: match surface {
+                    Surface::Api => "api",
+                    Surface::Admin => "admin",
+                },
+                method,
+                route,
+                status: response.status().as_u16(),
+                started,
+                answered: SystemTime::now(),
+            });
         }
+        response
     }
 
     /// The admin pipe's routes (`api/admin.yaml`).

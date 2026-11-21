@@ -16,17 +16,20 @@ use std::path::Path;
 use crate::Result;
 
 /// What the page says before the licences.
-const INTRO: [&str; 4] = [
+const INTRO: [&str; 5] = [
     "**Warlock is free software.**",
     "`warlock.exe`, the Warlock service, is licensed under the GNU General Public License, version 2 only, \
      with an exception that permits combining it with Wintun.",
     "`warlockctl.exe`, its command-line tool, is licensed under the GNU Affero General Public License, version 3 \
      only.",
+    "`warlock.exe` includes Sentry's native SDK, under the MIT licence, which sends Warlock's diagnostics: \
+     PRIVACY.md, installed with Warlock, says what, and how to turn them off.",
     "Their texts follow, and are installed with Warlock. Its source code is at https://github.com/regulad/Warlock.",
 ];
 
 /// The licences, in the order the page shows them.
-const FILES: [&str; 3] = ["LICENSE.md", "LICENSE-WINTUN-EXCEPTION.md", "LICENSE-AGPL-3.0.md"];
+const FILES: [&str; 4] =
+    ["LICENSE.md", "LICENSE-WINTUN-EXCEPTION.md", "LICENSE-AGPL-3.0.md", "third_party/sentry-native/LICENSE"];
 
 /// The page's RTF, on one line.
 pub fn rtf(root: &Path) -> Result<String> {

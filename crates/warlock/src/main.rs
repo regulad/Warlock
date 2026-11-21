@@ -29,6 +29,7 @@
 mod advertise;
 mod api;
 mod daemon;
+mod diagnostics;
 mod discovery;
 mod events;
 mod logging;

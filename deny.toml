@@ -12,9 +12,9 @@ ignore = []
 [licenses]
 # Apache-2.0 is left out on purpose: it isn't compatible with GPL-2.0. A
 # crate offering "MIT OR Apache-2.0" is taken under MIT, and a crate offered
-# under Apache-2.0 alone is rejected. That rules out Sentry's SDK, whose
-# `sentry-types` needs `debugid`: Warlock carries no telemetry (PLAN.md,
-# "No telemetry in Warlock").
+# under Apache-2.0 alone is rejected. That rules out Sentry's Rust SDK, whose
+# `sentry-types` needs `debugid`: Warlock's diagnostics go through Sentry's
+# native SDK instead, MIT, built from source (PLAN.md, "Diagnostics").
 allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
@@ -53,15 +53,16 @@ wildcards = "deny"
 # all, so most pairs never occur: the hook runs with `-A unused-wrapper`.
 deny = [
     { crate = "bincode", reason = "its 3.0 release is a tombstone; use postcard (PLAN.md)" },
-    { crate = "awdl-core", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "awdl-proto", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "devourer-sys", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-api", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-capture", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-msi", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-radio", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-tun", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
-    { crate = "warlock-usb", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "awdl-core", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "awdl-proto", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "devourer-sys", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "sentry-native-sys", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-api", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-capture", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-msi", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-radio", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-tun", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
+    { crate = "warlock-usb", wrappers = ["awdl-core", "awdl-proto", "devourer-sys", "sentry-native-sys", "warlock", "warlock-api", "warlock-capture", "warlock-msi", "warlock-radio", "warlock-tun", "warlock-usb"], reason = "GPL-2.0-only" },
 ]
 
 [sources]

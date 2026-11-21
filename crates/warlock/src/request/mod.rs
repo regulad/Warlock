@@ -45,6 +45,18 @@ const ADDRESS_WAIT: Duration = Duration::from_secs(5);
 /// and the asks.
 const BLUETOOTH_CHECK: Duration = Duration::from_secs(2);
 
+/// This computer's Bluetooth, for the diagnostics: its state, and whether
+/// it has LE extended advertising.
+fn diagnose(bluetooth: Bluetooth) {
+    crate::diagnostics::context(
+        "bluetooth",
+        &[
+            ("state", format!("{:?}", bluetooth.state).to_lowercase().into()),
+            ("extended_advertising", bluetooth.extended_advertising.into()),
+        ],
+    );
+}
+
 /// Why requests can't be asked over this Bluetooth, if they can't.
 fn unusable(bluetooth: Bluetooth) -> Option<&'static str> {
     match bluetooth.state {
@@ -88,6 +100,7 @@ fn serve(mut requests: Requests, stop: &AtomicBool) {
     let mut bluetooth = bluetooth::adapter();
     info!(state = ?bluetooth.state, extended_advertising = bluetooth.extended_advertising, "Bluetooth");
     requests.publish_bluetooth(bluetooth);
+    diagnose(bluetooth);
     let mut checked = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         if checked.elapsed() >= BLUETOOTH_CHECK {
@@ -97,6 +110,7 @@ fn serve(mut requests: Requests, stop: &AtomicBool) {
                 info!(state = ?now.state, extended_advertising = now.extended_advertising, "Bluetooth changed");
                 bluetooth = now;
                 requests.publish_bluetooth(now);
+                diagnose(now);
             }
         }
         if let Some(now) = requests.wanted() {

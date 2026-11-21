@@ -155,6 +155,16 @@ tools.
   Windows' default computer names (`DESKTOP-` and random letters) say nothing
   about you. If you've renamed your PC to something that does, consider
   renaming it back (Settings → System → About → Rename this PC).
+- **Warlock sends crash reports and diagnostics to Sentry**, without anything
+  that identifies you, this computer or the devices nearby:
+  [`PRIVACY.md`](PRIVACY.md) says what, and the installer puts it beside
+  Warlock. To turn them off, set `DO_NOT_TRACK` for the whole computer, not
+  just your account, since the service only sees system-wide settings, then
+  restart it:
+
+  ```text
+  setx /M DO_NOT_TRACK 1
+  ```
 
 ## Build
 
@@ -168,9 +178,9 @@ cargo build --release
 cargo test --workspace
 ```
 
-Fetch devourer's submodule only, not recursively: its own submodules are
-reference drivers Warlock doesn't build, and one of them pins a commit its
-repository no longer has.
+Fetch the submodules only, not recursively: devourer's own are reference
+drivers Warlock doesn't build, and one of them pins a commit its repository no
+longer has; sentry-native's are crash backends Warlock doesn't build either.
 
 `warlock run`, as Administrator, runs Warlock in the foreground instead of as
 a service. `cargo run -p warlock-msi` builds the MSI (see

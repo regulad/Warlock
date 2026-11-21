@@ -2,3 +2,6 @@
 	path = third_party/devourer
 	url = https://github.com/regulad/devourer.git
 	branch = warlock
+[submodule "third_party/sentry-native"]
+	path = third_party/sentry-native
+	url = https://github.com/getsentry/sentry-native

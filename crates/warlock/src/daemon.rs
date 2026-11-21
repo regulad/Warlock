@@ -26,6 +26,7 @@ use warlock_tun::{Tun, addr, dll};
 
 use crate::advertise::Advertiser;
 use crate::api;
+use crate::diagnostics;
 use crate::discovery::Discovery;
 use crate::power::Power;
 use crate::request;
@@ -367,6 +368,9 @@ struct Run<'a> {
 /// adapter come up first and stay; a supported adapter is used whenever one
 /// is plugged in (PLAN.md, W5).
 pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
+    // Diagnostics (PRIVACY.md), unless DO_NOT_TRACK is set system-wide: for
+    // the whole run, the service's session.
+    let _diagnostics = diagnostics::start();
     let own = random_addr();
     // The control API first: programs can follow the radio from the start,
     // and a second Warlock stops here, its pipe taken.
@@ -389,9 +393,15 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         realtime_joined: BTreeSet::new(),
     };
     let pipes = warlock_api::Pipes { api: warlock_api::PIPE, admin: warlock_api::ADMIN_PIPE };
-    let (_server, control) = Server::start(pipes, Security::Service, initial).map_err(|e| {
-        format!("can't serve the control API on {} and {} (is Warlock running already?): {e}", pipes.api, pipes.admin)
-    })?;
+    // Each request served is a transaction for the diagnostics.
+    let observer: warlock_api::Observer = std::sync::Arc::new(diagnostics::served);
+    let (_server, control) =
+        Server::start_observed(pipes, Security::Service, initial, Some(observer)).map_err(|e| {
+            format!(
+                "can't serve the control API on {} and {} (is Warlock running already?): {e}",
+                pipes.api, pipes.admin
+            )
+        })?;
     info!(pipe = pipes.api, admin = pipes.admin, "control API up");
     // Requests need no radio: they're served from the start, on their own
     // thread, until the run ends.
@@ -425,6 +435,9 @@ pub fn run(o: &Options, stop: &AtomicBool) -> Result<(), Box<dyn Error>> {
         Some(wire::Adapter { name: ADAPTER_NAME.into(), index: run.tun.index, address: run.tun.address, mtu: MTU });
     run.set_radio(RadioState::Absent);
     while let Some((model, instance)) = run.wait_for_adapter(&watch) {
+        // Its model, and whether it's the one Warlock is tested with; never
+        // its device instance, which holds its serial number.
+        diagnostics::context("adapter", &[("model", model.name.into()), ("reference", model.is_reference().into())]);
         run.set_radio(RadioState::Opening);
         let result = run.session(&watch, model, &instance);
         run.set_radio(RadioState::Absent);
@@ -452,6 +465,15 @@ impl Run<'_> {
     /// Reports the radio's state, and clears what only a running radio has.
     fn set_radio(&mut self, state: RadioState) {
         self.info.radio = radio_info(state, self.own, self.o);
+        // Its state, channel and width; not its address.
+        let mut radio = vec![("state", diagnostics::Fact::from(format!("{state:?}").to_lowercase()))];
+        if let Some(channel) = self.info.radio.channel {
+            radio.push(("channel", u32::from(channel).into()));
+        }
+        if let Some(width) = self.info.radio.width_mhz {
+            radio.push(("width_mhz", width.into()));
+        }
+        diagnostics::context("radio", &radio);
         if state != RadioState::Up {
             self.info.awdl = wire::Awdl { master: None, peers: 0 };
             self.control.publish(warlock_api::State {

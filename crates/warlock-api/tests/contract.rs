@@ -315,6 +315,46 @@ async fn info_reports_the_bluetooth_the_requests_thread_publishes() {
     }
 }
 
+/// The observer hears of every request: its route as the contract names it,
+/// never a peer's address, and its status.
+#[tokio::test]
+async fn the_observer_hears_each_request_by_its_route() {
+    use std::sync::{Arc, Mutex};
+    /// Each request's method, route and status.
+    type Heard = Arc<Mutex<Vec<(String, &'static str, u16)>>>;
+    let heard: Heard = Arc::default();
+    let observer = {
+        let heard = heard.clone();
+        Arc::new(move |s: &warlock_api::Served| heard.lock().unwrap().push((s.method.clone(), s.route, s.status)))
+    };
+    static N: AtomicU32 = AtomicU32::new(0);
+    let pipe = format!(r"\\.\pipe\warlock-observed-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    let pipes = Pipes { api: &pipe, admin: &admin(&pipe) };
+    let (_server, _daemon) =
+        Server::start_observed(pipes, Security::Default, state(RadioState::Up), Some(observer)).expect("serve");
+    let client = Client::new(&pipe);
+    for (method, path) in [
+        (Method::GET, "/v1/info"),
+        (Method::GET, "/v1/peers/02:00:00:00:00:02"),
+        (Method::GET, "/v1/peers/02:00:00:00:00:99"),
+        (Method::POST, "/v1/holds"),
+        (Method::GET, "/v1/nothing"),
+    ] {
+        let _ = client.raw(method, path, Some(b"{}")).await.unwrap();
+    }
+    let heard = heard.lock().unwrap().clone();
+    assert_eq!(
+        heard,
+        [
+            ("GET".into(), "/v1/info", 200),
+            ("GET".into(), "/v1/peers/{address}", 200),
+            ("GET".into(), "/v1/peers/{address}", 404),
+            ("POST".into(), "/v1/holds", 400),
+            ("GET".into(), "unknown", 404),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn info_before_the_radio_is_up_matches_the_contract() {
     let (_server, _daemon, client, _) = serve(RadioState::Opening);

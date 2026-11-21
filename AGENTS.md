@@ -39,6 +39,32 @@ to avoid that as much as possible").
   have to make to be accepted at all, are the exception to argue in
   `PLAN.md`, not by default.
 
+## Keep the diagnostics anonymous, and `PRIVACY.md` true
+
+What Warlock sends to Sentry (`crates/warlock/src/diagnostics.rs`) never
+identifies the user, this computer or the devices nearby: no names (the
+user's, the computer's, peers'), user or device IDs, network addresses
+(peers' AWDL MACs, IPv6 addresses), USB serial numbers or keys (Parker,
+2026-11-21). `PRIVACY.md` lists what is sent, and changes in the same commit
+as anything that adds to it.
+
+**Why:** the privacy policy promises exactly this, and Warlock hears every
+Apple device nearby. A diagnostic that quietly carries a peer's address or a
+host name breaks the promise for people who never chose Warlock.
+
+**How:**
+- Send facts Warlock chose: a context names the adapter's model, not its
+  device instance (which holds its serial); a transaction names the route
+  (`/v1/peers/{address}`), not the request's path.
+- Only errors and warnings go to the diagnostics, through `redact`; Warlock's
+  information names peers and their services, and stays out.
+- The SDK adds things of its own: check what it sends after updating it, as
+  the 0.17.6 probe did (`PLAN.md`, "Diagnostics").
+- `DO_NOT_TRACK` turns everything off; nothing may bypass it.
+- `nothing_identifying_leaves` sends through the real SDK: run it, and
+  `WARLOCK_SHOW_DIAGNOSTICS=1 cargo test -p warlock nothing_identifying --
+  --nocapture` shows what would leave.
+
 ## Track pending work in GitHub issues
 
 Pending work goes into issues on

@@ -909,6 +909,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -931,6 +937,13 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sentry-native-sys"
+version = "0.2.4"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "serde"
@@ -1284,6 +1297,8 @@ dependencies = [
  "awdl-core",
  "awdl-proto",
  "getrandom 0.4.3",
+ "regex-lite",
+ "sentry-native-sys",
  "siphasher",
  "tracing",
  "tracing-subscriber",

@@ -100,6 +100,9 @@ const COMPONENT_LICENSES: &str = "{017BEEEC-3CC4-4536-BC22-1F8363621EB7}";
 /// Key file `warlock-extcap.exe`, in Wireshark's `extcap` folder. Generated
 /// 2026-11-19 (0.1.2).
 const COMPONENT_WIRESHARK_PLUGIN: &str = "{5BB193A0-3D81-4220-97CA-7FC16F300AC6}";
+/// Key file `PRIVACY.md`; with `LICENSE-sentry-native.txt`, the licence of
+/// the SDK that sends Warlock's diagnostics. Generated 2026-11-21 (0.2.5).
+const COMPONENT_DIAGNOSTICS: &str = "{E3E20141-999A-41F6-9A64-D6972807FA22}";
 
 /// The optional Wireshark plugin (PLAN.md, W6): installed when the
 /// installer's checkbox sets this property and Wireshark was found, which
@@ -371,6 +374,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
         ("Warlock", COMPONENT_WARLOCK, "warlock.exe"),
         ("Warlockctl", COMPONENT_WARLOCKCTL, "warlockctl.exe"),
         ("Licenses", COMPONENT_LICENSES, "LICENSE.md"),
+        ("Diagnostics", COMPONENT_DIAGNOSTICS, "PRIVACY.md"),
     ] {
         component.row(vec![s(name), s(guid), s("INSTALLDIR"), n(COMPONENT_64BIT), None, s(key)]);
     }
@@ -420,7 +424,7 @@ fn tables(version: &str, product_code: &str, runtime_min: &str, licence: &str, f
 
     let mut feature_components =
         Table::new("FeatureComponents", &[("Feature_", "s38"), ("Component_", "s72")], &["Feature_", "Component_"]);
-    for c in ["Warlock", "Warlockctl", "Licenses"] {
+    for c in ["Warlock", "Warlockctl", "Licenses", "Diagnostics"] {
         feature_components.row(vec![s("Warlock"), s(c)]);
     }
     feature_components.row(vec![s("WiresharkPlugin"), s("WiresharkPlugin")]);
@@ -973,6 +977,20 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
             component: "Licenses",
             name: "WINTUNEX.MD|LICENSE-WINTUN-EXCEPTION.md",
             source: root.join("LICENSE-WINTUN-EXCEPTION.md"),
+            vital: false,
+        },
+        Payload {
+            key: "PRIVACY.md",
+            component: "Diagnostics",
+            name: "PRIVACY.MD|PRIVACY.md",
+            source: root.join("PRIVACY.md"),
+            vital: false,
+        },
+        Payload {
+            key: "LICENSE_SENTRY.txt",
+            component: "Diagnostics",
+            name: "SENTRYLI.TXT|LICENSE-sentry-native.txt",
+            source: root.join("third_party").join("sentry-native").join("LICENSE"),
             vital: false,
         },
     ];

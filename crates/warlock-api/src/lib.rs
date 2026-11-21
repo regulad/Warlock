@@ -23,6 +23,7 @@ mod server;
 pub use capture::{Filter, Frame, FrameKind};
 pub use pipe::{ADMIN_GROUP, Security, USERS_GROUP};
 pub use server::{
-    ADMIN_OPERATIONS, Daemon, HEARTBEAT, OPERATIONS, Pipes, RequestStatus, RequestWant, Requests, Server, State, Wants,
+    ADMIN_OPERATIONS, Daemon, HEARTBEAT, OPERATIONS, Observer, Pipes, RequestStatus, RequestWant, Requests, Served,
+    Server, State, Wants,
 };
 pub use warlock_client::{ADMIN_PIPE, PIPE, types};
