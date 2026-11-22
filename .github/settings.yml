@@ -1,83 +1,24 @@
-# Repository configuration, managed by the Probot Settings app
-# (https://github.com/probot/settings). Changes here are applied to the
-# repo's GitHub-side settings automatically on merge to the default branch.
+# Repository configuration, managed by the Settings app
+# (https://github.com/repository-settings/app). The shared defaults come from
+# regulad/.github; this file sets only what is this repository's own.
+_extends: .github
+
 repository:
   name: Warlock
   description: >-
     Apple Wireless Direct Link (AWDL) for Windows, on a USB Wi-Fi adapter
   homepage: ""
-
   # Public: winget downloads the MSI from a public release.
   private: false
-
-  # Topics: comma-and-space separated string, NOT a YAML list — the
-  # Probot Settings schema takes `topics` as one string it splits itself.
+  # Topics: comma-and-space separated string, NOT a YAML list.
   topics: awdl, apple, wifi, windows, rust, wintun, realtek, rtl8812bu, networking, reverse-engineering
-
-  has_issues: true
-  has_projects: false
-  has_wiki: false
-  has_downloads: true
-  has_discussions: false
-
   default_branch: master
-
-  allow_squash_merge: true
-  allow_merge_commit: false
-  allow_rebase_merge: true
-  allow_auto_merge: false
-  delete_branch_on_merge: true
-
-  allow_update_branch: true
-
-  squash_merge_commit_title: PR_TITLE
-  squash_merge_commit_message: PR_BODY
 
   archived: false
   is_template: false
-
-  # Dependabot alerts, and its pull requests that fix them
-  # (.github/dependabot.yml has the routine updates).
-  enable_vulnerability_alerts: true
-  enable_automated_security_fixes: true
-
-# Labels this repo uses. `color` is a hex string without the leading `#`.
-labels:
-  - name: bug
-    color: "d73a4a"
-    description: Something isn't working as expected
-  - name: enhancement
-    color: "a2eeef"
-    description: New feature or capability
-  - name: research
-    color: "5319e7"
-    description: Investigation/finding, not necessarily code
-  - name: documentation
-    color: "0075ca"
-    description: Improvements or additions to PLAN.md/README/docs
-  - name: infra
-    color: "fbca04"
-    description: Build, CI, installer, signing, or packaging work
-  - name: question
-    color: "d876e3"
-    description: Further information is requested
-  - name: wontfix
-    color: "ffffff"
-    description: This will not be worked on
-  - name: duplicate
-    color: "cfd3d7"
-    description: This issue or PR already exists
-  # Dependabot's (.github/dependabot.yml).
-  - name: dependencies
-    color: "0366d6"
-    description: Pull requests that update a dependency file
 
 # No `environments` key, on purpose: the deployment environments (`release`,
 # `testing`) and their signing secrets are managed by Parker's homelab
 # configuration, not here. Don't add one: the Settings app would then
 # delete every environment it doesn't list, secrets and all. Without the
 # key it never touches them.
-
-# No branch-protection rules — solo-maintainer repo, direct pushes to the
-# default branch are expected. Add rules here if that changes.
-branches: []
