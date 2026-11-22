@@ -120,10 +120,3 @@ them in its message (Parker, 2026-11-21):
 
 **Why:** Warlock's diagnostics did what #1 asked, over several commits, and
 none of them named it, so it stayed open with nothing tying it to the work.
-
-## Show drafts in quote blocks
-
-When showing Parker a snippet of code, formatted data, or prose drafted for
-submission (an issue, a commit message, release notes, a pull request, a
-comment), put each in its own Markdown quote block, so what would be
-submitted stands apart from the conversation around it (Parker, 2026-11-19).
