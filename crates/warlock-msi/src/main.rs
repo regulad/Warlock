@@ -666,6 +666,8 @@ fn winget(root: &Path, msi: &Path, url: &str, out: Option<PathBuf>) -> Result<()
         privacy_url: Some(format!("{REPOSITORY}/blob/v{version}/PRIVACY.md")),
         dependencies_note: Some("The Visual C++ runtime warlock.exe links to, which a fresh Windows lacks."),
         dependencies: &[runtime.dependency()],
+        // Warlock's version is its ProductVersion.
+        package_version: None,
     };
     let manifests = winget::manifests(&manifest, msi, &p, url)?;
     let dir = out.unwrap_or_else(|| root.join("target").join("msi").join("winget").join(version));

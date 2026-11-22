@@ -37,6 +37,12 @@ pub struct Manifest<'a> {
     /// Why the package has its dependencies, as a comment above them.
     pub dependencies_note: Option<&'a str>,
     pub dependencies: &'a [Dependency<'a>],
+    /// The package's version in winget, where it isn't its ProductVersion:
+    /// Koala's dates, as `2026.11.22`, which Windows Installer can't take
+    /// (Koala's package records `26.11.22`). winget then knows the installed
+    /// product by its ProductVersion, given as `AppsAndFeaturesEntries`'
+    /// `DisplayVersion`. `None`: the ProductVersion is the version.
+    pub package_version: Option<&'a str>,
 }
 
 /// Single-quoted YAML scalars: only `'` needs escaping, as `''`.
@@ -66,7 +72,13 @@ pub fn manifests(
     }
     let get =
         |k: &str| properties.get(k).map(String::as_str).ok_or_else(|| format!("{}: no {k} property", msi.display()));
-    let version = get("ProductVersion")?;
+    let product_version = get("ProductVersion")?;
+    let version = manifest.package_version.unwrap_or(product_version);
+    // The installed product's version, where winget's differs from it.
+    let display_version = manifest
+        .package_version
+        .filter(|v| *v != product_version)
+        .map_or_else(String::new, |_| format!("  DisplayVersion: {}\n", quoted(product_version)));
     let product_code = get("ProductCode")?;
     let upgrade_code = get("UpgradeCode")?;
     let publisher = get("Manufacturer")?;
@@ -105,7 +117,7 @@ pub fn manifests(
                 "{}InstallerType: msi\nScope: machine\nInstallModes:\n- interactive\n- silent\n- silentWithProgress\n\
                  UpgradeBehavior: install\n{dependencies}\
                  ProductCode: {}\nAppsAndFeaturesEntries:\n- Publisher: {}\n  ProductCode: {}\n  UpgradeCode: {}\n\
-                 Installers:\n- Architecture: x64\n  InstallerUrl: {}\n  InstallerSha256: {sha256}\n{}",
+                 {display_version}Installers:\n- Architecture: x64\n  InstallerUrl: {}\n  InstallerSha256: {sha256}\n{}",
                 header("installer"),
                 quoted(product_code),
                 quoted(publisher),
@@ -162,6 +174,7 @@ mod tests {
             privacy_url: None,
             dependencies_note: Some("What Koala needs."),
             dependencies: &dependencies,
+            package_version: None,
         };
         let text = installer(&m);
         let expected = concat!(
@@ -190,9 +203,37 @@ mod tests {
             privacy_url: None,
             dependencies_note: None,
             dependencies: &[],
+            package_version: None,
         };
         let msi = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert!(manifests(&m, &msi, &properties(), "http://example.com/x.msi").is_err());
+    }
+
+    /// A version of winget's own (a date) goes in every manifest, and the
+    /// installed product is known by its ProductVersion; without one, the
+    /// ProductVersion is the version, and there's no DisplayVersion.
+    #[test]
+    fn a_package_version_of_its_own_maps_the_product_version() {
+        let m = Manifest {
+            package: "Regulad.Koala",
+            name: "Koala",
+            generator: "koala-msi",
+            license: "AGPL-3.0-or-later",
+            short_description: "d",
+            privacy_url: None,
+            dependencies_note: None,
+            dependencies: &[],
+            package_version: Some("2026.11.22"),
+        };
+        let msi = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let all = manifests(&m, &msi, &properties(), "https://example.com/x.msi").unwrap();
+        for (name, text) in &all {
+            assert!(text.contains("PackageVersion: '2026.11.22'\n"), "{name}: {text}");
+        }
+        assert!(all[1].1.contains("  UpgradeCode: '{U}'\n  DisplayVersion: '1.2.3'\nInstallers:"), "{}", all[1].1);
+        let same = Manifest { package_version: None, ..m };
+        let text = installer(&same);
+        assert!(text.contains("PackageVersion: '1.2.3'\n") && !text.contains("DisplayVersion"), "{text}");
     }
 
     #[test]
