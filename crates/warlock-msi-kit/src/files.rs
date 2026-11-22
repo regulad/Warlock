@@ -3,6 +3,7 @@
 //! embedded in the package, that carries them.
 
 use std::fmt::Write as _;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -30,15 +31,63 @@ pub fn with_sizes(payload: impl IntoIterator<Item = Payload>) -> Result<Vec<(Pay
 }
 
 /// The File table: a row for each file, numbered in order, which is the
-/// cabinet's order too ([`crate::Database::cabinet`]).
+/// cabinet's order too ([`crate::Database::cabinet`]), with its version and
+/// languages where it has a version resource ([`file_version`]).
 pub fn file_table(files: &[(Payload, u64)]) -> Table {
     let mut file = schema::file();
     for (i, (p, size)) in files.iter().enumerate() {
         let size = i32::try_from(*size).expect("files under 2 GiB");
         let attributes = p.vital.then_some(FILE_VITAL).map(|a| a.to_string());
-        file.row(vec![s(&p.key), s(&p.component), s(&p.name), n(size), None, None, attributes, n(i as i32 + 1)]);
+        let (version, language) = file_version(&p.source).map_or((None, None), |(v, l)| (Some(v), l));
+        file.row(vec![s(&p.key), s(&p.component), s(&p.name), n(size), version, language, attributes, n(i as i32 + 1)]);
     }
     file
+}
+
+/// A file's version (`9.0.2.0`) and languages (`1033`, comma-separated
+/// LANGIDs), from its version resource, as the File table records them:
+/// `None` for a file without one, which Windows Installer then treats as
+/// unversioned. Left out, a versioned file's version made its newer copy
+/// "unversioned", which Windows Installer won't put over a versioned one
+/// (Koala's FFmpeg DLLs, 2026-11-22).
+pub fn file_version(path: &Path) -> Option<(String, Option<String>)> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+    };
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: a NUL-terminated path; the handle argument may be null.
+    let size = unsafe { GetFileVersionInfoSizeW(name.as_ptr(), std::ptr::null_mut()) };
+    if size == 0 {
+        return None;
+    }
+    let mut data = vec![0u8; size as usize];
+    // SAFETY: a buffer of the size Windows asked for.
+    if unsafe { GetFileVersionInfoW(name.as_ptr(), 0, size, data.as_mut_ptr().cast()) } == 0 {
+        return None;
+    }
+    let query = |sub: &str| -> Option<&[u8]> {
+        let sub: Vec<u16> = sub.encode_utf16().chain(Some(0)).collect();
+        let (mut at, mut len) = (std::ptr::null_mut(), 0u32);
+        // SAFETY: `data` holds the version resource; Windows points into it.
+        let ok = unsafe { VerQueryValueW(data.as_ptr().cast(), sub.as_ptr(), &mut at, &mut len) } != 0;
+        (ok && !at.is_null() && len > 0).then(|| unsafe { std::slice::from_raw_parts(at.cast::<u8>(), len as usize) })
+    };
+    let fixed = query("\\").filter(|b| b.len() >= std::mem::size_of::<VS_FIXEDFILEINFO>())?;
+    // SAFETY: as long as a VS_FIXEDFILEINFO, which it is; read unaligned.
+    let info: VS_FIXEDFILEINFO = unsafe { std::ptr::read_unaligned(fixed.as_ptr().cast()) };
+    let (ms, ls) = (info.dwFileVersionMS, info.dwFileVersionLS);
+    let version = format!("{}.{}.{}.{}", ms >> 16, ms & 0xffff, ls >> 16, ls & 0xffff);
+    // Each translation: a LANGID, then a code page.
+    let mut languages: Vec<u16> = query("\\VarFileInfo\\Translation")
+        .unwrap_or(&[])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|t| u16::from_le_bytes([t[0], t[1]]))
+        .collect();
+    languages.dedup();
+    let language = (!languages.is_empty()).then(|| languages.iter().map(u16::to_string).collect::<Vec<_>>().join(","));
+    Some((version, language))
 }
 
 /// The Media table: one disk, holding all `files` files, whose cabinet is
@@ -111,6 +160,25 @@ mod tests {
         assert_eq!(cells(&file.rows[1])[6..], [None, Some("2")]);
         let media = media_table("x.cab", files.len());
         assert_eq!(cells(&media.rows[0]), [Some("1"), Some("2"), None, Some("#x.cab"), None, None]);
+    }
+
+    /// A versioned file's version and language go in its row; a file
+    /// without a version resource has neither.
+    #[test]
+    fn versions_are_recorded() {
+        let system = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        let kernel32 = system.join("System32").join("kernel32.dll");
+        let (version, language) = file_version(&kernel32).expect("kernel32.dll has a version");
+        assert_eq!(version.split('.').count(), 4, "{version}");
+        assert!(version.split('.').all(|p| p.parse::<u16>().is_ok()), "{version}");
+        assert!(language.is_some_and(|l| l.split(',').all(|x| x.parse::<u16>().is_ok())));
+        assert_eq!(file_version(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")), None);
+        let mut dll = payload("kernel32.dll", true);
+        dll.source = kernel32;
+        let files = with_sizes([dll, payload("b.txt", false)]).unwrap();
+        let file = file_table(&files);
+        assert_eq!(cells(&file.rows[0])[4], Some(version.as_str()));
+        assert_eq!(cells(&file.rows[1])[4..6], [None, None]);
     }
 
     #[test]
