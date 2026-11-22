@@ -39,6 +39,29 @@ to avoid that as much as possible").
   have to make to be accepted at all, are the exception to argue in
   `PLAN.md`, not by default.
 
+## Test for interop regressions
+
+A change to what Warlock advertises or how it links (TLVs, flags, election,
+the schedule, Block Ack, the data path) counts as working only once real
+devices still take Warlock as a peer, sync to it and carry traffic both ways
+(Parker, 2026-11-19).
+
+**How:**
+- On minintosh, observing only
+  (`ssh -T -o BatchMode=yes -o RemoteCommand=none -o RequestTTY=no minintosh`),
+  Warlock is listed as a peer and is reachable:
+  `ping6 fe80::<EUI-64>%awdl0`, and DNS-SD over `awdl0`.
+- On the iPhone, run a Koala trial: pairing, Rapport TCP, the streams.
+- Report the regression results with the feature's own.
+
+## Test a development build on the radio
+
+Ask Parker for elevation, and say a UAC prompt is coming. In one elevated
+script, stop the Warlock service, run
+`target\release\warlock.exe run --seconds N` with its log written to a file,
+then `Start-Service Warlock`. Test once the log says "control API up" (for
+the API) and "radio state=Up" (for the radio).
+
 ## Keep the diagnostics anonymous, and `PRIVACY.md` true
 
 What Warlock's programs send to Sentry (the daemon's
@@ -82,11 +105,6 @@ Pending work goes into issues on
 task per issue, so several people can take tasks at once (Parker,
 2026-11-19). `PLAN.md` keeps the design, the decisions and what was found, and
 links the issues; it isn't the to-do list.
-
-- An issue, pull request or comment an agent drafts is posted only after
-  Parker has reviewed it, and ends with a rule and his footer:
-  `*Drafted by Claude (`claude-opus-5-5`); reviewed and signed off by
-  @regulad.*`, naming the model that drafted it.
 
 ## Check the open issues with every commit
 

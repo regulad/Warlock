@@ -18,6 +18,8 @@ Pinned decisions:
 - OWL, winawdl and owly (formerly omdrop-owl) are **references only**. None of their code is copied. owly's MIT crates look derived from GPLv3 OWL, so Warlock doesn't depend on them: see `docs/prior-art.md`, "Rust AWDL crates, and why Warlock implements its own".
 - Wireshark's AWDL dissector (`epan/dissectors/packet-awdl.c`, GPL-2.0-or-later, so compatible) is the **layout reference and test oracle** for `awdl-proto`. Each module names the dissector function it follows and where it departs from it. Its code isn't reused, because a dissector only reads, into a display tree.
 - **No heuristic filters (Parker, 2026-11-17).** Warlock carries what it's given. It doesn't drop, rewrite or hold back traffic because it looks like noise or seems unneeded. A filter goes in only when a specific, demonstrated reason shows the traffic breaks AWDL or a peer, and the code then cites that reason. What follows from AWDL itself isn't a heuristic, for example unicast going only in a peer's explicit slots. Neither is traffic that has nowhere to go, such as IPv4 with no AWDL address. (The adapter used to drop Windows' MLD, LLMNR, SSDP and WS-Discovery as "chatter"; that was removed.)
+- **Scope (Parker, 2026-11-17):** an AWDL implementation as complete as Apple's, a foundation rather than just what Koala needs. Interop gaps with any Apple peer count, the iOS 8 Apple TV's included.
+- **Linux stays possible (Parker, 2026-11-18):** no port now, but `awdl-proto` and `awdl-core` make no OS calls. Windows code goes in the OS-facing crates, and no Windows types reach the core or the API contract beyond its transport section.
 
 ## Repos and licensing
 | Repo | License | Contents |
