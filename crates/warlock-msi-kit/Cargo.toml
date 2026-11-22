@@ -1,0 +1,20 @@
+[package]
+name = "warlock-msi-kit"
+version.workspace = true
+description = "The machinery of an MSI built with Windows' own Windows Installer API and makecab, no installer toolchain: tables, the database, the cabinet, searches, pages and winget's manifests"
+edition.workspace = true
+# Dual-licensed, like warlock-client: Warlock's GPL-2.0-only builder
+# (warlock-msi) uses it, and so does Koala's AGPL builder (Parker,
+# 2026-11-21).
+license = "GPL-2.0-only OR AGPL-3.0-or-later"
+authors.workspace = true
+publish = false
+
+[dependencies]
+# The package's SHA-256, for winget's installer manifest.
+sha2 = "0.11"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_ApplicationInstallationAndServicing",
+    "Win32_System_Com",
+] }

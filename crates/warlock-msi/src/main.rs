@@ -53,32 +53,31 @@
 //! `--no-build`, signs the package, then runs `winget` with the URL it will
 //! be downloaded from.
 //!
-//! Tables are written as Windows Installer's own `.idt` text and imported
-//! (`MsiDatabaseImportW`). Their column definitions are copied from MSIs
-//! Windows itself installed, exported from `C:\Windows\Installer` on
-//! 2026-11-18. Sequence numbers are Windows Installer's suggested ones.
+//! The machinery is `warlock-msi-kit`'s, which Koala's builder shares: the
+//! tables and their column definitions, the database, the cabinet, the
+//! searches, the standard pages and the manifests. What's here is Warlock's
+//! own: its files, components and service, what it looks for, its custom
+//! actions, its Options page and its words. Sequence numbers are Windows
+//! Installer's suggested ones.
 
 mod licence;
 mod notices;
 mod ui;
 
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
-use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
-    MSIDBOPEN_CREATE, MSIDBOPEN_READONLY, MSIHANDLE, MsiCloseHandle, MsiCreateRecord, MsiDatabaseCommit,
-    MsiDatabaseImportW, MsiDatabaseOpenViewW, MsiGetSummaryInformationW, MsiOpenDatabaseW, MsiRecordGetStringW,
-    MsiRecordSetStreamW, MsiRecordSetStringW, MsiSummaryInfoPersist, MsiSummaryInfoSetPropertyW, MsiViewClose,
-    MsiViewExecute, MsiViewFetch,
+use warlock_msi_kit::winget::{self, Manifest};
+use warlock_msi_kit::{
+    CA_CONTINUE, CA_DEFERRED, CA_DLL, CA_EXE_FILE, CA_NO_IMPERSONATE, CA_ROLLBACK, COMPONENT_64BIT, Database, HKLM,
+    LOCATOR_64BIT, LOCATOR_DIRECTORY, LOCATOR_FILE, Payload, Result, SERVICE_AUTO_START,
+    SERVICE_CONFIG_DELAYED_AUTO_START, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, SERVICE_CONFIG_INSTALL,
+    SERVICE_CONFIG_REINSTALL, SERVICE_CONFIG_REQUIRED_PRIVILEGES, SERVICE_CONFIG_SERVICE_SID, SERVICE_DELETE_UNINSTALL,
+    SERVICE_ERROR_NORMAL, SERVICE_OWN_PROCESS, SERVICE_START_INSTALL, SERVICE_STOP_INSTALL, SERVICE_STOP_UNINSTALL,
+    Search, Summary, Table, UPGRADE_MAX_INCLUSIVE, UPGRADE_MIGRATE_FEATURES, UPGRADE_ONLY_DETECT, VcRuntime,
+    file_table, media_table, n, new_guid, package_properties, product_version, runtime_min, s, schema, sequence,
+    with_sizes,
 };
-use windows_sys::Win32::System::Com::CoCreateGuid;
-use windows_sys::core::GUID;
-
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 // GUIDs that never change. Generated once with PowerShell's
 // `[guid]::NewGuid()` on 2026-11-18, while writing this builder.
@@ -184,142 +183,27 @@ const CABINET: &str = "warlock.cab";
 
 /// The Visual C++ runtime DLLs `warlock.exe` imports (`warlockctl.exe` only
 /// the first), each with the property the package's search for it sets and
-/// its `short|long` name. The short name only counts where long names don't.
+/// its `short|long` name.
 const RUNTIME_DLLS: [(&str, &str); 3] = [
     ("VCRUNTIME140", "VCRT140.DLL|vcruntime140.dll"),
     ("VCRUNTIME140_1", "VCRT1401.DLL|vcruntime140_1.dll"),
     ("MSVCP140", "msvcp140.dll"),
 ];
-/// The runtime's winget package: a dependency of ours.
-const RUNTIME_PACKAGE: &str = "Microsoft.VCRedist.2015+.x64";
 /// The property recording the least runtime version, for `winget`.
 const RUNTIME_MIN_PROPERTY: &str = "WarlockVcRuntimeMin";
 
-/// `msidbComponentAttributes64bit`.
-const COMPONENT_64BIT: i32 = 256;
-/// `msidbFileAttributesVital`.
-const FILE_VITAL: i32 = 512;
-/// Custom action type 18 (run an EXE installed with the product), deferred
-/// (1024), not impersonating, so as SYSTEM (2048).
-const CA_EXE_AS_SYSTEM: i32 = 18 + 1024 + 2048;
-/// `msidbCustomActionTypeContinue`: the exit code doesn't fail the install.
-const CA_CONTINUE: i32 = 64;
-/// Custom action type 1: a function of a DLL in the Binary table, run at
-/// once (in the UI sequence, as the user).
-const CA_DLL: i32 = 1;
-/// `msidbCustomActionTypeRollback`: runs only if the install rolls back.
-const CA_ROLLBACK: i32 = 256;
+/// Custom action type 18 (run an EXE installed with the product), deferred,
+/// not impersonating, so as SYSTEM.
+const CA_EXE_AS_SYSTEM: i32 = CA_EXE_FILE | CA_DEFERRED | CA_NO_IMPERSONATE;
 /// An install without the full UI (`UILevel` 5), whose own pages report how
 /// it ended: silent (2), basic (3) or reduced (4).
 const NO_FULL_UI: &str = "UILevel < 5";
-/// `SERVICE_WIN32_OWN_PROCESS`.
-const OWN_PROCESS: i32 = 0x10;
-/// `SERVICE_AUTO_START`.
-const AUTO_START: i32 = 2;
-/// `SERVICE_ERROR_NORMAL`.
-const ERROR_NORMAL: i32 = 1;
-/// ServiceControl events: start on install (1), stop on install (2) and
-/// uninstall (32), delete on uninstall (128).
-const CONTROL_EVENTS: i32 = 1 | 2 | 32 | 128;
-/// MsiServiceConfig events: install (1) and reinstall (4).
-const CONFIG_EVENTS: i32 = 1 | 4;
-/// `ChangeServiceConfig2` info level `SERVICE_CONFIG_DELAYED_AUTO_START_INFO`.
-const DELAYED_AUTO_START: i32 = 3;
-/// … `SERVICE_CONFIG_FAILURE_ACTIONS_FLAG`.
-const FAILURE_ACTIONS_FLAG: i32 = 4;
-/// … `SERVICE_CONFIG_SERVICE_SID_INFO`.
-const SERVICE_SID: i32 = 5;
-/// … `SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO`.
-const REQUIRED_PRIVILEGES: i32 = 6;
-/// `msidbUpgradeAttributesMigrateFeatures`.
-const MIGRATE_FEATURES: i32 = 1;
-/// `msidbUpgradeAttributesOnlyDetect`.
-const ONLY_DETECT: i32 = 2;
-/// `msidbUpgradeAttributesVersionMaxInclusive`.
-const MAX_INCLUSIVE: i32 = 0x200;
-/// `msidbRegistryRootLocalMachine`.
-const HKLM: i32 = 2;
-/// `msidbLocatorTypeDirectory`: the value is a folder, which must exist.
-const LOCATOR_DIRECTORY: i32 = 0;
-/// `msidbLocatorTypeFileName`: a component's key path is a file.
-const LOCATOR_FILE: i32 = 1;
-/// `msidbLocatorType64bit`: the 64-bit registry, not the 32-bit view.
-const LOCATOR_64BIT: i32 = 16;
-
-/// A cell: `None` is null.
-type Cell = Option<String>;
-
-fn s(v: &str) -> Cell {
-    Some(v.to_string())
-}
-
-fn n(v: i32) -> Cell {
-    Some(v.to_string())
-}
-
-/// One table: its columns as (name, `.idt` type), its primary key, its rows.
-struct Table {
-    name: &'static str,
-    columns: &'static [(&'static str, &'static str)],
-    keys: &'static [&'static str],
-    rows: Vec<Vec<Cell>>,
-}
-
-impl Table {
-    fn new(
-        name: &'static str,
-        columns: &'static [(&'static str, &'static str)],
-        keys: &'static [&'static str],
-    ) -> Self {
-        Self { name, columns, keys, rows: Vec::new() }
-    }
-
-    fn row(&mut self, cells: Vec<Cell>) -> &mut Self {
-        assert_eq!(cells.len(), self.columns.len(), "a {} row", self.name);
-        self.rows.push(cells);
-        self
-    }
-
-    /// The table as `.idt` text: column names, types, the table and its
-    /// keys, then a line per row, tab-separated, a null being empty.
-    fn idt(&self) -> Result<String> {
-        let mut out = String::new();
-        let line = |cells: Vec<&str>| cells.join("\t") + "\r\n";
-        out += &line(self.columns.iter().map(|c| c.0).collect());
-        out += &line(self.columns.iter().map(|c| c.1).collect());
-        out += &line(std::iter::once(self.name).chain(self.keys.iter().copied()).collect());
-        for row in &self.rows {
-            for cell in row.iter().flatten() {
-                if !cell.is_ascii() || cell.contains(['\t', '\r', '\n']) {
-                    return Err(format!("{}: {cell:?} needs escaping this builder doesn't do", self.name).into());
-                }
-            }
-            out += &line(row.iter().map(|c| c.as_deref().unwrap_or("")).collect());
-        }
-        Ok(out)
-    }
-}
-
-const SEQUENCE: &[(&str, &str)] = &[("Action", "s72"), ("Condition", "S255"), ("Sequence", "I2")];
-
-fn sequence(name: &'static str, actions: &[(&str, Option<&str>, i32)]) -> Table {
-    let mut t = Table::new(name, SEQUENCE, &["Action"]);
-    for (action, condition, number) in actions {
-        t.row(vec![s(action), condition.map(str::to_string), n(*number)]);
-    }
-    t
-}
-
-/// A file going into the package.
-struct Payload {
-    /// The File table key, and its name in the cabinet.
-    key: &'static str,
-    component: &'static str,
-    /// `short|long` when the long name isn't a valid 8.3 one.
-    name: &'static str,
-    source: PathBuf,
-    vital: bool,
-}
+/// ServiceControl events: start on install, stop on install and uninstall,
+/// delete on uninstall.
+const CONTROL_EVENTS: i32 =
+    SERVICE_START_INSTALL | SERVICE_STOP_INSTALL | SERVICE_STOP_UNINSTALL | SERVICE_DELETE_UNINSTALL;
+/// MsiServiceConfig events: install and reinstall.
+const CONFIG_EVENTS: i32 = SERVICE_CONFIG_INSTALL | SERVICE_CONFIG_REINSTALL;
 
 /// Every table, filled in. `runtime_min` is the least Visual C++ runtime
 /// version (`14.50`) the binaries need.
@@ -330,9 +214,12 @@ fn tables(
     (licence, privacy): (&str, &str),
     files: &[(Payload, u64)],
 ) -> Vec<Table> {
-    let mut all = ui::tables(licence, privacy);
+    let ui = ui::build(licence, privacy);
+    let ui_properties = ui.properties();
+    let mut all = ui.into_tables();
+    let runtime = VcRuntime { dlls: &RUNTIME_DLLS, min: runtime_min.to_string() };
 
-    let mut property = Table::new("Property", &[("Property", "s72"), ("Value", "l0")], &["Property"]);
+    let mut property = schema::property();
     for (k, v) in [
         (RUNTIME_MIN_PROPERTY, runtime_min),
         ("ProductCode", product_code),
@@ -350,19 +237,15 @@ fn tables(
             "SecureCustomProperties",
             "OLDERFOUND;NEWERFOUND;WIRESHARKDIR;WIRESHARKPLUGIN;JOINWARLOCKUSERS;JOINWARLOCKADMIN",
         ),
-    ]
-    .into_iter()
-    .chain(ui::PROPERTIES)
-    {
+    ] {
+        property.row(vec![s(k), s(v)]);
+    }
+    for (k, v) in &ui_properties {
         property.row(vec![s(k), s(v)]);
     }
     all.push(property);
 
-    let mut directory = Table::new(
-        "Directory",
-        &[("Directory", "s72"), ("Directory_Parent", "S72"), ("DefaultDir", "l255")],
-        &["Directory"],
-    );
+    let mut directory = schema::directory();
     directory
         .row(vec![s("TARGETDIR"), None, s("SourceDir")])
         .row(vec![s("ProgramFiles64Folder"), s("TARGETDIR"), s(".")])
@@ -373,18 +256,7 @@ fn tables(
         .row(vec![s("WIRESHARKEXTCAP"), s("WIRESHARKDIR"), s("extcap")]);
     all.push(directory);
 
-    let mut component = Table::new(
-        "Component",
-        &[
-            ("Component", "s72"),
-            ("ComponentId", "S38"),
-            ("Directory_", "s72"),
-            ("Attributes", "i2"),
-            ("Condition", "S255"),
-            ("KeyPath", "S72"),
-        ],
-        &["Component"],
-    );
+    let mut component = schema::component();
     for (name, guid, key) in [
         ("Warlock", COMPONENT_WARLOCK, "warlock.exe"),
         ("Warlockctl", COMPONENT_WARLOCKCTL, "warlockctl.exe"),
@@ -404,20 +276,7 @@ fn tables(
     ]);
     all.push(component);
 
-    let mut feature = Table::new(
-        "Feature",
-        &[
-            ("Feature", "s38"),
-            ("Feature_Parent", "S38"),
-            ("Title", "L64"),
-            ("Description", "L255"),
-            ("Display", "I2"),
-            ("Level", "i2"),
-            ("Directory_", "S72"),
-            ("Attributes", "i2"),
-        ],
-        &["Feature"],
-    );
+    let mut feature = schema::feature();
     feature.row(vec![s("Warlock"), None, s("Warlock"), s("Warlock and warlockctl"), n(1), n(1), s("INSTALLDIR"), n(0)]);
     // Level 1000, above the default INSTALLLEVEL of 1: off unless the
     // Condition table raises it. Not displayed: the checkbox is its UI.
@@ -433,185 +292,89 @@ fn tables(
     ]);
     all.push(feature);
 
-    let mut condition =
-        Table::new("Condition", &[("Feature_", "s38"), ("Level", "i2"), ("Condition", "S255")], &["Feature_", "Level"]);
+    let mut condition = schema::condition();
     condition.row(vec![s("WiresharkPlugin"), n(1), s(&format!("{WIRESHARK_PLUGIN_PROPERTY} AND WIRESHARKDIR"))]);
     all.push(condition);
 
-    let mut feature_components =
-        Table::new("FeatureComponents", &[("Feature_", "s38"), ("Component_", "s72")], &["Feature_", "Component_"]);
+    let mut feature_components = schema::feature_components();
     for c in ["Warlock", "Warlockctl", "Licenses", "Diagnostics", "Notices"] {
         feature_components.row(vec![s("Warlock"), s(c)]);
     }
     feature_components.row(vec![s("WiresharkPlugin"), s("WiresharkPlugin")]);
     all.push(feature_components);
 
-    let mut file = Table::new(
-        "File",
-        &[
-            ("File", "s72"),
-            ("Component_", "s72"),
-            ("FileName", "l255"),
-            ("FileSize", "i4"),
-            ("Version", "S72"),
-            ("Language", "S20"),
-            ("Attributes", "I2"),
-            ("Sequence", "i4"),
-        ],
-        &["File"],
-    );
-    for (i, (p, size)) in files.iter().enumerate() {
-        let size = i32::try_from(*size).expect("files under 2 GiB");
-        let attributes = p.vital.then_some(FILE_VITAL).map(|a| a.to_string());
-        file.row(vec![s(p.key), s(p.component), s(p.name), n(size), None, None, attributes, n(i as i32 + 1)]);
-    }
-    all.push(file);
+    all.push(file_table(files));
+    all.push(media_table(CABINET, files.len()));
 
-    let mut media = Table::new(
-        "Media",
-        &[
-            ("DiskId", "i2"),
-            ("LastSequence", "i4"),
-            ("DiskPrompt", "L64"),
-            ("Cabinet", "S255"),
-            ("VolumeLabel", "S32"),
-            ("Source", "S72"),
-        ],
-        &["DiskId"],
-    );
-    // `#` means the cabinet is a stream inside the package.
-    media.row(vec![n(1), n(files.len() as i32), None, s(&format!("#{CABINET}")), None, None]);
-    all.push(media);
-
-    let mut upgrade = Table::new(
-        "Upgrade",
-        &[
-            ("UpgradeCode", "s38"),
-            ("VersionMin", "S20"),
-            ("VersionMax", "S20"),
-            ("Language", "S255"),
-            ("Attributes", "i4"),
-            ("Remove", "S255"),
-            ("ActionProperty", "s72"),
-        ],
-        &["UpgradeCode", "VersionMin", "VersionMax", "Language", "Attributes"],
-    );
+    let mut upgrade = schema::upgrade();
     upgrade
         // Up to and including this version: replaced.
-        .row(vec![s(UPGRADE_CODE), None, s(version), None, n(MIGRATE_FEATURES | MAX_INCLUSIVE), None, s("OLDERFOUND")])
+        .row(vec![
+            s(UPGRADE_CODE),
+            None,
+            s(version),
+            None,
+            n(UPGRADE_MIGRATE_FEATURES | UPGRADE_MAX_INCLUSIVE),
+            None,
+            s("OLDERFOUND"),
+        ])
         // Newer: only noticed, to refuse the install.
-        .row(vec![s(UPGRADE_CODE), s(version), None, None, n(ONLY_DETECT), None, s("NEWERFOUND")]);
+        .row(vec![s(UPGRADE_CODE), s(version), None, None, n(UPGRADE_ONLY_DETECT), None, s("NEWERFOUND")]);
     all.push(upgrade);
 
     // The Visual C++ runtime, found by its DLLs in System32: each search sets
     // its property when the file is there at `runtime_min` or later.
-    let mut app_search =
-        Table::new("AppSearch", &[("Property", "s72"), ("Signature_", "s72")], &["Property", "Signature_"]);
-    let mut signature = Table::new(
-        "Signature",
-        &[
-            ("Signature", "s72"),
-            ("FileName", "s255"),
-            ("MinVersion", "S20"),
-            ("MaxVersion", "S20"),
-            ("MinSize", "I4"),
-            ("MaxSize", "I4"),
-            ("MinDate", "I4"),
-            ("MaxDate", "I4"),
-            ("Languages", "S255"),
-        ],
-        &["Signature"],
-    );
-    let mut dr_locator = Table::new(
-        "DrLocator",
-        &[("Signature_", "s72"), ("Parent", "S72"), ("Path", "S255"), ("Depth", "I2")],
-        &["Signature_", "Parent", "Path"],
-    );
-    // Any build of that minor version or later. (The version is compared
-    // with the language only when equal, which a real build number isn't.)
-    let floor = format!("{runtime_min}.0.0");
-    for (property, file_name) in RUNTIME_DLLS {
-        let sig = format!("Sig{property}");
-        app_search.row(vec![s(property), s(&sig)]);
-        signature.row(vec![s(&sig), s(file_name), s(&floor), None, None, None, None, None, None]);
-        dr_locator.row(vec![s(&sig), None, s("[System64Folder]"), n(0)]);
-    }
+    let mut search = Search::new();
+    runtime.search(&mut search);
     // Wireshark's folder, from either place its installer records it: the
     // App Paths entry (64-bit registry) or its own key (32-bit). A directory
     // search sets the property only if the folder exists.
-    let mut reg_locator = Table::new(
-        "RegLocator",
-        &[("Signature_", "s72"), ("Root", "i2"), ("Key", "s255"), ("Name", "S255"), ("Type", "I2")],
-        &["Signature_"],
-    );
-    for (sig, key, name, kind) in [
-        (
+    search
+        .registry(
             "SigWiresharkAppPath",
+            HKLM,
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Wireshark.exe",
             "Path",
             LOCATOR_DIRECTORY | LOCATOR_64BIT,
-        ),
-        ("SigWiresharkInstallDir", r"SOFTWARE\Wireshark", "InstallDir", LOCATOR_DIRECTORY),
-    ] {
-        app_search.row(vec![s("WIRESHARKDIR"), s(sig)]);
-        reg_locator.row(vec![s(sig), n(HKLM), s(key), s(name), n(kind)]);
-    }
-    // The plugin already installed (an upgrade or repair): the checkbox
-    // starts ticked, so a silent upgrade keeps it.
-    let mut comp_locator =
-        Table::new("CompLocator", &[("Signature_", "s72"), ("ComponentId", "s38"), ("Type", "I2")], &["Signature_"]);
-    app_search.row(vec![s(WIRESHARK_PLUGIN_PROPERTY), s("SigWiresharkPlugin")]);
-    app_search.row(vec![s(WIRESHARK_PLUGIN_FOUND_PROPERTY), s("SigWiresharkPlugin")]);
-    comp_locator.row(vec![s("SigWiresharkPlugin"), s(COMPONENT_WIRESHARK_PLUGIN), n(LOCATOR_FILE)]);
-    all.push(app_search);
-    all.push(signature);
-    all.push(dr_locator);
-    all.push(reg_locator);
-    all.push(comp_locator);
+            &["WIRESHARKDIR"],
+        )
+        .registry(
+            "SigWiresharkInstallDir",
+            HKLM,
+            r"SOFTWARE\Wireshark",
+            "InstallDir",
+            LOCATOR_DIRECTORY,
+            &["WIRESHARKDIR"],
+        )
+        // The plugin already installed (an upgrade or repair): the checkbox
+        // starts ticked, so a silent upgrade keeps it.
+        .component(
+            "SigWiresharkPlugin",
+            COMPONENT_WIRESHARK_PLUGIN,
+            LOCATOR_FILE,
+            &[WIRESHARK_PLUGIN_PROPERTY, WIRESHARK_PLUGIN_FOUND_PROPERTY],
+        );
+    all.extend(search.into_tables());
 
-    let runtime_found = RUNTIME_DLLS.map(|(p, _)| p).join(" AND ");
-    let mut launch = Table::new("LaunchCondition", &[("Condition", "s255"), ("Description", "l255")], &["Condition"]);
+    let (runtime_found, runtime_missing) = runtime.launch_condition("Warlock");
+    let mut launch = schema::launch_condition();
     launch
         .row(vec![s("VersionNT64"), s("Warlock needs 64-bit Windows.")])
         .row(vec![s("NOT NEWERFOUND"), s("A newer version of Warlock is already installed.")])
         // Not needed to uninstall.
-        .row(vec![
-            s(&format!("Installed OR ({runtime_found})")),
-            s(&format!(
-                "Warlock needs the Microsoft Visual C++ v14 Redistributable (x64), version {runtime_min} or later: \
-                 winget install {RUNTIME_PACKAGE}"
-            )),
-        ]);
+        .row(vec![s(&runtime_found), s(&runtime_missing)]);
     all.push(launch);
 
-    let mut service_install = Table::new(
-        "ServiceInstall",
-        &[
-            ("ServiceInstall", "s72"),
-            ("Name", "s255"),
-            ("DisplayName", "L255"),
-            ("ServiceType", "i4"),
-            ("StartType", "i4"),
-            ("ErrorControl", "i4"),
-            ("LoadOrderGroup", "S255"),
-            ("Dependencies", "S255"),
-            ("StartName", "S255"),
-            ("Password", "S255"),
-            ("Arguments", "S255"),
-            ("Component_", "s72"),
-            ("Description", "L255"),
-        ],
-        &["ServiceInstall"],
-    );
+    let mut service_install = schema::service_install();
     // No StartName: LocalSystem, the account that may rebind drivers and
     // create adapters. Its privileges are trimmed in MsiServiceConfig.
     service_install.row(vec![
         s("WarlockService"),
         s(SERVICE),
         s("Warlock"),
-        n(OWN_PROCESS),
-        n(AUTO_START),
-        n(ERROR_NORMAL),
+        n(SERVICE_OWN_PROCESS),
+        n(SERVICE_AUTO_START),
+        n(SERVICE_ERROR_NORMAL),
         None,
         None,
         None,
@@ -622,64 +385,34 @@ fn tables(
     ]);
     all.push(service_install);
 
-    let mut service_control = Table::new(
-        "ServiceControl",
-        &[
-            ("ServiceControl", "s72"),
-            ("Name", "l255"),
-            ("Event", "i2"),
-            ("Arguments", "L255"),
-            ("Wait", "I2"),
-            ("Component_", "s72"),
-        ],
-        &["ServiceControl"],
-    );
+    let mut service_control = schema::service_control();
     service_control.row(vec![s("WarlockServiceControl"), s(SERVICE), n(CONTROL_EVENTS), None, n(1), s("Warlock")]);
     all.push(service_control);
 
-    let mut service_config = Table::new(
-        "MsiServiceConfig",
-        &[
-            ("MsiServiceConfig", "s72"),
-            ("Name", "l255"),
-            ("Event", "i2"),
-            ("ConfigType", "i4"),
-            ("Argument", "S0"),
-            ("Component_", "s72"),
-        ],
-        &["MsiServiceConfig"],
-    );
+    let mut service_config = schema::msi_service_config();
+    let config = |name: &str, kind: i32, argument: &str| {
+        vec![s(name), s(SERVICE), n(CONFIG_EVENTS), n(kind), s(argument), s("Warlock")]
+    };
     service_config
         // Started after the rest of boot.
-        .row(vec![s("WarlockDelayedStart"), s(SERVICE), n(CONFIG_EVENTS), n(DELAYED_AUTO_START), s("1"), s("Warlock")])
+        .row(config("WarlockDelayedStart", SERVICE_CONFIG_DELAYED_AUTO_START, "1"))
         // SERVICE_SID_TYPE_UNRESTRICTED: NT SERVICE\Warlock, for ACLs.
-        .row(vec![s("WarlockServiceSid"), s(SERVICE), n(CONFIG_EVENTS), n(SERVICE_SID), s("1"), s("Warlock")])
+        .row(config("WarlockServiceSid", SERVICE_CONFIG_SERVICE_SID, "1"))
         // Restarted when it stops with an error too, not only on a crash.
-        .row(vec![s("WarlockFailureFlag"), s(SERVICE), n(CONFIG_EVENTS), n(FAILURE_ACTIONS_FLAG), s("1"), s("Warlock")])
+        .row(config("WarlockFailureFlag", SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, "1"))
         // The service manager removes every other privilege from its token,
         // 27 of LocalSystem's 28. Rebinding the stick to WinUSB, fetching
         // Wintun, installing its driver on a fresh Windows and creating the
         // adapter all worked without them (PLAN.md, W5, tried 2026-11-18).
         // More entries would be separated by `[~]`.
-        .row(vec![
-            s("WarlockPrivileges"),
-            s(SERVICE),
-            n(CONFIG_EVENTS),
-            n(REQUIRED_PRIVILEGES),
-            s("SeChangeNotifyPrivilege"),
-            s("Warlock"),
-        ]);
+        .row(config("WarlockPrivileges", SERVICE_CONFIG_REQUIRED_PRIVILEGES, "SeChangeNotifyPrivilege"));
     all.push(service_config);
 
     // No MsiServiceConfigFailureActions: Windows Installer fails to set
     // restart actions ("access denied", error 1939, seen 2026-11-18), as they
     // need the service opened with start access too. `warlock setup` sets them.
 
-    let mut custom = Table::new(
-        "CustomAction",
-        &[("Action", "s72"), ("Type", "i2"), ("Source", "S72"), ("Target", "S255"), ("ExtendedType", "I4")],
-        &["Action"],
-    );
+    let mut custom = schema::custom_action();
     custom
         .row(vec![s("WarlockSetup"), n(CA_EXE_AS_SYSTEM), s("warlock.exe"), s("setup"), None])
         // If the install fails after WarlockSetup ran: its group goes again.
@@ -710,13 +443,9 @@ fn tables(
     all.push(custom);
 
     // The custom action DLL's row is added by `build`, as a stream.
-    all.push(Table::new("Binary", &[("Name", "s72"), ("Data", "v0")], &["Name"]));
+    all.push(schema::binary());
 
-    let mut environment = Table::new(
-        "Environment",
-        &[("Environment", "s72"), ("Name", "l255"), ("Value", "L255"), ("Component_", "s72")],
-        &["Environment"],
-    );
+    let mut environment = schema::environment();
     // `=`: set on install; `-`: removed on uninstall; `*`: the system's.
     // `[~];` appends to what's there.
     environment.row(vec![s("WarlockPath"), s("=-*PATH"), s("[~];[INSTALLDIR]"), s("Warlockctl")]);
@@ -756,7 +485,7 @@ fn tables(
         ("WarlockFindJoined", Some(asked.as_str()), 1310),
     ]
     .into_iter()
-    .chain(ui::SEQUENCE)
+    .chain(warlock_msi_kit::ui::sequence(ui::FIRST))
     .collect();
     all.push(sequence("InstallUISequence", &ui_sequence));
     let execute: Vec<(&str, Option<&str>, i32)> = [
@@ -843,188 +572,45 @@ fn tables(
     all
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(Some(0)).collect()
-}
-
-fn wide_path(p: &Path) -> Vec<u16> {
-    wide(&p.to_string_lossy())
-}
-
-/// A new GUID, braced and upper-case as Windows Installer writes them.
-fn new_guid() -> Result<String> {
-    let mut g = GUID { data1: 0, data2: 0, data3: 0, data4: [0; 8] };
-    // SAFETY: an out-parameter.
-    if unsafe { CoCreateGuid(&mut g) } != 0 {
-        return Err("CoCreateGuid failed".into());
-    }
-    let d = g.data4;
-    Ok(format!(
-        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-        g.data1, g.data2, g.data3, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]
-    ))
-}
-
-/// A Windows Installer handle, closed on drop.
-struct Handle(MSIHANDLE);
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        // SAFETY: a handle Windows Installer gave us.
-        unsafe { MsiCloseHandle(self.0) };
-    }
-}
-
-fn check(what: &str, rc: u32) -> Result<()> {
-    if rc == 0 { Ok(()) } else { Err(format!("{what}: Windows Installer error {rc}").into()) }
-}
-
 /// Warlock's version: the workspace's, which this builder shares with
 /// `warlock` and every other crate.
 fn warlock_version() -> Result<String> {
-    let version = env!("CARGO_PKG_VERSION");
-    // ProductVersion is major.minor.build, numbers only, at most
-    // 255.255.65535: no pre-release or build suffixes.
-    let parts: Vec<&str> = version.split('.').collect();
-    let fits = parts.len() == 3
-        && parts[0].parse::<u8>().is_ok()
-        && parts[1].parse::<u8>().is_ok()
-        && parts[2].parse::<u16>().is_ok();
-    if !fits {
-        return Err(format!("{version} isn't a version Windows Installer takes (major.minor.build)").into());
-    }
-    Ok(version.to_string())
-}
-
-/// The least Visual C++ runtime version the binaries need, as `14.50`: a
-/// runtime at least as new as the newest toolset that linked any of them
-/// ("C++ binary compatibility between Visual Studio versions", Microsoft
-/// Learn). The toolset is read from each one's PE header.
-fn runtime_min(exes: &[&Path]) -> Result<String> {
-    let mut newest = None;
-    for exe in exes {
-        let (major, minor) = linker_version(exe)?;
-        if major != 14 {
-            return Err(format!("{}: linker {major}.{minor} isn't an MSVC v14 toolset", exe.display()).into());
-        }
-        newest = newest.max(Some(minor));
-    }
-    Ok(format!("14.{}", newest.ok_or("no binaries to package")?))
-}
-
-/// A PE file's linker version (14.50 for Visual Studio 18's).
-fn linker_version(path: &Path) -> Result<(u8, u8)> {
-    let b = std::fs::read(path)?;
-    let bad = || format!("{} isn't a PE file", path.display());
-    let pe = b.get(0x3c..0x40).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]) as usize).ok_or_else(bad)?;
-    if b.get(pe..pe + 4) != Some(&b"PE\0\0"[..]) {
-        return Err(bad().into());
-    }
-    // The optional header follows the 20-byte file header: its magic, then
-    // the linker's major and minor version.
-    let optional = pe + 4 + 20;
-    match b.get(optional + 2..optional + 4) {
-        Some(&[major, minor]) => Ok((major, minor)),
-        _ => Err(bad().into()),
-    }
-}
-
-/// Packs the files into one cabinet with `makecab`, each named by its File
-/// key, in File table order.
-fn cabinet(work: &Path, files: &[(Payload, u64)]) -> Result<PathBuf> {
-    let mut ddf = String::new();
-    writeln!(ddf, ".OPTION EXPLICIT")?;
-    for (k, v) in [
-        ("CabinetNameTemplate", CABINET),
-        ("DiskDirectoryTemplate", &work.display().to_string()),
-        ("InfFileName", &work.join("cab.inf").display().to_string()),
-        ("RptFileName", &work.join("cab.rpt").display().to_string()),
-        ("Cabinet", "on"),
-        ("Compress", "on"),
-        ("CompressionType", "LZX"),
-        ("CompressionMemory", "21"),
-        ("MaxDiskSize", "0"),
-        ("UniqueFiles", "on"),
-    ] {
-        writeln!(ddf, ".Set {k}=\"{v}\"")?;
-    }
-    for (p, _) in files {
-        writeln!(ddf, "\"{}\" \"{}\"", p.source.display(), p.key)?;
-    }
-    let ddf_path = work.join("cab.ddf");
-    std::fs::write(&ddf_path, ddf)?;
-    let out = Command::new("makecab.exe").arg("/F").arg(&ddf_path).current_dir(work).output()?;
-    if !out.status.success() {
-        return Err(format!("makecab failed: {}", String::from_utf8_lossy(&out.stdout)).into());
-    }
-    Ok(work.join(CABINET))
+    Ok(product_version(env!("CARGO_PKG_VERSION"))?.to_string())
 }
 
 fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     let release = root.join("target").join("release");
+    // The File key, the component, the `short|long` name, the source, and
+    // whether it's vital.
     let payload = [
-        Payload {
-            key: "warlock.exe",
-            component: "Warlock",
-            name: "warlock.exe",
-            source: release.join("warlock.exe"),
-            vital: true,
-        },
-        Payload {
-            key: "warlockctl.exe",
-            component: "Warlockctl",
-            name: "WLCTL.EXE|warlockctl.exe",
-            source: release.join("warlockctl.exe"),
-            vital: true,
-        },
-        Payload {
-            key: "warlock_extcap.exe",
-            component: "WiresharkPlugin",
-            name: "WLEXTCAP.EXE|warlock-extcap.exe",
-            source: release.join("warlock-extcap.exe"),
-            vital: true,
-        },
-        Payload {
-            key: "LICENSE.md",
-            component: "Licenses",
-            name: "LICENSE.MD|LICENSE.md",
-            source: root.join("LICENSE.md"),
-            vital: false,
-        },
-        Payload {
-            key: "LICENSE_AGPL.md",
-            component: "Licenses",
-            name: "AGPL3.MD|LICENSE-AGPL-3.0.md",
-            source: root.join("LICENSE-AGPL-3.0.md"),
-            vital: false,
-        },
-        Payload {
-            key: "LICENSE_WINTUN.md",
-            component: "Licenses",
-            name: "WINTUNEX.MD|LICENSE-WINTUN-EXCEPTION.md",
-            source: root.join("LICENSE-WINTUN-EXCEPTION.md"),
-            vital: false,
-        },
-        Payload {
-            key: "PRIVACY.md",
-            component: "Diagnostics",
-            name: "PRIVACY.MD|PRIVACY.md",
-            source: root.join("PRIVACY.md"),
-            vital: false,
-        },
-        Payload {
-            key: "THIRD-PARTY-NOTICES.txt",
-            component: "Notices",
-            name: "NOTICES.TXT|THIRD-PARTY-NOTICES.txt",
-            source: root.join(notices::FILE),
-            vital: false,
-        },
+        ("warlock.exe", "Warlock", "warlock.exe", release.join("warlock.exe"), true),
+        ("warlockctl.exe", "Warlockctl", "WLCTL.EXE|warlockctl.exe", release.join("warlockctl.exe"), true),
+        (
+            "warlock_extcap.exe",
+            "WiresharkPlugin",
+            "WLEXTCAP.EXE|warlock-extcap.exe",
+            release.join("warlock-extcap.exe"),
+            true,
+        ),
+        ("LICENSE.md", "Licenses", "LICENSE.MD|LICENSE.md", root.join("LICENSE.md"), false),
+        ("LICENSE_AGPL.md", "Licenses", "AGPL3.MD|LICENSE-AGPL-3.0.md", root.join("LICENSE-AGPL-3.0.md"), false),
+        (
+            "LICENSE_WINTUN.md",
+            "Licenses",
+            "WINTUNEX.MD|LICENSE-WINTUN-EXCEPTION.md",
+            root.join("LICENSE-WINTUN-EXCEPTION.md"),
+            false,
+        ),
+        ("PRIVACY.md", "Diagnostics", "PRIVACY.MD|PRIVACY.md", root.join("PRIVACY.md"), false),
+        ("THIRD-PARTY-NOTICES.txt", "Notices", "NOTICES.TXT|THIRD-PARTY-NOTICES.txt", root.join(notices::FILE), false),
     ];
-    let mut files = Vec::new();
-    for p in payload {
-        let size = std::fs::metadata(&p.source).map_err(|e| format!("{}: {e}", p.source.display()))?.len();
-        files.push((p, size));
-    }
+    let files = with_sizes(payload.into_iter().map(|(key, component, name, source, vital)| Payload {
+        key: key.into(),
+        component: component.into(),
+        name: name.into(),
+        source,
+        vital,
+    }))?;
 
     let exes: Vec<&Path> =
         files.iter().filter(|(p, _)| p.key.ends_with(".exe")).map(|(p, _)| p.source.as_path()).collect();
@@ -1032,82 +618,27 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     let licence = licence::rtf(root)?;
     let privacy = licence::privacy(root)?;
 
-    let work = out.with_extension("work");
-    let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(work.join("idt"))?;
-    let cab = cabinet(&work, &files)?;
-
     let product_code = new_guid()?;
     let package_code = new_guid()?;
-    let _ = std::fs::remove_file(out);
-    let mut db: MSIHANDLE = 0;
-    // SAFETY: valid paths and out-parameter.
-    check("creating the database", unsafe { MsiOpenDatabaseW(wide_path(out).as_ptr(), MSIDBOPEN_CREATE, &mut db) })?;
-    let db = Handle(db);
+    let db = Database::create(out)?;
     for t in tables(version, &product_code, &runtime_min, (&licence, &privacy), &files) {
-        let file = format!("{}.idt", t.name);
-        std::fs::write(work.join("idt").join(&file), t.idt()?)?;
-        // SAFETY: valid handle and paths.
-        let rc = unsafe { MsiDatabaseImportW(db.0, wide_path(&work.join("idt")).as_ptr(), wide(&file).as_ptr()) };
-        check(&format!("importing {}", t.name), rc)?;
+        db.import(&t)?;
     }
-
     // The cabinet goes in as a stream of the package, and the custom
     // action DLL as the Binary table's one row.
-    let ca = release.join("warlock_msi_ca.dll");
-    if !ca.is_file() {
-        return Err(format!("{}: not built", ca.display()).into());
-    }
-    for (table, name, path, what) in [("_Streams", CABINET, &cab, "the cabinet"), ("Binary", CA_BINARY, &ca, "the DLL")]
-    {
-        let mut view: MSIHANDLE = 0;
-        let query = wide(&format!("INSERT INTO `{table}` (`Name`, `Data`) VALUES (?, ?)"));
-        // SAFETY: valid handles, strings and paths throughout.
-        unsafe {
-            check(&format!("opening {table}"), MsiDatabaseOpenViewW(db.0, query.as_ptr(), &mut view))?;
-            let view = Handle(view);
-            let record = Handle(MsiCreateRecord(2));
-            check(&format!("naming {what}"), MsiRecordSetStringW(record.0, 1, wide(name).as_ptr()))?;
-            check(&format!("reading {what}"), MsiRecordSetStreamW(record.0, 2, wide_path(path).as_ptr()))?;
-            check(&format!("adding {what}"), MsiViewExecute(view.0, record.0))?;
-            check(&format!("closing {table}"), MsiViewClose(view.0))?;
-        }
-    }
-
-    // Summary information: what kind of package this is.
-    let mut summary: MSIHANDLE = 0;
-    // SAFETY: valid handle; strings outlive each call.
-    unsafe {
-        check("summary information", MsiGetSummaryInformationW(db.0, std::ptr::null(), 20, &mut summary))?;
-        let summary = Handle(summary);
-        const VT_I4: u32 = 3;
-        const VT_LPSTR: u32 = 30;
-        for (pid, text) in [
-            (2, "Installation Database"),
-            (3, "Warlock"),
-            (4, MANUFACTURER),
-            (5, "Installer, AWDL"),
-            (6, "This installer database contains the logic and data required to install Warlock."),
-            // x64, English.
-            (7, "x64;1033"),
-            (9, package_code.as_str()),
-            (18, "warlock-msi (Windows Installer API)"),
-        ] {
-            let text = wide(text);
-            let rc = MsiSummaryInfoSetPropertyW(summary.0, pid, VT_LPSTR, 0, std::ptr::null_mut(), text.as_ptr());
-            check(&format!("summary property {pid}"), rc)?;
-        }
-        // Windows Installer 5.0; long names, compressed; read-only recommended.
-        for (pid, value) in [(14, 500), (15, 2), (19, 2)] {
-            let rc = MsiSummaryInfoSetPropertyW(summary.0, pid, VT_I4, value, std::ptr::null_mut(), std::ptr::null());
-            check(&format!("summary property {pid}"), rc)?;
-        }
-        check("saving the summary information", MsiSummaryInfoPersist(summary.0))?;
-    }
-    // SAFETY: a valid handle.
-    check("committing the database", unsafe { MsiDatabaseCommit(db.0) })?;
-    drop(db);
-    std::fs::remove_dir_all(&work)?;
+    db.cabinet(CABINET, &files)?;
+    db.binary(CA_BINARY, &release.join("warlock_msi_ca.dll"))?;
+    db.summary(&Summary {
+        subject: "Warlock",
+        author: MANUFACTURER,
+        keywords: "Installer, AWDL",
+        comments: "This installer database contains the logic and data required to install Warlock.",
+        // x64, English.
+        template: "x64;1033",
+        package_code: &package_code,
+        application: "warlock-msi (Windows Installer API)",
+    })?;
+    db.commit()?;
     println!(
         "{} (Warlock {version}, product code {product_code}, Visual C++ runtime {runtime_min} or later)",
         out.display()
@@ -1115,123 +646,28 @@ fn build(root: &Path, out: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
-/// A record's string field.
-fn record_string(record: MSIHANDLE, field: u32) -> Result<String> {
-    use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
-    let mut len = 0u32;
-    let mut buf = vec![0u16; 1];
-    // SAFETY: a buffer of the length passed; first for the length needed
-    // (without the NUL), then for the string.
-    unsafe {
-        let rc = MsiRecordGetStringW(record, field, buf.as_mut_ptr(), &mut len);
-        if rc != 0 && rc != ERROR_MORE_DATA {
-            return Err(format!("reading a field: Windows Installer error {rc}").into());
-        }
-        len += 1;
-        buf.resize(len as usize, 0);
-        check("reading a field", MsiRecordGetStringW(record, field, buf.as_mut_ptr(), &mut len))?;
-    }
-    Ok(String::from_utf16_lossy(&buf[..len as usize]))
-}
-
-/// A package's Property table.
-fn package_properties(msi: &Path) -> Result<BTreeMap<String, String>> {
-    use windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS;
-    let mut db: MSIHANDLE = 0;
-    // SAFETY: a valid path and out-parameter.
-    let rc = unsafe { MsiOpenDatabaseW(wide_path(msi).as_ptr(), MSIDBOPEN_READONLY, &mut db) };
-    check(&format!("opening {}", msi.display()), rc)?;
-    let db = Handle(db);
-    let query = wide("SELECT `Property`, `Value` FROM `Property`");
-    let mut properties = BTreeMap::new();
-    let mut view: MSIHANDLE = 0;
-    // SAFETY: valid handles and query; records are closed as they go.
-    unsafe {
-        check("reading Property", MsiDatabaseOpenViewW(db.0, query.as_ptr(), &mut view))?;
-        let view = Handle(view);
-        check("reading Property", MsiViewExecute(view.0, 0))?;
-        loop {
-            let mut record: MSIHANDLE = 0;
-            match MsiViewFetch(view.0, &mut record) {
-                0 => {}
-                ERROR_NO_MORE_ITEMS => break,
-                rc => return Err(format!("reading Property: Windows Installer error {rc}").into()),
-            }
-            let record = Handle(record);
-            properties.insert(record_string(record.0, 1)?, record_string(record.0, 2)?);
-        }
-    }
-    Ok(properties)
-}
-
-/// winget's manifest schema the manifests are written to.
-const MANIFEST_VERSION: &str = "1.10.0";
-
 /// Writes winget's three manifests (version, installer, default locale) for
 /// the package at `msi`, to be downloaded from `url`, into `out` (by default
 /// `target/msi/winget/<version>`).
 fn winget(root: &Path, msi: &Path, url: &str, out: Option<PathBuf>) -> Result<()> {
-    if !url.starts_with("https://") {
-        return Err(format!("{url}: winget downloads installers over https").into());
-    }
     let p = package_properties(msi)?;
     let get = |k: &str| p.get(k).map(String::as_str).ok_or_else(|| format!("{}: no {k} property", msi.display()));
     let version = get("ProductVersion")?;
-    let product_code = get("ProductCode")?;
-    let upgrade_code = get("UpgradeCode")?;
-    let publisher = get("Manufacturer")?;
-    let runtime_min = get(RUNTIME_MIN_PROPERTY)?;
-    let sha256: String = Sha256::digest(std::fs::read(msi)?).iter().map(|b| format!("{b:02X}")).collect();
-    let file = msi.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-    // Single-quoted YAML scalars: only `'` needs escaping, as `''`.
-    let q = |v: &str| format!("'{}'", v.replace('\'', "''"));
-    let header = |kind: &str| {
-        format!(
-            "# Written by warlock-msi for {file}.\n\
-             # yaml-language-server: $schema=https://aka.ms/winget-manifest.{kind}.{MANIFEST_VERSION}.schema.json\n\n\
-             PackageIdentifier: {PACKAGE}\nPackageVersion: {}\n",
-            q(version)
-        )
+    let runtime = VcRuntime { dlls: &RUNTIME_DLLS, min: get(RUNTIME_MIN_PROPERTY)?.to_string() };
+    let manifest = Manifest {
+        package: PACKAGE,
+        name: "Warlock",
+        generator: "warlock-msi",
+        // warlock.exe, and warlockctl.exe.
+        license: "GPL-2.0-only AND AGPL-3.0-only",
+        short_description: DESCRIPTION,
+        // The privacy policy as of this version's tag (the release workflow
+        // tags v<version>).
+        privacy_url: Some(format!("{REPOSITORY}/blob/v{version}/PRIVACY.md")),
+        dependencies_note: Some("The Visual C++ runtime warlock.exe links to, which a fresh Windows lacks."),
+        dependencies: &[runtime.dependency()],
     };
-    let footer = |kind: &str| format!("ManifestType: {kind}\nManifestVersion: {MANIFEST_VERSION}\n");
-    let manifests = [
-        (format!("{PACKAGE}.yaml"), format!("{}DefaultLocale: en-US\n{}", header("version"), footer("version"))),
-        (
-            format!("{PACKAGE}.installer.yaml"),
-            format!(
-                "{}InstallerType: msi\nScope: machine\nInstallModes:\n- interactive\n- silent\n- silentWithProgress\n\
-                 UpgradeBehavior: install\n\
-                 # The Visual C++ runtime warlock.exe links to, which a fresh Windows lacks.\n\
-                 Dependencies:\n  PackageDependencies:\n  - PackageIdentifier: {RUNTIME_PACKAGE}\n    MinimumVersion: {}\n\
-                 ProductCode: {}\nAppsAndFeaturesEntries:\n- Publisher: {}\n  ProductCode: {}\n  UpgradeCode: {}\n\
-                 Installers:\n- Architecture: x64\n  InstallerUrl: {}\n  InstallerSha256: {sha256}\n{}",
-                header("installer"),
-                q(&format!("{runtime_min}.0.0")),
-                q(product_code),
-                q(publisher),
-                q(product_code),
-                q(upgrade_code),
-                q(url),
-                footer("installer")
-            ),
-        ),
-        (
-            format!("{PACKAGE}.locale.en-US.yaml"),
-            format!(
-                "{}PackageLocale: en-US\nPublisher: {}\nPrivacyUrl: {}\nPackageName: Warlock\n\
-                 License: {}\nShortDescription: {}\n{}",
-                header("defaultLocale"),
-                q(publisher),
-                // The privacy policy as of this version's tag (the release
-                // workflow tags v<version>).
-                q(&format!("{REPOSITORY}/blob/v{version}/PRIVACY.md")),
-                // warlock.exe, and warlockctl.exe.
-                q("GPL-2.0-only AND AGPL-3.0-only"),
-                q(DESCRIPTION),
-                footer("defaultLocale")
-            ),
-        ),
-    ];
+    let manifests = winget::manifests(&manifest, msi, &p, url)?;
     let dir = out.unwrap_or_else(|| root.join("target").join("msi").join("winget").join(version));
     std::fs::create_dir_all(&dir)?;
     for (name, text) in manifests {

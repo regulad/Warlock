@@ -210,8 +210,8 @@ Warlock is free software:
   [devourer](https://github.com/OpenIPC/devourer), the user-space Realtek
   driver it builds in.
 - **GPL-2.0-only OR AGPL-3.0-or-later**, at your choice, for the API contracts,
-  `warlock-client` and `warlock-diagnostics`, so programs under either licence
-  can use them.
+  `warlock-client`, `warlock-diagnostics` and `warlock-msi-kit` (the MSI
+  builder's machinery), so programs under either licence can use them.
 - **AGPL-3.0-only** ([`LICENSE-AGPL-3.0.md`](LICENSE-AGPL-3.0.md)) for
   `warlockctl` and the Wireshark plugin, the installer's custom actions
   (`warlock-msi-ca`) and `warlock-sentry`, which use Sentry's Rust SDK.

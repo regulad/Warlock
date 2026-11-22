@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlock-client", "crates/warlock-msi", "crates/warlock-msi-ca", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb", "crates/sentry-native-sys", "crates/warlock-diagnostics", "crates/warlock-sentry"]
+members = ["crates/awdl-core", "crates/awdl-proto", "crates/devourer-sys", "crates/warlock", "crates/warlock-api", "crates/warlock-capture", "crates/warlock-client", "crates/warlock-msi", "crates/warlock-msi-ca", "crates/warlock-msi-kit", "crates/warlockctl", "crates/warlock-radio", "crates/warlock-tun", "crates/warlock-usb", "crates/sentry-native-sys", "crates/warlock-diagnostics", "crates/warlock-sentry"]
 
 [workspace.package]
 # Warlock's one version, which every crate, the API contract and the MSI
@@ -19,6 +19,7 @@ awdl-proto = { path = "crates/awdl-proto", version = "0.2.0" }
 devourer-sys = { path = "crates/devourer-sys", version = "0.2.0" }
 sentry-native-sys = { path = "crates/sentry-native-sys", version = "0.2.0" }
 warlock-diagnostics = { path = "crates/warlock-diagnostics", version = "0.2.0" }
+warlock-msi-kit = { path = "crates/warlock-msi-kit", version = "0.2.0" }
 warlock-sentry = { path = "crates/warlock-sentry", version = "0.2.0" }
 warlock-api = { path = "crates/warlock-api", version = "0.2.0" }
 warlock-capture = { path = "crates/warlock-capture", version = "0.2.0" }

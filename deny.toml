@@ -36,9 +36,9 @@ allow = [
 # AGPL only where it's ours to choose: warlockctl, the installer's custom
 # actions (warlock-msi-ca) and the Rust SDK's wrapper (warlock-sentry), which
 # link nothing GPL-2.0-only. Allowed globally, an AGPL dependency could reach
-# the GPL-2.0 daemon, and the two can't be combined. (warlock-client and
-# warlock-diagnostics are "GPL-2.0-only OR AGPL-3.0-or-later", which the
-# GPL-2.0-only allowance covers.)
+# the GPL-2.0 daemon, and the two can't be combined. (warlock-client,
+# warlock-diagnostics and warlock-msi-kit are "GPL-2.0-only OR
+# AGPL-3.0-or-later", which the GPL-2.0-only allowance covers.)
 exceptions = [
     { crate = "warlockctl", allow = ["AGPL-3.0-only"] },
     { crate = "warlock-msi-ca", allow = ["AGPL-3.0-only"] },

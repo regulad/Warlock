@@ -2487,8 +2487,7 @@ name = "warlock-msi"
 version = "0.2.5"
 dependencies = [
  "serde_json",
- "sha2",
- "windows-sys",
+ "warlock-msi-kit",
 ]
 
 [[package]]
@@ -2496,6 +2495,14 @@ name = "warlock-msi-ca"
 version = "0.2.5"
 dependencies = [
  "warlock-sentry",
+ "windows-sys",
+]
+
+[[package]]
+name = "warlock-msi-kit"
+version = "0.2.5"
+dependencies = [
+ "sha2",
  "windows-sys",
 ]
 

@@ -8,12 +8,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-# The package's SHA-256, for winget's installer manifest.
-sha2 = "0.11"
+# The tables, the database, the cabinet, the pages and the manifests.
+warlock-msi-kit.workspace = true
 # `cargo metadata`, for the third-party notices (src/notices.rs).
 serde_json = "1.0.154"
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_ApplicationInstallationAndServicing",
-    "Win32_System_Com",
-] }
