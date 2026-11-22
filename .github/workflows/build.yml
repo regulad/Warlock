@@ -25,6 +25,10 @@
 # The release doesn't wait for it. Once the release is published, another
 # such job makes it a release in Sentry, with its commits, and records its
 # deploy to `production`.
+#
+# The jobs that compile take check.yml's cache, which only a push to master
+# saves (Swatinem/rust-cache), and save nothing: a tag's run could only
+# save for that tag, which no other run reads.
 name: Build and sign
 
 on:
@@ -50,6 +54,15 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
           cargo --version
+      # Check's cache, as master's last run saved it (check.yml, which alone
+      # saves it): Cargo's downloads, and the dependencies' object files,
+      # which this release build doesn't use: they're the dev profile's, and
+      # nothing builds the release profile on master, so the signed binaries
+      # are built from source.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: warlock
+          save-if: false
       # warlockctl's package builds warlock-extcap too; warlock-msi-ca is the
       # MSI's custom action DLL.
       - name: Build
@@ -189,6 +202,12 @@ jobs:
         run: |
           rustup update stable --no-self-update
           rustup default stable
+      # Check's cache (see "Build"): warlock-msi builds in the dev profile,
+      # as Check's tests do, so it takes their object files.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: warlock
+          save-if: false
       - uses: actions/download-artifact@v8
         with:
           name: signed-binaries
@@ -268,6 +287,11 @@ jobs:
         run: |
           rustup update stable --no-self-update
           rustup default stable
+      # Check's cache, as in "Package".
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: warlock
+          save-if: false
       - uses: actions/download-artifact@v8
         with:
           name: package
