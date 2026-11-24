@@ -15,7 +15,8 @@
 # A tag is also published: winget's manifests are written for the signed
 # package, and a GitHub release carries the package and the manifests, with
 # the annotated tag's message as its notes. Again the job that can write
-# (the release) builds nothing.
+# (the release) builds nothing. Once the release is published, its manifests
+# are submitted to winget, as regubot, regulad's machine account.
 #
 # And a tag's debug files go to Sentry, so that the crashes every program
 # reports name their functions, files and lines (PLAN.md, "Diagnostics"),
@@ -358,6 +359,101 @@ jobs:
           ls -l assets
           gh release create "$TAG" assets/*.msi assets/*.yaml \
             --title "Warlock ${TAG#v}" --notes-from-tag --verify-tag
+
+  # The release's manifests, submitted to winget: a pull request on
+  # microsoft/winget-pkgs from regubot/winget-pkgs, the fork of regubot,
+  # regulad's machine account, made with Komac
+  # (https://github.com/russellbanks/Komac), which commits there through
+  # GitHub's API, so GitHub signs the commits. It runs once the release is
+  # published, where winget's validation downloads the package, and it runs
+  # nothing built here: only Komac, pinned by its SHA-256. Komac writes the
+  # manifests again at its own schema version, 1.28.0, without their
+  # comments.
+  #
+  # `komac submit` doesn't look for the version's pull request, as `komac
+  # update` does, so this looks first, as `komac update` would: one whose
+  # title holds the identifier and the version as words, in any state. A
+  # re-run then submits nothing twice. Once it has submitted, regulad is
+  # subscribed to the pull request with his own token, which holds the
+  # `notifications` scope alone, so that GitHub notifies him of it; that
+  # token is checked before anything is submitted.
+  winget:
+    name: Submit to winget
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    env:
+      PACKAGE: Regulad.Warlock
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: manifests
+          path: manifests
+      - name: Look for the version's pull request
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(yq -r .PackageVersion "manifests/$PACKAGE.yaml")
+          export VERSION
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          url=$(gh api -X GET search/issues -f q="repo:microsoft/winget-pkgs is:pr in:title $PACKAGE $VERSION" -f per_page=100 \
+            --jq '.items[] | select([.title | splits("\\s+")] as $w | ($w | any(. == env.PACKAGE)) and ($w | any(. == env.VERSION))) | .html_url' |
+            head -n 1)
+          if [ -n "$url" ]; then echo "$PACKAGE $VERSION has its pull request already: $url"; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+      - name: Check regulad's token
+        if: steps.existing.outputs.url == ''
+        env:
+          GH_TOKEN: ${{ secrets.REGULAD_NOTIFICATIONS_TOKEN }}
+        run: |
+          login=$(gh api user --jq .login)
+          if [ "$login" != regulad ]; then
+            echo "REGULAD_NOTIFICATIONS_TOKEN is ${login:-nobody}'s, not regulad's"
+            exit 1
+          fi
+      - name: Komac
+        if: steps.existing.outputs.url == ''
+        env:
+          KOMAC_VERSION: 2.17.2
+          KOMAC_SHA256: b03b020eec98acfb0b53e284a6e21815b884be33de6785b97e7a120f0e748966
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/komac.tar.gz" \
+            "https://github.com/russellbanks/Komac/releases/download/v$KOMAC_VERSION/komac-$KOMAC_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$KOMAC_SHA256  $RUNNER_TEMP/komac.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/komac.tar.gz" -C "$RUNNER_TEMP" komac
+      - name: Submit
+        if: steps.existing.outputs.url == ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: '"$RUNNER_TEMP/komac" submit manifests --submit'
+      # Among regubot's open pull requests, which GitHub lists at once, where
+      # its search can take a while to index a new one.
+      - name: Subscribe regulad
+        if: steps.existing.outputs.url == ''
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          REGULAD_TOKEN: ${{ secrets.REGULAD_NOTIFICATIONS_TOKEN }}
+          VERSION: ${{ steps.existing.outputs.version }}
+        run: |
+          pr=$(GH_TOKEN=$WINGET_TOKEN gh api graphql \
+            -f query='{ viewer { pullRequests(first: 20, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { id url title repository { nameWithOwner } } } } }' \
+            --jq '.data.viewer.pullRequests.nodes[] | select(.repository.nameWithOwner == "microsoft/winget-pkgs") | select([.title | splits("\\s+")] as $w | ($w | any(. == env.PACKAGE)) and ($w | any(. == env.VERSION))) | .id + " " + .url' |
+            head -n 1)
+          if [ -z "$pr" ]; then
+            echo "regubot has no open pull request for $PACKAGE $VERSION"
+            exit 1
+          fi
+          state=$(GH_TOKEN=$REGULAD_TOKEN gh api graphql \
+            -f query='mutation($id: ID!) { updateSubscription(input: {subscribableId: $id, state: SUBSCRIBED}) { subscribable { viewerSubscription } } }' \
+            -f id="${pr%% *}" --jq .data.updateSubscription.subscribable.viewerSubscription)
+          if [ "$state" != SUBSCRIBED ]; then
+            echo "Subscribing regulad to ${pr#* } failed"
+            exit 1
+          fi
+          echo "regulad is subscribed to ${pr#* }"
 
   # The release in Sentry, named as every program names it
   # (`warlock@<version>`, warlock-diagnostics), in each program's project,
