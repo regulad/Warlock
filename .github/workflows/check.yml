@@ -40,33 +40,23 @@ jobs:
       # Cargo's downloads and the dependencies' object files, from master's
       # last run (Swatinem/rust-cache, pinned by its commit). Only a push to
       # master saves it: pull requests read it, and so do build.yml's jobs,
-      # which never save. One key for all of them (`shared-key`); the key
-      # takes the CARGO* and RUST* variables in a step's environment, so
-      # cargo-deny's are its own step's, not the job's. The workspace's own
-      # crates aren't cached (no `cache-workspace-crates`), devourer-sys's
-      # and sentry-native-sys's CMake builds among them: a checkout makes
-      # their files newer than any cached build, so Cargo rebuilds them
-      # anyway, and setting the files' times back can have it test stale
-      # code (PLAN.md, "Verification").
+      # which never save. One key for all of them (`shared-key`); the key takes
+      # the CARGO* and RUST* variables in the job's environment. The
+      # workspace's own crates aren't cached (no `cache-workspace-crates`),
+      # devourer-sys's and sentry-native-sys's CMake builds among them: a
+      # checkout makes their files newer than any cached build, so Cargo
+      # rebuilds them anyway, and setting the files' times back can have it
+      # test stale code (PLAN.md, "Verification").
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: warlock
           save-if: ${{ github.ref == 'refs/heads/master' }}
-      - name: cargo-deny
-        shell: pwsh
-        env:
-          # The cargo-deny the hooks use, pinned by its release archive's
-          # SHA-256 (x86_64-pc-windows-msvc, as GitHub lists it for 0.20.2).
-          CARGO_DENY_VERSION: 0.20.2
-          CARGO_DENY_SHA256: 975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc
-        run: |
-          $name = "cargo-deny-$env:CARGO_DENY_VERSION-x86_64-pc-windows-msvc"
-          $archive = "$env:RUNNER_TEMP\$name.tar.gz"
-          Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/EmbarkStudios/cargo-deny/releases/download/$env:CARGO_DENY_VERSION/$name.tar.gz" -OutFile $archive
-          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne $env:CARGO_DENY_SHA256) { "cargo-deny has SHA-256 $hash, not the pinned $env:CARGO_DENY_SHA256"; exit 1 }
-          tar -xzf $archive -C $env:RUNNER_TEMP
-          "$env:RUNNER_TEMP\$name" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      # pre-commit's hook environments, cargo-deny's build among them, keyed
+      # on the hooks' revisions (.pre-commit-config.yaml).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
       - name: pre-commit
         run: python -m pip install "pre-commit==$env:PRE_COMMIT_VERSION"
       - name: Hooks
