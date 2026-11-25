@@ -457,7 +457,8 @@ Pinned decisions:
     - Times set from a diff against the commit the cache was built from would be safe, but that's code of Warlock's own on top of rust-cache, for under a minute.
     - Cargo's own answer is checksum freshness (`-Zchecksum-freshness`, rust-lang/cargo#14136), which compares files' contents rather than their times. It's nightly-only; once it's stable, caching the workspace's crates is worth measuring again.
 - **Dependabot (Parker, 2026-11-18):** `.github/dependabot.yml`, weekly, covering cargo, GitHub Actions, the pre-commit hooks and the devourer submodule.
-  - Every update waits until its release is two weeks old (`cooldown`), the rule for new dependencies. Security updates don't wait, so review them by hand. The submodule, Parker's own fork, has no cooldown.
+  - Every update waits until its release is two weeks old (`cooldown`), the rule for new dependencies. Security updates don't wait. The submodule, Parker's own fork, has no cooldown; sentry-native's submodule is left out, as it moves release to release by hand.
+  - **Auto-merge (Parker, 2026-11-24):** `.github/workflows/dependabot-auto-merge.yml` has GitHub merge every update but a major one once Check passes, security updates included, with the `DEPENDABOT_MERGE_TOKEN` Dependabot secret (homelab's `tofu/github`). GitHub Actions updates, pre-commit hook updates (none of the hook projects promises SemVer), the `sentry` group and the devourer submodule wait for a person. `.github/settings.yml` turns auto-merge on and requires Check (`Hooks and tests`) on `master`.
   - Its pull requests get the CI above, so cargo-deny holds them to the licence zone.
   - Alerts and security updates are on in `.github/settings.yml`, which also lists Dependabot's `dependencies` label: the Settings app deletes labels it doesn't list.
 - Unit and fuzz tests on `awdl-proto`.

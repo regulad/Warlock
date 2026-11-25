@@ -4,11 +4,29 @@
 #   * the GitHub Actions in .github/workflows/;
 #   * the pre-commit hooks' revisions (.pre-commit-config.yaml);
 #   * the devourer submodule, which follows Parker's fork's `warlock` branch.
+#     Not the sentry-native submodule: it sits at a release (0.17.6, PLAN.md,
+#     "Diagnostics"), which Dependabot would swap for upstream's latest
+#     commit, and a new release is probed by hand for what it sends
+#     (AGENTS.md, "Keep the diagnostics anonymous").
+#
+# Each ecosystem gets one PR a week, on Monday morning, grouping its minor and
+# patch updates; each major comes on its own.
+# workflows/dependabot-auto-merge.yml has GitHub merge every update but a
+# major one once Check passes, security updates included. These wait for a
+# person:
+# - the github-actions group, since none of the actions promises SemVer;
+# - the pre-commit group, since none of the hook projects promises SemVer;
+# - the sentry group: an update to Sentry's SDK is checked for what it adds
+#   to the diagnostics before it ships (AGENTS.md);
+# - the devourer submodule, whose changes reach the radio, and count as
+#   working only after a trial with real devices (AGENTS.md);
+# - major updates.
 #
 # An update waits until its release is two weeks old (`cooldown`), as
 # PLAN.md asks of every new dependency. Security updates don't wait: the
-# cooldown doesn't apply to them, so review those with care. The submodule
-# has no cooldown: its branch moves only when Parker moves it.
+# cooldown doesn't apply to them, and they merge once Check passes, like
+# the rest. The submodule has no cooldown: its branch moves only when
+# Parker moves it.
 #
 # Dependabot's pull requests run .github/workflows/check.yml: the
 # pre-commit hooks, whose cargo-deny holds them to the licence zone, and
@@ -20,20 +38,32 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: America/New_York
     cooldown:
       default-days: 14
     open-pull-requests-limit: 5
     labels: [dependencies]
     groups:
+      # Sentry's SDK, apart from the rest so that the rest can merge without
+      # it. The cargo group excludes it by the same patterns.
+      sentry:
+        patterns: ["sentry", "sentry-*"]
+        update-types: [minor, patch]
       # Minor and patch updates together; each major on its own.
       cargo:
         patterns: ["*"]
+        exclude-patterns: ["sentry", "sentry-*"]
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: America/New_York
     cooldown:
       default-days: 14
     open-pull-requests-limit: 5
@@ -46,6 +76,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: America/New_York
     cooldown:
       default-days: 14
     open-pull-requests-limit: 5
@@ -58,5 +91,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: America/New_York
     open-pull-requests-limit: 5
     labels: [dependencies]
+    ignore:
+      # Moved by hand, release to release (above).
+      - dependency-name: third_party/sentry-native
