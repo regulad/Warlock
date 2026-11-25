@@ -36,4 +36,4 @@ features = [
 [dev-dependencies]
 # WinRT's DNS-SD watcher, for the dnssdwatch example (MIT OR Apache-2.0).
 windows = { version = "0.62", features = ["Devices_Enumeration", "Foundation", "Foundation_Collections"] }
-windows-collections = "0.3"
+windows-collections = "0.100"
