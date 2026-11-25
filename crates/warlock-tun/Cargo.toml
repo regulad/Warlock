@@ -15,7 +15,7 @@ wintun-bindings = "=0.7.40"
 # releases near-daily; 9.2.2 was the newest at least two weeks old. Inflate
 # only: the plain "deflate" feature adds zopfli (for writing zips), which is
 # Apache-2.0 only and so not GPL-2.0-compatible.
-zip = { version = "=9.2.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Checking the release against its pinned hashes (MIT OR Apache-2.0).
 sha2 = "0.11"
 
